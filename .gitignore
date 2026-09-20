@@ -1,0 +1,5 @@
+# Runtime state, never part of the download
+*.tdb
+desktop.ini
+Thumbs.db
+.DS_Store

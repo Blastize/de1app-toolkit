@@ -1,0 +1,5 @@
+plugin.tcl
+ShotHistoryEditor.tcl
+filelist.txt
+README.md
+CHANGELOG.md

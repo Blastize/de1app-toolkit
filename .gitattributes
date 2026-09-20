@@ -1,0 +1,4 @@
+# The .tcl files are pushed to an Android tablet; keep LF everywhere so the
+# checkout platform never decides line endings for us.
+* text=auto eol=lf
+*.png binary

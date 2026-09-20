@@ -1,0 +1,5 @@
+plugin.tcl
+GrindAdvisor.tcl
+filelist.txt
+README.md
+CHANGELOG.md

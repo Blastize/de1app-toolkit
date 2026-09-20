@@ -1,0 +1,9 @@
+plugin.tcl
+DrinkMenu.tcl
+presets.tcl
+filelist.txt
+README.md
+CHANGELOG.md
+1340x800/bg.png
+1280x800/bg.png
+2560x1600/bg.png
