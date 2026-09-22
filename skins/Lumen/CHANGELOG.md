@@ -4,6 +4,147 @@ Entries follow a documentation cap (about 15 lines each; longer only where a
 version added or changed a write capability). The original long-form entries
 survive unchanged in the archive snapshot of each version.
 
+## 0.56.1 - polish: the grind and last-shot tile footers share one row (2026-09-22) - TABLET-VERIFIED 16:45 (headless harness PASSED, home screenshot: both footers at the same row, logcat clean)
+
+Base: 0.56.0. Owner spotted on the home page that "Fair - 6 shots / Curve /
+Shot analysis" sat 4 px lower than "Today 12:57 PM / Shot history": the grind
+tile placed its bottom row at tile top + 140 (224) while the last-shot tile
+used `L(hist_y)` (220). The grind row now uses `L(hist_y)` too; tap zones
+are unchanged (they were already tied to the tile bottom).
+**Safety status: display only, no behaviour or write change.**
+
+Files: skin.tcl, README.md, CHANGELOG.md, PROJECT_STATE.md.
+
+## 0.56.0 - Auto is a BASE: the custom theme's glass follows the schedule (pass 07) - verify.sh PASS 2026-09-22 15:58 on run 2 (run 1 was a checks-file call count, nothing on the tablet; picker dump 42 texts, 0 overlaps; logcat clean. The tablet's saved custom set is the Lumen light preset, so this boot drew its LIGHT half once as `_customl` (12.7 s, "4 light 220 30 34 76"); the old `_custom` files now stand for the dark half and are re-checked by signature before use. Owner checklist open)
+
+Base: 0.55.0. Owner, on seeing 0.55.0: Auto must be one of THREE base
+choices (Dark, Light, Auto -- not "Auto plus Light"), and Auto should
+cycle the custom theme's own dark / light glass through the day.
+**Safety status: `lumen_theme_auto` is GONE (never written again; a
+leftover value is ignored). `lumen_custom_base` now takes dark | light |
+auto, and `lumen_auto_light_from` / `lumen_auto_dark_from` are picker
+state: all saved together by the picker's Done, nothing on a pill or
+time tap. The schedule writes `lumen_theme` only through `_switch_theme
+custom` (the value never changes) from `auto_tick`, on home / saver while
+the machine is idle. NEW files: with base auto Done also draws the OTHER
+half's set, `lumen_<page>_customl.png` (+ glass, dim, `lumen_customl.sig`,
+transient `lumen_customl.baking`) beside the `_custom` (dark) set, so a
+flip is a photo swap. No file, database or history is touched otherwise.**
+
+- prefs: `base` may be auto; `eff` is the half in force (auto resolved
+  by the clock). Palette, signature, bake, backgrounds and the glass
+  material all follow eff; `custom::suffix` names each half's files.
+- Tick: flips when the schedule's half differs from
+  `custom::active_base` (recorded by set_palette), same four guards.
+- Picker: Auto is a third base pill (only one lights); the times are
+  pending like every other choice; Done saves and pre-draws both halves.
+- Settings caption: "Now Custom (Auto, light glass). ...".
+
+Files: skin.tcl, tools/check_skin.tcl, docs; passes/Lumen/pass_07.*.
+
+## 0.55.0 - Auto theme schedule: Light / Dark by time of day (pass 06) - verify.sh PASS 2026-09-22 15:29 on run 2 (run 1 died in the static phase on a checks-file grep inherited from pass 03, nothing on the tablet; picker dump 42 texts, 0 overlaps, logcat clean incl. the two new auto lines; owner checklist open, above all a real switch at a boundary)
+
+Base: 0.54.2. Owner request: an Auto mode that switches Dark at night and
+Light by day, as a schedule with two times and an Auto toggle in the
+picker's BASE row.
+**Safety status: three NEW preferences, all via `save_settings` on an
+explicit tap in the picker: `lumen_theme_auto` (0/1, the Auto pill),
+`lumen_auto_light_from` and `lumen_auto_dark_from` (minutes past
+midnight, +30 per tap on the time, wrapping; defaults 07:00 / 19:00). The
+schedule may also write `lumen_theme` through the existing
+`_switch_theme` (dark or light only, never custom): on an Auto or time
+tap, and once a minute from `auto_tick` -- only on the home or saver
+page and only while the machine is idle or asleep (`machine_busy`). At
+boot the scheduled theme is chosen before pages build (no live switch).
+The picker's Done, which applies Custom, sets `lumen_theme_auto` 0. No
+file, database or history is touched.**
+
+- BASE row: Dark | Light | Auto pills right-aligned; second line
+  "Auto: Light 07:00  Dark 19:00", each time a 116 x 44 tap zone.
+- Settings caption: "Now Light (Auto). ..." while the schedule is on.
+- Polish rider: the miniature's 2.8 / 19.0 / 38.0 in the caption size
+  (the data mono was huge at this scale -- owner).
+- Harness: schedule cases (defaults, wrap past midnight, equal times,
+  junk prefs), the tick's four guards, the taps, Done turning Auto off.
+
+Files: skin.tcl, tools/check_skin.tcl, docs; passes/Lumen/pass_06.*.
+
+## 0.54.2 - polish: GRIND / DOSE / YIELD row in the miniature, silent swatch taps - verify.sh PASS 2026-09-22 15:21 on run 1 (picker dump: 39 texts, 0 overlaps; logcat clean; owner checklist open)
+
+Base: 0.54.1. Owner's two follow-ups after seeing 0.54.1.
+**Safety status: unchanged; no behaviour change.**
+
+- Miniature: the next-shot strip's GRIND / DOSE / YIELD labels at their
+  real x and top, with 2.8 / 19.0 / 38.0 in the data mono beneath them,
+  centred where the real values sit between the pills.
+- Picker swatches: no press chip any more (the white square the owner
+  saw); the selection ring is the feedback. New `none` press style.
+- press_flash: the ring and chip branches no longer `return` from inside
+  the catch (which logged an empty "press flash failed" DEBUG line on
+  every ring); the chip drawing moved to `_press_chip`.
+- Harness: `none` draws nothing and every one of the 52 swatch zones
+  carries it.
+
+Files: skin.tcl, tools/check_skin.tcl, docs; passes/Lumen/pass_05.checks.json.
+
+## 0.54.1 - polish: picker columns out to the margins, larger preview - verify.sh PASS 2026-09-22 15:02 on run 1 (home, settings and picker dumps, picker text-overlap check on, logcat clean; the run also puts 0.54.0 on the tablet; owner checklists open)
+
+Base: 0.54.0. Owner's mock of 2026-09-22: use the empty horizontal room.
+**Safety status: unchanged; no behaviour change.**
+
+- Both picker columns move out to a 110 margin (was 170); the controls
+  column keeps its 640 (the swatch grid needs 592 inside), the preview
+  column takes the rest: 450 wide (was 330), 30 between them.
+- Preview: miniature 402 x 240 (was 282 x 168); five 66 x 48 token chips
+  on an 18 gap; the notes wrap to two lines each at the new width; the
+  miniature's bean name sits where the real one does (652 design px).
+- Harness: symmetric margins, lg between the columns, miniature aspect,
+  status line clear of the card's bottom padding.
+
+Files: skin.tcl, tools/check_skin.tcl, docs; passes/Lumen/pass_04.checks.json.
+
+## 0.54.0 - THEME row: a "Change" button that opens the picker (pass 03) - 2026-09-22 (headless PASS both font modes; tablet-verified inside the 0.54.1 run, verify.sh PASS 15:02)
+
+Base: 0.53.1. Owner request: the Dark -> Light -> Custom cycle felt untidy
+now that Lumen dark and Lumen light are presets in the picker.
+**Safety status: the settings-page path that wrote `lumen_theme` on every
+THEME tap is REMOVED. `lumen_theme` and the five custom prefs are now
+written only by the picker's Done through `_switch_theme` (unchanged).
+No new writes; no file, database or history is touched.**
+
+- THEME row: the button reads "Change" and opens the picker
+  (`open_theme_picker`). It is the row's only tap and the only thing that
+  flashes (zone chip); the caption tap (0.46.0) and the whole-card chip
+  (0.53.1) are gone.
+- Caption is live: "Now <theme>. Dark, Light, presets or your own
+  colours." A failed apply's reason still replaces it.
+- The cycling proc is deleted; the harness drives the live-retheme cases
+  through `_switch_theme` and asserts the row has exactly one picker zone.
+
+Files: skin.tcl, tools/check_skin.tcl, docs; passes/Lumen/pass_03.*.
+
+## 0.53.1 - polish: press-flash fit, THEME card chip, picker spacing - verify.sh PASS 2026-09-22 14:25 on run 2 (run 1 flagged the miniature's LAST SHOT caption against its values row at the new scale; both lines now sit on the grind card's baselines; picker item dump: 0 text overlaps, logcat clean; owner checklist of six taps open)
+
+Base: 0.53.0. Owner's polish batch of 2026-09-22 (five reports, one bump).
+**Safety status: unchanged; no behaviour change, no new writes.**
+
+- Press flash: virtual -> physical now ROUNDS (`_flash_px` / `_flash_py`;
+  the core's rescale truncates, so the chip sat a pixel left of the -, <
+  and > pills and read shorter on the right). The label chip unions only
+  text at least half inside the zone (the grind note's tail made Curve's
+  chip card-wide). The chip is lowered beneath strokes too (lines, hollow
+  polygons), so the taskbar DE1 icon no longer vanishes under it. New
+  `chip <x y w h>` style lights a whole container at the card radius.
+- Settings: the THEME caption tap lights the whole THEME card (chip style).
+- Picker: presets in two rows of three 192-wide pills on the swatch rows'
+  rhythm (label +18, row +48, 8 between, 16 below; card 160 tall), Cancel
+  and Done under it at 712..784; the preview's miniature, chips and notes
+  sit pad_x inside the card (inner 282: miniature 168 tall, chips 50 on 8).
+- Harness: chip flash case, rounding case (40..84 vs the core's 39..83),
+  picker spacing net; Done / Cancel zones follow `thp_done_y`.
+
+Files: skin.tcl, tools/check_skin.tcl, docs; passes/Lumen/pass_02.checks.json.
+
 ## 0.53.0 - favorite profile slots 1 2 3 on the taskbar (pass 01) - verify.sh PASS 2026-09-18 11:55 (home + settings dumps inside the virtual canvas, logcat clean, screenshot: three dim digits clear of the date and the wordmark; the assign / load / Clear taps are harness-proven, owner checklist open)
 
 Base: 0.52.1. Owner request: switch profiles without the stock chooser,

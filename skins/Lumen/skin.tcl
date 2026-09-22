@@ -5,7 +5,7 @@ package require de1plus 1.0
 #  LUMEN  --  a glass dashboard skin for the Decent DE1
 #
 #  Author:  Blastize
-#  Version: 0.53.0  (favorite profile slots 1 2 3 on the taskbar; see `variable version`)
+#  Version: 0.56.1  (polish: grind and last-shot tile footers on one row; see `variable version`)
 #
 #
 #
@@ -102,7 +102,7 @@ package require de1plus 1.0
 #############################################################################
 
 namespace eval ::lumen {
-    variable version "0.53.0"
+    variable version "0.56.1"
 
     variable C        ;# colour tokens
     array set C {}
@@ -230,8 +230,10 @@ proc ::lumen::set_palette { mode } {
         # ::lumen::custom::palette); the semantic and chart colours inside
         # it come from the matching baked base.
         set pr [::lumen::custom::prefs]
-        set P [::lumen::custom::palette [dict get $pr base] [dict get $pr bh] \
+        set P [::lumen::custom::palette [dict get $pr eff] [dict get $pr bh] \
                    [dict get $pr bs] [dict get $pr ah] [dict get $pr as]]
+        # 0.56.0: the base on screen, for the schedule tick to compare.
+        set ::lumen::custom::active_base [dict get $pr eff]
         foreach k {bg glass glass_2 glass_brd spec ink ink_2 ink_3 crema crema_lo crema_brd \
                    good warn danger c_press c_flow c_temp c_weight grid chart_bg chart_bg_flow} {
             set C($k) [dict get $P $k]
@@ -325,7 +327,7 @@ proc ::lumen::set_palette { mode } {
         switch -exact -- $mode {
             light   { set theme_P [::lumen::custom::palette light 220 30 34 76] }
             custom  { set pr [::lumen::custom::prefs]
-                      set theme_P [::lumen::custom::palette [dict get $pr base] [dict get $pr bh] \
+                      set theme_P [::lumen::custom::palette [dict get $pr eff] [dict get $pr bh] \
                                        [dict get $pr bs] [dict get $pr ah] [dict get $pr as]] }
             default { set theme_P [::lumen::custom::palette dark 222 32 34 86] }
         }
@@ -707,16 +709,32 @@ proc ::lumen::_init_layout {} {
     # labels ABOVE full-width swatch grids (two rows of 13 circles), and a
     # 330-wide preview column holding a painted miniature of the home page
     # (1340x800 at 330/1340), five token chips and the notes.
-    set L(thp_x)  170 ; set L(thp_w)  640      ;# controls 170..810
-    set L(thp_px) 840 ; set L(thp_pw) 330      ;# preview 840..1170
+    # 0.54.1 (owner's mock): both columns pushed out into the page margins
+    # (110 each side, was 170) and the room given to the PREVIEW column --
+    # 450 wide, was 330 -- so the miniature grows from 282 to 402 wide.
+    set L(thp_x)  110 ; set L(thp_w)  640      ;# controls 110..750
+    set L(thp_px) 780 ; set L(thp_pw) 450      ;# preview 780..1230
+    set L(thp_piw) 402                         ;# preview inner width: 450 - 2 x pad_x
     set L(thp_base_y) 104 ; set L(thp_base_h) 80
     set L(thp_bh_y) 196 ; set L(thp_ah_y) 360 ; set L(thp_sw_h) 152
-    set L(thp_pre_y) 524 ; set L(thp_pre_h) 88
+    # 0.53.1: presets in TWO rows of three 192-wide pills on the swatch
+    # rows' rhythm (label +18, first row +48, 8 between, 16 below): six
+    # in a row left 3 px between pills and 8 under them. The card is 160
+    # tall, so Cancel / Done moved under it to 712 (ending at 784, the
+    # home strip's own bottom edge).
+    set L(thp_pre_y) 524 ; set L(thp_pre_h) 160
+    set L(thp_pre_w) 192 ; set L(thp_pre_gap) 8 ; set L(thp_pre_ph) 44
+    set L(thp_done_y) 712
     set L(thp_dot) 38 ; set L(thp_pitch) 46    ;# 13 x 46 - 8 = 590 inside 592
     set L(thp_row1) 48 ; set L(thp_row2) 96    ;# swatch row offsets inside the row
-    set L(thp_mini_y) 146 ; set L(thp_mini_h) 197
-    set L(thp_chip_y) 364 ; set L(thp_chip_w) 58 ; set L(thp_chip_h) 36 ; set L(thp_chip_gap) 10
-    set L(thp_note_y) 440 ; set L(thp_note2_y) 506 ; set L(thp_status_y) 566
+    # Preview column internals, all inside the card's pad_x (0.53.1, owner:
+    # nothing hugs a card border): miniature 402 wide (800 x 402/1340 =
+    # 240 tall) at the swatch rows' +48, five 66-wide chips on an 18 gap
+    # (= 402), notes at the inner width, lg between the groups (0.54.1
+    # sizes; the caption notes wrap to two lines each at 402).
+    set L(thp_mini_y) 152 ; set L(thp_mini_h) 240
+    set L(thp_chip_y) 416 ; set L(thp_chip_w) 66 ; set L(thp_chip_h) 48 ; set L(thp_chip_gap) 18
+    set L(thp_note_y) 514 ; set L(thp_note2_y) 566 ; set L(thp_status_y) 618
 
     # ---- fonts: physical pixels, 16px floor ----------------------------
     # Fallback names first, so every key is valid even if font creation
@@ -1942,11 +1960,16 @@ proc ::lumen::data::theme_label {} {
     return [translate "Light"]
 }
 
-# 0.46.0: the caption is also the tap that opens the colour picker.
-# 0.47.0: after a failed custom apply it carries the reason instead.
+# 0.54.0: the caption names the theme on screen and what the Change
+# button offers (it is no longer a tap of its own). 0.47.0: after a
+# failed custom apply it carries the reason instead.
 proc ::lumen::data::theme_note {} {
     if { $::lumen::theme_status ne "" } { return $::lumen::theme_status }
-    return [translate "Dark, Light or Custom. Tap here to pick your colours."]
+    set now [theme_label]
+    if { [::lumen::auto_enabled] } {
+        append now " ([translate Auto], [translate $::lumen::custom::active_base] [translate glass])"
+    }
+    return "[translate "Now"] $now. [translate "Dark, Light, presets or your own colours."]"
 }
 
 proc ::lumen::data::version_line {} {
@@ -2128,6 +2151,100 @@ proc ::lumen::time_format {} {
     if { [info exists ::settings(lumen_time_format)] \
              && $::settings(lumen_time_format) eq "12" } { return 12 }
     return 24
+}
+
+# ---- Auto theme schedule (0.55.0; 0.56.0 owner redesign) ----------------
+#
+# Auto is a BASE for the custom theme: light glass from one time of day,
+# dark glass from another, with the owner's own hues and accent on both
+# (0.55.0 flipped the two baked themes instead and switched itself off
+# at the picker's Done -- the owner found that incoherent). So:
+#   lumen_custom_base         dark | light | auto (saved by the picker's Done)
+#   lumen_auto_light_from     minutes past midnight, 0..1439 (default 420 = 07:00)
+#   lumen_auto_dark_from      minutes past midnight, 0..1439 (default 1140 = 19:00)
+# The schedule is in force only while the custom theme is on screen with
+# base auto. Every read is guarded and clamped: junk reads as the default.
+proc ::lumen::auto_enabled {} {
+    if { $::lumen::theme_mode ne "custom" } { return 0 }
+    return [expr {[dict get [::lumen::custom::prefs] base] eq "auto"}]
+}
+
+proc ::lumen::auto_minutes { which } {
+    if { $which eq "light" } { set key lumen_auto_light_from ; set default 420 } \
+    else { set key lumen_auto_dark_from ; set default 1140 }
+    if { ![info exists ::settings($key)] } { return $default }
+    set v $::settings($key)
+    if { ![string is integer -strict $v] || $v < 0 || $v > 1439 } { return $default }
+    return $v
+}
+
+proc ::lumen::auto_time_text { which } {
+    set m [auto_minutes $which]
+    return [format "%02d:%02d" [expr {$m / 60}] [expr {$m % 60}]]
+}
+
+# The theme the schedule wants at `now` (minutes past midnight; the clock
+# when omitted). Light runs from light_from up to dark_from, wrapping
+# past midnight when light_from is the later time; equal times mean Dark
+# all day. scan, not expr, on the clock fields: "08" is not octal.
+proc ::lumen::auto_wanted { {now ""} } {
+    if { $now eq "" } {
+        set s [clock seconds]
+        set now [expr {[scan [clock format $s -format %H] %d] * 60 + [scan [clock format $s -format %M] %d]}]
+    }
+    set l [auto_minutes light] ; set d [auto_minutes dark]
+    if { $l == $d } { return dark }
+    if { $l < $d } { return [expr {$now >= $l && $now < $d ? "light" : "dark"}] }
+    return [expr {$now >= $l || $now < $d ? "light" : "dark"}]
+}
+
+# The minute tick. Rescheduled FIRST, so a failure inside can never stop
+# the clock; the check itself is a separate proc so the harness can drive
+# it. Errors are logged, never swallowed.
+proc ::lumen::auto_tick {} {
+    after cancel ::lumen::auto_tick
+    after 60000 ::lumen::auto_tick
+    if { [catch { auto_check } err] } {
+        msg -ERROR "Lumen: auto theme tick failed: $err"
+    }
+}
+
+# Switches only when Auto is in force, the scheduled base differs from the
+# one on screen (::lumen::custom::active_base, recorded by set_palette),
+# the skin is on its home or saver page, and the machine is idle or asleep
+# (machine_busy, the favorites' guard): the switch re-applies the custom
+# theme -- a 1-5 s synchronous photo swap behind the wait pill when that
+# half's files exist (Done draws both halves), a bake when they do not --
+# so it happens only where nothing else is going on. Returns the reason
+# it did or did not switch.
+proc ::lumen::auto_check {} {
+    if { ![auto_enabled] } { return off }
+    set wanted [auto_wanted]
+    if { $wanted eq $::lumen::custom::active_base } { return same }
+    if { [dui page current] ni {off saver} } { return page }
+    if { [machine_busy] ne "" } { return busy }
+    msg -INFO "Lumen: auto theme: [clock format [clock seconds] -format %H:%M] -> $wanted glass"
+    if { ![::lumen::act::_switch_theme custom] } { return failed }
+    return switched
+}
+
+# The schedule line on the picker reads the PENDING times while it is
+# open (seeded from the prefs by open_theme_picker, saved by Done).
+proc ::lumen::pend_minutes { which } {
+    variable ::lumen::custom::pend
+    set k [expr {$which eq "light" ? "lf" : "df"}]
+    if { [info exists pend($k)] && [string is integer -strict $pend($k)] && $pend($k) >= 0 && $pend($k) <= 1439 } {
+        return $pend($k)
+    }
+    return [auto_minutes $which]
+}
+proc ::lumen::data::auto_light_text {} {
+    set m [::lumen::pend_minutes light]
+    return "[translate Light] [format %02d:%02d [expr {$m / 60}] [expr {$m % 60}]]"
+}
+proc ::lumen::data::auto_dark_text {} {
+    set m [::lumen::pend_minutes dark]
+    return "[translate Dark] [format %02d:%02d [expr {$m / 60}] [expr {$m % 60}]]"
 }
 
 proc ::lumen::date_format {} {
@@ -2826,7 +2943,7 @@ proc ::lumen::glass_material {} {
     # custom theme reports its BASE (dark or light glass), never "custom".
     switch -exact -- $theme_mode {
         light   { set suffix "_light"  ; set theme light }
-        custom  { set suffix "_custom" ; set theme [dict get [::lumen::custom::prefs] base] }
+        custom  { set theme [dict get [::lumen::custom::prefs] eff] ; set suffix [::lumen::custom::suffix $theme] }
         default { set suffix ""        ; set theme dark }
     }
     set dir "[homedir]/skins/Lumen/${sw}x${sh}"
@@ -3096,23 +3213,16 @@ proc ::lumen::act::dye_next {} {
 # through the settings page would have done, so the plugin's own navigation
 # then works unmodified. Guarded and logged: if BeanScanner ever renames it,
 # this must fail loudly rather than trap the user again.
-# THEME button: cycles Dark -> Light -> Custom -> Dark (0.46.0) and, since
-# 0.47.0, applies the new theme on the spot -- the page you are on redraws
-# in it. Custom uses the colours last saved by the picker (Lumen-dark
-# defaults if none); the first time a set of colours is chosen its five
-# backgrounds are drawn on the tablet (a few seconds), after that the
-# files are reused. A failed apply keeps the current theme and says so in
-# the row's caption.
-proc ::lumen::act::toggle_theme {} {
-    set cur $::lumen::theme_mode
-    switch -exact -- $cur {
-        dark    { set new light }
-        light   { set new custom }
-        default { set new dark }
-    }
-    ::lumen::act::_switch_theme $new
-}
-
+# Theme switch. 0.46.0-0.53.1 the THEME button cycled Dark -> Light ->
+# Custom through this; 0.54.0 removed that cycle (owner: Lumen dark and
+# Lumen light are presets in the picker, so the button now just opens
+# it) and the picker's Done is the one caller. Applies the new theme on
+# the spot (0.47.0) -- the page you are on redraws in it. Custom uses the
+# colours last saved by the picker (Lumen-dark defaults if none); the
+# first time a set of colours is chosen its five backgrounds are drawn
+# on the tablet (a few seconds), after that the files are reused. A
+# failed apply keeps the current theme and says so in the row's caption.
+#
 # Persists lumen_theme and applies it live; on failure the preference is
 # put back so the next launch matches what is on screen. Returns 1 when
 # the new theme is on screen.
@@ -3137,6 +3247,16 @@ proc ::lumen::act::_switch_theme { new } {
         msg -ERROR "Lumen: could not restore the theme preference: $err"
     }
     return 0
+}
+
+# 0.56.0: the schedule's times on the picker are PENDING like every other
+# picker choice -- +30 minutes a tap, wrapping at midnight, saved by Done,
+# dropped by Cancel. (The Auto pill itself is theme_pick base auto.)
+proc ::lumen::act::auto_step { which } {
+    variable ::lumen::custom::pend
+    set k [expr {$which eq "light" ? "lf" : "df"}]
+    set pend($k) [expr {([::lumen::pend_minutes $which] + 30) % 1440}]
+    ::lumen::refresh_preview
 }
 
 proc ::lumen::act::open_settings {} {
@@ -3988,18 +4108,52 @@ proc ::lumen::_theme_word { mode } {
     }
 }
 
+# 0.53.1 (owner reports, three fit fixes and one more style):
+#  * Virtual -> physical went through the core's rescale_x/y, which
+#    TRUNCATES. The baked pills sit at exact design px, so a zone whose
+#    virtual edge truncated low landed a pixel left of its pill, and the
+#    inset chip read "shorter on the right" on the -, < and > pills.
+#    _flash_px/_flash_py ROUND instead; the ratio is read off the core's
+#    own transform, so the harness's identity stub is still identity.
+#  * label: the union took EVERY text item overlapping the zone, so the
+#    grind note ("Regression over 8 shots..."), whose right end pokes
+#    10 px into Curve's zone, made the Curve chip card-wide. An item
+#    joins the union only when at least half of it lies inside the
+#    zone; when nothing qualifies, any overlap counts (the old rule).
+#  * Lowering only looked for TEXT items, so a zone drawn with strokes
+#    (the taskbar's DE1 icon: three hollow polygons and a line) had its
+#    chip land ON TOP and the icon vanished for the 150 ms. Strokes --
+#    lines, and polygons/ovals with no fill -- count as labels now.
+#  * chip <x y w h>: the filled chip on a CONTAINER rect (design px) at
+#    the card radius, for a zone that should light its whole card (the
+#    THEME row's caption tap).
+proc ::lumen::_flash_px { v } {
+    set fx [expr {[rescale_x_skin 2560000] / 2560000.0}]
+    return [expr {int(round($v * $fx))}]
+}
+proc ::lumen::_flash_py { v } {
+    set fy [expr {[rescale_y_skin 1600000] / 1600000.0}]
+    return [expr {int(round($v * $fy))}]
+}
+
 proc ::lumen::press_flash { x1 y1 x2 y2 {style zone} } {
     variable C
     if { [catch {
         .can delete lumen_tapflash
         set kind [lindex $style 0]
-
-        if { $kind eq "ring" } {
+        # 0.54.2: `none` -- the tap has its own selected state (the picker's
+        # colour swatches take a ring), so no chip; the previous glow is
+        # still cleared. The ring and chip branches used to `return` from
+        # inside this catch, which made catch report code 2 and log an
+        # empty "press flash failed" line at DEBUG; branches now.
+        if { $kind eq "none" } {
+            # nothing to draw
+        } elseif { $kind eq "ring" } {
             lassign $style - rx ry rw rh
-            set px1 [rescale_x_skin [X $rx]]
-            set py1 [rescale_y_skin [Y $ry]]
-            set px2 [rescale_x_skin [X [expr {$rx + $rw}]]]
-            set py2 [rescale_y_skin [Y [expr {$ry + $rh}]]]
+            set px1 [_flash_px [X $rx]]
+            set py1 [_flash_py [Y $ry]]
+            set px2 [_flash_px [X [expr {$rx + $rw}]]]
+            set py2 [_flash_py [Y [expr {$ry + $rh}]]]
             # The cards' baked corner radius is 24 design px; the smooth
             # polygon renders ~half its control-point radius, so feed
             # double (0.37.1, same correction as the chip).
@@ -4010,19 +4164,52 @@ proc ::lumen::press_flash { x1 y1 x2 y2 {style zone} } {
                 -tags lumen_tapflash]
             after 150 [list catch [list .can delete $id]]
             update idletasks
-            return
+        } else {
+            _press_chip $x1 $y1 $x2 $y2 $style
+        }
+    } err] } {
+        msg -DEBUG "Lumen: press flash failed: $err"
+    }
+}
+
+# The filled chip (zone / label / chip styles); see press_flash.
+proc ::lumen::_press_chip { x1 y1 x2 y2 style } {
+    variable C
+    set kind [lindex $style 0]
+        # chip: the container rect replaces the zone; card radius.
+        set rad [rescale_y_skin 56]
+        if { $kind eq "chip" } {
+            lassign $style - cx cy cw ch
+            set x1 [X $cx] ; set y1 [Y $cy]
+            set x2 [X [expr {$cx + $cw}]] ; set y2 [Y [expr {$cy + $ch}]]
+            set rad [rescale_y_skin 96]
         }
 
-        set px1 [rescale_x_skin $x1] ; set py1 [rescale_y_skin $y1]
-        set px2 [rescale_x_skin $x2] ; set py2 [rescale_y_skin $y2]
+        set px1 [_flash_px $x1] ; set py1 [_flash_py $y1]
+        set px2 [_flash_px $x2] ; set py2 [_flash_py $y2]
 
         if { $kind eq "label" } {
-            # Union the visible text bboxes inside the zone.
-            set bx1 ""
+            # Union the visible text bboxes inside the zone: those at
+            # least half inside first, else any that overlap.
+            set inside {} ; set touching {}
             foreach it [.can find overlapping $px1 $py1 $px2 $py2] {
                 if { [.can type $it] ne "text" } { continue }
                 if { [.can itemcget $it -state] eq "hidden" } { continue }
-                lassign [.can bbox $it] tx1 ty1 tx2 ty2
+                set bb [.can bbox $it]
+                if { [llength $bb] != 4 } { continue }
+                lassign $bb tx1 ty1 tx2 ty2
+                set area [expr {double(max(1, ($tx2 - $tx1) * ($ty2 - $ty1)))}]
+                set ox [expr {min($tx2, $px2) - max($tx1, $px1)}]
+                set oy [expr {min($ty2, $py2) - max($ty1, $py1)}]
+                lappend touching $bb
+                if { $ox > 0 && $oy > 0 && $ox * $oy / $area >= 0.5 } {
+                    lappend inside $bb
+                }
+            }
+            if { ![llength $inside] } { set inside $touching }
+            set bx1 ""
+            foreach bb $inside {
+                lassign $bb tx1 ty1 tx2 ty2
                 if { $bx1 eq "" } {
                     set bx1 $tx1 ; set by1 $ty1 ; set bx2 $tx2 ; set by2 $ty2
                 } else {
@@ -4054,18 +4241,20 @@ proc ::lumen::press_flash { x1 y1 x2 y2 {style zone} } {
         set inset [expr {int(max(2, [rescale_y_skin 6]))}]
         set px1 [expr {$px1 + $inset}] ; set py1 [expr {$py1 + $inset}]
         set px2 [expr {$px2 - $inset}] ; set py2 [expr {$py2 - $inset}]
-        set pts [_flash_pts $px1 $py1 $px2 $py2 [rescale_y_skin 56]]
+        set pts [_flash_pts $px1 $py1 $px2 $py2 $rad]
         set lw [expr {int(max(1, [rescale_y_skin 2]))}]
         set id [.can create polygon {*}$pts -smooth 1 \
             -fill $C(glass_2) -outline $C(glass_brd) -width $lw \
             -tags lumen_tapflash]
-        # Lower the filled chip beneath the control's label: find the
-        # lowest visible text item in the zone and slide the flash just
-        # below it (canvas items stack in creation order).
+        # Lower the filled chip beneath the control's face: the lowest
+        # visible text or stroke item in the zone (canvas items stack in
+        # creation order, and `find overlapping` lists bottom-up).
         foreach it [.can find overlapping $px1 $py1 $px2 $py2] {
             if { $it == $id } { continue }
-            if { [.can type $it] eq "text" \
-                    && [.can itemcget $it -state] ne "hidden" } {
+            if { [.can itemcget $it -state] eq "hidden" } { continue }
+            set t [.can type $it]
+            if { $t eq "text" || $t eq "line" \
+                    || (($t eq "polygon" || $t eq "oval") && [.can itemcget $it -fill] eq "") } {
                 .can lower $id $it
                 break
             }
@@ -4073,9 +4262,6 @@ proc ::lumen::press_flash { x1 y1 x2 y2 {style zone} } {
         after 90 [list catch [list .can itemconfigure $id -fill $C(glass)]]
         after 150 [list catch [list .can delete $id]]
         update idletasks
-    } err] } {
-        msg -DEBUG "Lumen: press flash failed: $err"
-    }
 }
 
 proc ::lumen::tap { page x y w h command label {style zone} } {
@@ -4313,10 +4499,18 @@ proc ::lumen::custom::dim_gen { P } {
 # The saved preferences, clamped; unknown or missing values take the
 # Lumen-dark defaults so a hand-edited settings file can never break the
 # derivation.
+# 0.56.0: `base` may be auto -- the glass follows the day/night schedule
+# -- and `eff` is the base in force right now (auto resolved through
+# ::lumen::auto_wanted; otherwise the same as base). Palette, signature,
+# bake and material all work from eff. active_base is the half on screen
+# (set_palette records it; the schedule tick compares against it).
+namespace eval ::lumen::custom { variable active_base "" }
 proc ::lumen::custom::prefs {} {
     set base dark ; set bh 222 ; set bs 32 ; set ah 34 ; set as 86
     catch {
-        if { [info exists ::settings(lumen_custom_base)] && $::settings(lumen_custom_base) eq "light" } { set base light }
+        if { [info exists ::settings(lumen_custom_base)] && $::settings(lumen_custom_base) in {light auto} } {
+            set base $::settings(lumen_custom_base)
+        }
         # 0.52.0: accent saturation may be 0 (the neutral swatch); the old
         # floor of 20 turned a saved white / black accent into a tinted grey.
         foreach {k lo hi} {bh 0 360 bs 0 70 ah 0 360 as 0 100} {
@@ -4328,7 +4522,16 @@ proc ::lumen::custom::prefs {} {
             }
         }
     }
-    return [dict create base $base bh $bh bs $bs ah $ah as $as]
+    set eff [expr {$base eq "auto" ? [::lumen::auto_wanted] : $base}]
+    return [dict create base $base bh $bh bs $bs ah $ah as $as eff $eff]
+}
+
+# The file suffix of the custom set for a base: the dark-glass set keeps
+# the 0.46.0 name (_custom), the light-glass set is _customl, so both can
+# sit on disk at once and an Auto flip is a photo swap, not a re-bake.
+proc ::lumen::custom::suffix { {base ""} } {
+    if { $base eq "" } { set base [dict get [prefs] eff] }
+    return [expr {$base eq "light" ? "_customl" : "_custom"}]
 }
 
 # The whole palette from the five inputs. Returns a dict with every C()
@@ -4341,6 +4544,8 @@ proc ::lumen::custom::prefs {} {
 # and the four chart colours come from the matching baked theme and never
 # change: they carry meaning, not style.
 proc ::lumen::custom::palette { base bh bs ah as } {
+    # 0.56.0: an auto base is the one the schedule wants right now.
+    if { $base eq "auto" } { set base [::lumen::auto_wanted] }
     set dark [expr {$base ne "light"}]
     set P [dict create base $base]
     # Alphas are the bake's own (make_backgrounds.py THEMES, /255): glass
@@ -4738,7 +4943,11 @@ proc ::lumen::custom::signature { pr } {
     # 3 = 0.49.0: the glass material files joined the set.
     # 4 = 0.52.0: the accent derivation changed (wash guard, neutral start),
     #     so files painted with the old accent are redrawn once.
-    return "4 [dict get $pr base] [dict get $pr bh] [dict get $pr bs] [dict get $pr ah] [dict get $pr as]"
+    # 0.56.0: the base IN FORCE (auto resolved), so an auto set's two
+    # halves each carry their own signature beside their own files.
+    set base [dict get $pr base]
+    if { [dict exists $pr eff] } { set base [dict get $pr eff] } elseif { $base eq "auto" } { set base [::lumen::auto_wanted] }
+    return "4 $base [dict get $pr bh] [dict get $pr bs] [dict get $pr ah] [dict get $pr as]"
 }
 
 # Makes sure lumen_*_custom.png exist for the screen and match the saved
@@ -4746,18 +4955,23 @@ proc ::lumen::custom::signature { pr } {
 # place, 0 when drawing was impossible (no Tk, write failed) -- the caller
 # then falls back to -bg_color pages. Runs at skin load, before any page
 # is declared, and only for the custom theme.
-proc ::lumen::custom::ensure_bake {} {
+# 0.56.0: `base` picks which half of an auto set to draw (default: the
+# base in force). Files, signature and marker carry that base's suffix.
+proc ::lumen::custom::ensure_bake { {base ""} } {
     variable pages
     if { [info commands image] eq "" } { return 0 }
     lassign [screen] W H
     if { $W <= 0 || $H <= 0 } { return 0 }
     set dir "[homedir]/skins/Lumen/${W}x${H}"
     set pr [prefs]
+    if { $base eq "" } { set base [dict get $pr eff] }
+    dict set pr eff $base
+    set sfx [suffix $base]
     set sig [signature $pr]
-    set sigfile "$dir/lumen_custom.sig"
+    set sigfile "$dir/lumen$sfx.sig"
     set have 1
     dict for {name spec} $pages {
-        if { ![file isfile "$dir/[dict get $spec out]_custom.png"] } { set have 0 }
+        if { ![file isfile "$dir/[dict get $spec out]$sfx.png"] } { set have 0 }
     }
     set old ""
     catch { set fh [open $sigfile r] ; set old [string trim [read $fh]] ; close $fh }
@@ -4769,7 +4983,7 @@ proc ::lumen::custom::ensure_bake {} {
     # marker found here means the last attempt died mid-way, and this
     # set is refused -- flat pages, a usable app, and a log line -- until
     # the colours change or the marker is cleared by hand.
-    set marker "$dir/lumen_custom.baking"
+    set marker "$dir/lumen$sfx.baking"
     if { [file exists $marker] } {
         set was ""
         catch { set fh [open $marker r] ; set was [string trim [read $fh]] ; close $fh }
@@ -4784,10 +4998,10 @@ proc ::lumen::custom::ensure_bake {} {
     if { [catch {
         file mkdir $dir
         set fh [open $marker w] ; puts $fh $sig ; close $fh
-        set P [palette [dict get $pr base] [dict get $pr bh] [dict get $pr bs] [dict get $pr ah] [dict get $pr as]]
+        set P [palette $base [dict get $pr bh] [dict get $pr bs] [dict get $pr ah] [dict get $pr as]]
         dict for {name spec} $pages {
             set img [page_photo $P $spec $W $H]
-            set path "$dir/[dict get $spec out]_custom.png"
+            set path "$dir/[dict get $spec out]$sfx.png"
             if { [catch { $img write $path -format png } werr] } {
                 # Some Img builds want the tkimg spelling.
                 $img write $path -format {png -alpha 1.0}
@@ -4869,7 +5083,7 @@ proc ::lumen::apply_theme { mode } {
     set theme_mode $mode
     switch -exact -- $mode {
         light   { set ::lumen::_bg_suffix "_light" }
-        custom  { set ::lumen::_bg_suffix "_custom" }
+        custom  { set ::lumen::_bg_suffix [::lumen::custom::suffix] }
         default { set ::lumen::_bg_suffix "" }
     }
     wait_step "[translate {Applying}] $word: [translate {colours and backgrounds...}]"
@@ -4915,7 +5129,7 @@ proc ::lumen::_bg_photo { file } {
     variable bg_owned
     set path [dui::image::find $file 1]
     if { $path eq "" } { error "background '$file' not found" }
-    set custom [string match "*_custom.png" $file]
+    set custom [expr {[string match "*_custom.png" $file] || [string match "*_customl.png" $file]}]
     if { [dui::image::is_loaded $path] } {
         set img [dui::image::get $path]
         if { $custom } { $img read $path -shrink }
@@ -5110,7 +5324,7 @@ set ::lumen::pages [list espresso steam water hotwaterrinse]
 
 switch -exact -- $::lumen::theme_mode {
     light   { set ::lumen::_bg_suffix "_light" }
-    custom  { set ::lumen::_bg_suffix "_custom" }
+    custom  { set ::lumen::_bg_suffix [::lumen::custom::suffix] }
     default { set ::lumen::_bg_suffix "" }
 }
 
@@ -5290,22 +5504,25 @@ proc ::lumen::build_home {} {
         -font $L(font_label) -fill $C(crema) -anchor center -justify center
 
     # Confidence band: three stacked items, coloured by what it says.
+    # 0.56.1: the whole bottom row sits on L(hist_y), the same row the
+    # last-shot tile uses, so the two tiles' footers line up (they were
+    # 4 px apart: gy + 140 = 224 against 220).
     foreach {code col} [list \
         {[::lumen::data::grind_band_good]}    $C(good) \
         {[::lumen::data::grind_band_poor]}    $C(warn) \
         {[::lumen::data::grind_band_neutral]} $C(ink_2)] {
-        var $p $gx [expr {$gy + 140}] $code -font $L(font_caption) -fill $col
+        var $p $gx $L(hist_y) $code -font $L(font_caption) -fill $col
     }
 
     txt $p [expr {$L(grind_x) + $L(grind_w) - $L(pad_x)}] \
-        [expr {$gy + 140}] \
+        $L(hist_y) \
         [translate "Shot analysis"] -font $L(font_caption) -fill $C(crema) \
         -anchor ne -justify right
 
     # "Curve" sits on the same baseline as "Shot analysis", one lg gap to its
     # left, and opens GrindAdvisor's calibration plot directly.
     set gcv_r [expr {$L(grind_x) + $L(grind_w) - $L(pad_x) - 130}]
-    txt $p $gcv_r [expr {$gy + 140}] \
+    txt $p $gcv_r $L(hist_y) \
         [translate "Curve"] -font $L(font_caption) -fill $C(crema) \
         -anchor ne -justify right
 
@@ -5809,6 +6026,8 @@ proc ::lumen::act::open_theme_picker {} {
     # the current custom colours (or the Lumen-dark defaults).
     set pr [::lumen::custom::prefs]
     foreach k {base bh bs ah as} { set pend($k) [dict get $pr $k] }
+    # 0.56.0: the schedule's two times ride along.
+    set pend(lf) [::lumen::auto_minutes light] ; set pend(df) [::lumen::auto_minutes dark]
     if { [catch { dui page load lumen_theme } err] } {
         msg -ERROR "Lumen: could not open the theme picker: $err"
         return
@@ -5853,6 +6072,9 @@ proc ::lumen::act::theme_apply {} {
     if { [catch {
         set ::settings(lumen_custom_base) $pend(base)
         foreach k {bh bs ah as} { set ::settings(lumen_custom_$k) $pend($k) }
+        # 0.56.0: the schedule's times are picker state too.
+        set ::settings(lumen_auto_light_from) [::lumen::pend_minutes light]
+        set ::settings(lumen_auto_dark_from)  [::lumen::pend_minutes dark]
         save_settings
     } err] } {
         msg -ERROR "Lumen: could not save the custom theme: $err"
@@ -5860,6 +6082,7 @@ proc ::lumen::act::theme_apply {} {
     }
     set after [::lumen::custom::signature [::lumen::custom::prefs]]
     if { $::lumen::theme_mode eq "custom" && $before eq $after } {
+        _bake_other_half
         theme_cancel
         return
     }
@@ -5868,8 +6091,24 @@ proc ::lumen::act::theme_apply {} {
         ::lumen::theme_page_status [translate "Could not draw this theme. See the log."]
         return
     }
+    _bake_other_half
     ::lumen::theme_page_status ""
     theme_cancel
+}
+
+# 0.56.0: with base auto, the half the schedule is NOT showing right now
+# is drawn here too (a few seconds behind the status line), so the flip
+# at the next boundary is a photo swap and never a bake on the home page.
+# A failure only logs: the flip falls back to baking on its own.
+proc ::lumen::act::_bake_other_half {} {
+    set pr [::lumen::custom::prefs]
+    if { [dict get $pr base] ne "auto" || $::lumen::_flat_pages } { return }
+    set other [expr {[dict get $pr eff] eq "light" ? "dark" : "light"}]
+    ::lumen::theme_page_status "[translate {Drawing the}] [translate $other] [translate {glass for later...}]"
+    ::lumen::wait_show "[translate {Drawing the}] [translate $other] [translate {glass for later...}]"
+    if { [catch { set ok [::lumen::custom::ensure_bake $other] } err] } { set ok 0 ; msg -ERROR "Lumen: other half bake threw: $err" }
+    ::lumen::wait_hide
+    if { !$ok } { msg -ERROR "Lumen: the $other half of the auto set could not be drawn now; it will be drawn at the first flip" }
 }
 
 # The picker's status line, repainted at once: the apply that follows is
@@ -5902,8 +6141,9 @@ proc ::lumen::refresh_preview {} {
             $can itemconfigure lumen_thp_$tok -fill $v
             $can itemconfigure lumen_tho_$tok -outline $v
         }
-        # Base pills: the selected one takes the accent look.
-        foreach b {dark light} {
+        # Base pills: the selected one takes the accent look (0.56.0: Auto
+        # is a third base, one of the three is selected).
+        foreach b {dark light auto} {
             set on [expr {$pend(base) eq $b}]
             $can itemconfigure lumen_thb_$b -fill [expr {$on ? $C(crema_lo) : $C(glass_2)}] \
                 -outline [expr {$on ? $C(crema_brd) : $C(glass_brd)}]
@@ -5947,7 +6187,7 @@ proc ::lumen::_preview_render { P } {
     if { [catch {
         lassign [::lumen::custom::screen] W H
         if { $W <= 0 } { error "no screen size" }
-        set mw [expr {int(round($L(thp_pw) * $W / 1340.0))}]
+        set mw [expr {int(round($L(thp_piw) * $W / 1340.0))}]
         set mh [expr {int(round($L(thp_mini_h) * $H / 800.0))}]
         set t0 [clock milliseconds]
         set img [::lumen::custom::page_photo $P [dict get $::lumen::custom::pages home] $mw $mh]
@@ -5977,13 +6217,25 @@ proc ::lumen::build_theme_page {} {
 
     set lx $L(thp_x) ; set lw $L(thp_w) ; set ix [expr {$lx + $L(pad_x)}]
 
-    # ---- BASE ----
+    # ---- BASE, with the Auto schedule (0.55.0) ----
+    # Three pills right-aligned to the card's inner edge: Dark and Light
+    # (the pending custom base, as before) and Auto (the schedule toggle,
+    # persisted at once). The second line is the schedule itself: "Auto:"
+    # then the two times, each a 116 x 44 zone that steps it 30 min per
+    # tap; the zones end 6 short of the Dark pill's.
     set by $L(thp_base_y)
     glass $p $lx $by $lw $L(thp_base_h)
     txt $p $ix [expr {$by + 18}] [translate "BASE"] -font $L(font_label) -fill $C(ink_3)
-    txt $p $ix [expr {$by + 44}] [translate "Dark glass or pale glass."] \
-        -font $L(font_caption) -fill $C(ink_2)
-    foreach {b bx bw lbl} [list dark 402 100 "Dark" light 510 96 "Light"] {
+    txt $p $ix [expr {$by + 44}] [translate "Auto:"] -font $L(font_caption) -fill $C(ink_2)
+    foreach which {light dark} dx {52 172} {
+        var $p [expr {$ix + $dx}] [expr {$by + 44}] "\[::lumen::data::auto_[set which]_text\]" \
+            -font $L(font_caption) -fill $C(ink_2)
+        tap $p [expr {$ix + $dx - 6}] [expr {$by + 30}] 116 44 \
+            "::lumen::act::auto_step $which" "Auto $which time" label
+    }
+    set pr [expr {$lx + $lw - $L(pad_x)}]
+    foreach {b bx bw lbl} [list dark [expr {$pr - 304}] 96 "Dark" light [expr {$pr - 200}] 96 "Light" \
+                               auto [expr {$pr - 96}] 96 "Auto"] {
         set py [expr {$by + 16}]
         rounded_rect $p [X $bx] [Y $py] [X [expr {$bx + $bw}]] [Y [expr {$py + 48}]] [X 32] \
             -fill $C(glass_2) -outline $C(glass_brd) -width 2 -tags [list lumen_thi_[incr n] lumen_thb_$b]
@@ -6011,78 +6263,104 @@ proc ::lumen::build_theme_page {} {
                 -fill $disp -outline $C(glass_brd) -width 2 \
                 -tags [list lumen_thi_[incr n] lumen_ths_${key}_$i]
             # 44 px zones on a 46 px pitch: touch floor kept, never overlapping.
-            tap $p [expr {$sx - 3}] [expr {$sy - 3}] 44 44 "::lumen::act::theme_pick $key $h $s" "Colour $h $s"
+            # 0.54.2: no press chip -- the swatch takes the selection ring.
+            tap $p [expr {$sx - 3}] [expr {$sy - 3}] 44 44 "::lumen::act::theme_pick $key $h $s" "Colour $h $s" none
             incr i
         }
     }
 
-    # ---- PRESETS: six pills in one row ----
+    # ---- PRESETS: two rows of three pills (0.53.1) ----
     set ry $L(thp_pre_y)
     glass $p $lx $ry $lw $L(thp_pre_h)
-    txt $p $ix [expr {$ry + 16}] [translate "PRESETS"] -font $L(font_label) -fill $C(ink_3)
+    txt $p $ix [expr {$ry + 18}] [translate "PRESETS"] -font $L(font_label) -fill $C(ink_3)
+    set pw $L(thp_pre_w) ; set pg $L(thp_pre_gap) ; set pph $L(thp_pre_ph)
     for { set i 0 } { $i < [llength $presets] / 6 } { incr i } {
         lassign [lrange $presets [expr {$i * 6}] [expr {$i * 6 + 5}]] name pb ph ps pa pas
         set PP [::lumen::custom::palette $pb $ph $ps $pa $pas]
-        # 96-wide pills on a 99 pitch: "Lumen light" needs the width.
-        set px [expr {$ix + $i * 99}] ; set py [expr {$ry + 36}]
-        rounded_rect $p [X $px] [Y $py] [X [expr {$px + 96}]] [Y [expr {$py + 44}]] [X 24] \
+        set px [expr {$ix + ($i % 3) * ($pw + $pg)}]
+        set py [expr {$ry + $L(thp_row1) + ($i / 3) * ($pph + $pg)}]
+        rounded_rect $p [X $px] [Y $py] [X [expr {$px + $pw}]] [Y [expr {$py + $pph}]] [X 24] \
             -fill [dict get $PP bg] -outline $C(glass_brd) -width 2 \
             -tags [list lumen_thi_[incr n] lumen_thpr_$i]
-        dui add dtext $p [X [expr {$px + 48}]] [Y [expr {$py + 22}]] -text [translate $name] \
+        dui add dtext $p [X [expr {$px + $pw / 2.0}]] [Y [expr {$py + $pph / 2.0}]] -text [translate $name] \
             -font $L(font_label) -fill [dict get $PP crema] -anchor center -justify center \
             -tags [list lumen_thi_[incr n]]
-        tap $p $px $py 96 44 "::lumen::act::theme_preset $i" $name
+        tap $p $px $py $pw $pph "::lumen::act::theme_preset $i" $name
     }
 
     # ---- PREVIEW column ----
     set rx $L(thp_px) ; set rw $L(thp_pw)
     set pv_y $L(thp_base_y) ; set pv_h [expr {$L(thp_pre_y) + $L(thp_pre_h) - $pv_y}]
     glass $p $rx $pv_y $rw $pv_h
-    txt $p [expr {$rx + $L(pad_x)}] [expr {$pv_y + 16}] [translate "PREVIEW"] \
+    txt $p [expr {$rx + $L(pad_x)}] [expr {$pv_y + 18}] [translate "PREVIEW"] \
         -font $L(font_label) -fill $C(ink_3)
+    # 0.53.1: everything inside the card keeps pad_x clear of both edges
+    # (owner: nothing hugs a card border); mx / mw is that inner span.
+    set mx [expr {$rx + $L(pad_x)}] ; set mw $L(thp_piw)
     # The miniature: a rect in the pending page colour, the painted photo
     # over it, a hairline around both, and a few readable labels on top
     # (the real text would be 4 px tall at this scale).
     set my $L(thp_mini_y) ; set mh $L(thp_mini_h)
-    dui add canvas_item rectangle $p [X $rx] [Y $my] [X [expr {$rx + $rw}]] [Y [expr {$my + $mh}]] \
+    dui add canvas_item rectangle $p [X $mx] [Y $my] [X [expr {$mx + $mw}]] [Y [expr {$my + $mh}]] \
         -fill $C(bg) -outline "" -tags [list lumen_thi_[incr n] lumen_thp_bg]
-    dui add canvas_item image $p [X $rx] [Y $my] -anchor nw \
+    dui add canvas_item image $p [X $mx] [Y $my] -anchor nw \
         -tags [list lumen_thi_[incr n] lumen_th_mini]
-    dui add canvas_item rectangle $p [X $rx] [Y $my] [X [expr {$rx + $rw}]] [Y [expr {$my + $mh}]] \
+    dui add canvas_item rectangle $p [X $mx] [Y $my] [X [expr {$mx + $mw}]] [Y [expr {$my + $mh}]] \
         -fill "" -outline $C(glass_brd) -width 2 -tags [list lumen_thi_[incr n] lumen_tho_glass_brd]
-    set k [expr {double($rw) / 1340.0}]
+    set k [expr {double($mw) / 1340.0}]
     # grind card (16,64 650x190): the hero and the band. 0.52.1: the fonts
-    # do not shrink with the card (47 px tall here), so the two lines are
+    # do not shrink with the card (40 px tall here), so the two lines are
     # placed from the card's TOP in design px, the hero one size down
     # (primary), and neither bbox crosses the other or the card edge.
     set gc_top [expr {$my + 64 * $k}]
-    dui add dtext $p [X [expr {$rx + (16 + 325) * $k}]] [Y [expr {$gc_top + 13.5}]] -text "2.8" \
+    dui add dtext $p [X [expr {$mx + (16 + 325) * $k}]] [Y [expr {$gc_top + 13.5}]] -text "2.8" \
         -font $L(font_primary) -fill $C(crema) -anchor center -justify center \
         -tags [list lumen_thi_[incr n] lumen_thp_crema]
-    dui add dtext $p [X [expr {$rx + 40 * $k}]] [Y [expr {$gc_top + 36.5}]] -text "[translate Good] - 12 [translate shots]" \
+    dui add dtext $p [X [expr {$mx + 40 * $k}]] [Y [expr {$gc_top + 36.5}]] -text "[translate Good] - 12 [translate shots]" \
         -font $L(font_caption) -fill $C(good) -anchor w -justify left \
         -tags [list lumen_thi_[incr n] lumen_thp_good]
-    # last-shot card (682,64 642x190)
-    dui add dtext $p [X [expr {$rx + 706 * $k}]] [Y [expr {$my + 96 * $k}]] -text [translate "LAST SHOT"] \
+    # last-shot card (682,64 642x190). 0.53.1: the two lines sit on the
+    # grind card's baselines (+13.5 / +36.5 from the card top) -- at the
+    # 282-wide scale their old 84-design-px pitch was 17.7 px, and the
+    # verify run flagged the caption against the values row.
+    dui add dtext $p [X [expr {$mx + 706 * $k}]] [Y [expr {$gc_top + 13.5}]] -text [translate "LAST SHOT"] \
         -font $L(font_caption) -fill $C(ink_3) -anchor w -justify left \
         -tags [list lumen_thi_[incr n] lumen_thp_ink_3]
-    dui add dtext $p [X [expr {$rx + 706 * $k}]] [Y [expr {$my + 180 * $k}]] -text "2.1  19.0  38.0" \
+    dui add dtext $p [X [expr {$mx + 706 * $k}]] [Y [expr {$gc_top + 36.5}]] -text "2.1  19.0  38.0" \
         -font $L(font_caption) -fill $C(ink) -anchor w -justify left \
         -tags [list lumen_thi_[incr n] lumen_thp_ink]
     # next-shot strip (16,574 1308x210): the bean name only. 0.52.1: the
-    # NEXT SHOT caption is gone -- the strip is 52 px tall here and the
-    # caption, the name and the painted pill row did not fit; LAST SHOT
-    # already shows ink_3. The name sits between the strip's top edge and
-    # its pills (which start 48 px down at this scale).
-    dui add dtext $p [X [expr {$rx + 40 * $k}]] [Y [expr {$my + 574 * $k + 16}]] -text "Las Brumas" \
+    # NEXT SHOT caption is gone -- the caption, the name and the painted
+    # pill row did not fit; LAST SHOT already shows ink_3. 0.54.1: the
+    # name sits where the real one does (652 design px, the identity
+    # block's hero line), which at this scale is 23 px into the 63-tall
+    # strip -- clear of the top edge and of the painted rows.
+    dui add dtext $p [X [expr {$mx + 40 * $k}]] [Y [expr {$my + 652 * $k}]] -text "Las Brumas" \
         -font $L(font_primary) -fill $C(ink) -anchor w -justify left \
         -tags [list lumen_thi_[incr n] lumen_thp_ink]
+    # 0.54.2 (owner): the strip's GRIND / DOSE / YIELD row. Labels at their
+    # real x (520 + i x 270) and top (594); values centred where the real
+    # ones sit between the pills (kx + 120), one line down. 0.55.0: the
+    # values in the CAPTION size like the LAST SHOT card's (the data mono
+    # was huge at this scale -- owner), at 700 so the two bboxes keep the
+    # checker's gap. Row: my + 178..220, strip ends 235.
+    set i 0
+    foreach lbl {GRIND DOSE YIELD} val {2.8 19.0 38.0} {
+        set kx [expr {$mx + (520 + $i * 270) * $k}]
+        dui add dtext $p [X $kx] [Y [expr {$my + 594 * $k}]] -text [translate $lbl] \
+            -font $L(font_label) -fill $C(ink_3) -anchor nw -justify left \
+            -tags [list lumen_thi_[incr n] lumen_thp_ink_3]
+        dui add dtext $p [X [expr {$kx + 120 * $k}]] [Y [expr {$my + 700 * $k}]] -text $val \
+            -font $L(font_caption) -fill $C(ink) -anchor center -justify center \
+            -tags [list lumen_thi_[incr n] lumen_thp_ink]
+        incr i
+    }
 
     # Token chips: the derived colours themselves, labelled.
     set cy $L(thp_chip_y) ; set cw $L(thp_chip_w) ; set ch $L(thp_chip_h)
     set i 0
     foreach {tok lbl} [list bg "Page" glass "Glass" ink "Text" crema "Accent" crema_lo "Chip"] {
-        set cx [expr {$rx + $i * ($cw + $L(thp_chip_gap))}]
+        set cx [expr {$mx + $i * ($cw + $L(thp_chip_gap))}]
         rounded_rect $p [X $cx] [Y $cy] [X [expr {$cx + $cw}]] [Y [expr {$cy + $ch}]] [X 16] \
             -fill $C($tok) -outline $C(glass_brd) -width 2 \
             -tags [list lumen_thi_[incr n] lumen_thp_$tok lumen_tho_glass_brd]
@@ -6092,21 +6370,22 @@ proc ::lumen::build_theme_page {} {
         incr i
     }
 
-    dui add dtext $p [X $rx] [Y $L(thp_note_y)] -width [X $rw] -anchor nw -justify left \
+    dui add dtext $p [X $mx] [Y $L(thp_note_y)] -width [X $mw] -anchor nw -justify left \
         -text [translate "Tap Done: every page switches to these colours at once. New colours take a few seconds to draw."] \
         -font $L(font_caption) -fill $C(ink_2) -tags [list lumen_thi_[incr n] lumen_thp_ink_2]
-    dui add dtext $p [X $rx] [Y $L(thp_note2_y)] -width [X $rw] -anchor nw -justify left \
+    dui add dtext $p [X $mx] [Y $L(thp_note2_y)] -width [X $mw] -anchor nw -justify left \
         -text [translate "Contrast is guarded: labels and the accent always stay readable on the glass."] \
         -font $L(font_caption) -fill $C(ink_3) -tags [list lumen_thi_[incr n] lumen_thp_ink_3]
     # Status line for the live apply ("Drawing your theme..." / the
     # failure), in the CURRENT theme's accent, blank otherwise.
-    txt $p $rx $L(thp_status_y) "" -font $L(font_caption) -fill $C(crema) -width $rw -tags lumen_th_status
+    txt $p $mx $L(thp_status_y) "" -font $L(font_caption) -fill $C(crema) -width $mw -tags lumen_th_status
 
-    # ---- Cancel / Done ----
-    txt $p 194 716 [translate "Cancel"] -font $L(font_button) -fill $C(crema)
-    tap $p 170 700 120 56 {::lumen::act::theme_cancel} "Cancel" label
+    # ---- Cancel / Done (0.53.1: under the taller presets card) ----
+    set dy $L(thp_done_y)
+    txt $p 194 [expr {$dy + 26}] [translate "Cancel"] -font $L(font_button) -fill $C(crema)
+    tap $p 170 [expr {$dy + 10}] 120 56 {::lumen::act::theme_cancel} "Cancel" label
     set dw $L(set_done_w) ; set dh $L(set_done_h)
-    set dx [expr {$L(center_x) - $dw / 2}] ; set dy $L(set_done_y)
+    set dx [expr {$L(center_x) - $dw / 2}]
     glass $p $dx $dy $dw $dh -radius $L(radius_sm) -fill $C(crema_lo) -outline $C(crema_brd)
     txt $p [expr {$dx + $dw / 2.0}] [expr {$dy + $dh / 2.0}] [translate "Done"] \
         -font $L(font_button) -fill $C(crema) -anchor center -justify center
@@ -6292,11 +6571,15 @@ proc ::lumen::build_settings {} {
 
     # ---- right column ---------------------------------------------------
     #
-    # THEME. The button deliberately is NOT accent-coloured: it is plain
-    # glass, so it renders dark in the dark theme and light in the light
-    # theme -- the button itself shows the theme (owner request). Its label
-    # is live (it names the theme you will get), so the row is drawn here
-    # rather than through settings_button_row.
+    # THEME. 0.54.0 (owner request): the button reads "Change" and opens
+    # the picker -- Dark and Light live there as the Lumen dark / Lumen
+    # light presets, so the three-way cycle of 0.46.0-0.53.1 is gone. The
+    # caption is live: it names the theme on screen (or a failed apply's
+    # reason). The button is the row's ONLY tap and the only thing that
+    # flashes (zone chip); the caption tap and the whole-card chip went
+    # with the cycle. The button stays plain glass (it renders dark in
+    # the dark theme, light in the light theme), and the row is drawn
+    # here because the caption is a variable.
     set bw 150 ; set bh 56
     glass $p $rx $ry1 $rw $L(set_row_h)
     txt $p [expr {$rx + $L(pad_x)}] [expr {$ry1 + 26}] [translate "THEME"] \
@@ -6304,17 +6587,12 @@ proc ::lumen::build_settings {} {
     var $p [expr {$rx + $L(pad_x)}] [expr {$ry1 + 56}] \
         {[::lumen::data::theme_note]} \
         -font $L(font_caption) -fill $C(ink_2) -width 290
-    # 0.46.0: the caption opens the colour picker. Its zone ends at 984,
-    # clear of the button zone starting at 996.
-    tap $p [expr {$rx + $L(pad_x)}] [expr {$ry1 + 50}] 290 52 \
-        {::lumen::act::open_theme_picker} "Custom colours" label
     set bx [expr {$rx + $rw - $L(pad_x) - $bw}]
     set by [expr {$ry1 + ($L(set_row_h) - $bh) / 2}]
     glass $p $bx $by $bw $bh -radius $L(radius_sm) -fill $C(glass_2)
-    var $p [expr {$bx + $bw / 2.0}] [expr {$by + $bh / 2.0}] \
-        {[::lumen::data::theme_label]} \
+    txt $p [expr {$bx + $bw / 2.0}] [expr {$by + $bh / 2.0}] [translate "Change"] \
         -font $L(font_button) -fill $C(ink) -anchor center -justify center
-    tap $p $bx $by $bw $bh {::lumen::act::toggle_theme} "Theme"
+    tap $p $bx $by $bw $bh {::lumen::act::open_theme_picker} "Change theme"
 
     # BAGS TO CYCLE, with the same stepper geometry as the left column
     # mirrored to this column's inner edge: 670 + 500 - 24 = 1146, and the
@@ -6421,6 +6699,8 @@ proc ::lumen::build_settings {} {
 ::lumen::build_settings
 ::lumen::build_message_page
 ::lumen::build_theme_page
+# 0.55.0: the Auto schedule's minute tick (a no-op unless Auto is on).
+after 60000 ::lumen::auto_tick
 
 # Each page gets ITS OWN timer. Sharing espresso_secs across all of them
 # reported time-since-the-last-espresso on the water and flush pages -- see
