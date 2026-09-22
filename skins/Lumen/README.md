@@ -1,11 +1,11 @@
 # Lumen
 
 **A glass dashboard home screen for the Decent DE1: grind recommendation, last shot, shot graph and next-shot beans, without opening Settings.**
-Version 0.56.1 · a skin for the Decent DE1app · by Blastize
+Version 0.57.3 · a skin for the Decent DE1app · by Blastize
 
-![The Lumen home screen in a custom theme: grind tile, last shot, live graph, next-shot strip, favorite profile slots on the taskbar](docs/home_custom_theme.png)
+![The Lumen home screen in a custom theme: grind tile, last shot, live graph, next-shot strip, and the taskbar with three favorite profile names, the loaded one glowing](docs/home_custom_theme.png)
 
-**Home.** The recommended grind and how sure it is, the last shot, the shot graph, and the bean, grind, dose and yield for the next shot. Digits 1 2 3 on the taskbar are favorite profile slots: one tap loads the profile.
+**Home.** The recommended grind and how sure it is, the last shot, the shot graph, and the bean, grind, dose and yield for the next shot. The three profile names on the taskbar are favorite slots: one tap loads the profile, and the loaded one glows.
 
 ![The default dark theme home screen](docs/screenshot.png)
 
@@ -52,7 +52,16 @@ shot — all reachable without going into Settings. It is built to work with
 GrindAdvisor, DYE, Bean Scanner, ShotHistoryEditor, MaintenanceTracker
 and SDB.
 
-**Version 0.56.0 — every page built, baked and running on the tablet.**
+**Version 0.57.0 — every page built, baked and running on the tablet.**
+
+New in 0.57.0: **the taskbar, re-laid out.** Sleep (the moon) sits alone
+at the far left where a stray tap finds nothing else; the date sits under
+the time with the water level beside it; the four remaining icons close up
+at the right edge; the wordmark is gone. The three favorite slots now show
+their **profile names**, centred, cut with an ellipsis when long: a dim
+`+` is an empty slot, grey is a set one, and the loaded profile's slot
+reads in crema over a soft **halo** that follows the profile wherever it
+was chosen. Tapping a slot moves the halo there the instant you touch it.
 
 New in 0.56.0: **Auto glass.** The colour picker's BASE row offers Dark,
 Light or Auto. With Auto, your own colours sit on light glass from one
@@ -166,11 +175,13 @@ before the number, an Estimate chip, and the source ("Starting estimate:
 same roaster (4 bags)") — instead of just `--`. It is display-only and
 disappears the moment the bag's first real shot produces a calibration.
 
-Since 0.30.0 the top of the screen is a **taskbar**: a live clock and date
+Since 0.30.0 the top of the screen is a **taskbar** (re-laid out in
+0.57.0): the moon (sleep) alone at the far left, a live clock over the date
 (12/24-hour and day-month/month-day formats, chosen on the settings CLOCK
-row), the water level, and mug / wrench / gear / DE1 / moon icons — Drink
-Menu, plugin maintenance, Lumen settings, the stock app settings (a drawn
-side view of the machine), and sleep. A
+row) with the water level beside it, the three favorite profile names
+across the middle, and mug / wrench / gear / DE1 icons at the right — Drink
+Menu, plugin maintenance, Lumen settings and the stock app settings (a drawn
+side view of the machine). A
 **maintenance dot** at the wrench turns amber or red when the
 MaintenanceTracker plugin says something is due or overdue. The old side
 panel is gone; the bean strip runs the full width, and the chart lost its
@@ -196,8 +207,8 @@ backdrop and let the shadow do the separating.
 
 | Tile | Shows | Tap |
 |---|---|---|
-| Taskbar (top) | Live clock and date, the "Lumen" wordmark, and the water left in the tank in mL — amber under 300 ml, blank when no machine is connected | The five icons: mug = Drink Menu, wrench = MaintenanceTracker's card list, gear = Lumen settings, DE1 side view = the stock app settings, moon = sleep |
-| Favorite profiles 1 2 3 (taskbar, left of the wordmark) | Three profile slots: a dim digit is empty, plain ink is set, accent means that slot's profile is the one loaded right now | Tap an empty slot to store the profile loaded now; tap a set slot to load its profile (refused while the machine is running). Put your backflush profile in one and a cleaning run is one tap plus the GHC button. "Clear favorite profiles" on the Lumen settings page empties all three |
+| Taskbar (top) | Live clock over the date, and the water left in the tank in mL — amber under 300 ml, blank when no machine is connected | The five icons: moon (far left, alone) = sleep; at the right, mug = Drink Menu, wrench = MaintenanceTracker's card list, gear = Lumen settings, DE1 side view = the stock app settings |
+| Favorite profiles (taskbar, three slots across the middle) | Each slot shows its profile's name, centred and cut with an ellipsis when long: a dim `+` is an empty slot, grey is a set one, and the loaded profile's slot reads in crema over a soft crema halo | Tap an empty slot to store the profile loaded now; tap a set slot to load its profile (refused while the machine is running). Put your backflush profile in one and a cleaning run is one tap plus the GHC button. "Clear favorite profiles" on the Lumen settings page empties all three |
 | Maintenance dot (at the wrench) | Amber when a maintenance item is due soon, red when one is overdue — driven by the MaintenanceTracker plugin's status; blank when all is well or the plugin is absent | — |
 | Grind | GrindAdvisor's next setting for the loaded bag, the change from the last one, method, confidence and shot count. A bag with no shots yet shows the **starting estimate** instead (GrindAdvisor 3.13.0): STARTING ESTIMATE header, `~` before the number, an Estimate chip, and which bags it was borrowed from | Opens GrindAdvisor's settings (target time, rounding, history) |
 | Shot analysis (on the grind tile) | — | Opens GrindAdvisor's result popup |

@@ -2,7 +2,7 @@
 
 **Five plugins and a skin for the classic Decent DE1 app, in one download. Drop two folders into the app, tick a few boxes, done.**
 
-| Lumen skin 0.56.1 | Grind Advisor 3.16.3 |
+| Lumen skin 0.57.3 | Grind Advisor 3.16.3 |
 |---|---|
 | ![Lumen home screen](docs/lumen.png) | ![Grind Advisor popup](docs/grindadvisor.png) |
 | A glass dashboard home screen: next grind, last shot, live graph, next-shot beans, favorite profile slots, your own colours. | After every espresso: your next grind setting and why. Nothing to type. |
@@ -48,7 +48,7 @@ Then the skin: **Settings > App > Skin**, pick **Lumen** from the list, and rest
 - **Grind Advisor:** open its settings, set your **target shot time** and your grinder's **minimum and maximum**. It starts recommending after the first espresso of a bag and gets sharper with every shot.
 - **Bean Scanner:** it needs an API key of your own (Anthropic or OpenAI, pay as you go; one scan costs a fraction of a cent). Either type it in its settings, or put a file named `api_key_anthropic.txt` or `api_key_openai.txt` containing the key into `de1plus/plugins/BeanScanner/`.
 - **Maintenance Tracker:** tap **Record** on each tracker the next time you actually do that task; counters run from there. Backflush and descale record themselves after a real clean or descale cycle.
-- **Lumen:** the gear on Lumen's taskbar opens its settings; the THEME row's **Change** button opens the colour picker with Lumen dark, Lumen light, four more presets, your own backdrop and accent colours, and an **Auto** base that puts your colours on light glass by day and dark glass by night. The moon on the taskbar is Sleep.
+- **Lumen:** the gear on Lumen's taskbar opens its settings; the THEME row's **Change** button opens the colour picker with Lumen dark, Lumen light, four more presets, your own backdrop and accent colours, and an **Auto** base that puts your colours on light glass by day and dark glass by night. The moon at the far left of the taskbar is Sleep, and the three names across the middle are favorite profiles: tap one to load it, and the loaded one glows.
 - **Drink Menu** and **Shot History Editor** need nothing.
 
 ## Safety, in one paragraph
@@ -63,7 +63,7 @@ Download the zip again and copy the two folders over the old ones. Your settings
 
 | Folder | Version |
 |---|---|
-| `skins/Lumen` | 0.56.1 |
+| `skins/Lumen` | 0.57.3 |
 | `plugins/GrindAdvisor` | 3.16.3 |
 | `plugins/DrinkMenu` | 1.17.0 |
 | `plugins/MaintenanceTracker` | 0.22.0 |

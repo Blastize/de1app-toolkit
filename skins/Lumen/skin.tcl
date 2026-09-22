@@ -5,7 +5,7 @@ package require de1plus 1.0
 #  LUMEN  --  a glass dashboard skin for the Decent DE1
 #
 #  Author:  Blastize
-#  Version: 0.56.1  (polish: grind and last-shot tile footers on one row; see `variable version`)
+#  Version: 0.57.3  (favorite slots: no press flash, the halo answers the tap at once; see `variable version`)
 #
 #
 #
@@ -102,7 +102,7 @@ package require de1plus 1.0
 #############################################################################
 
 namespace eval ::lumen {
-    variable version "0.56.1"
+    variable version "0.57.3"
 
     variable C        ;# colour tokens
     array set C {}
@@ -410,53 +410,46 @@ proc ::lumen::_init_layout {} {
     #
     # Every gap is md (16) and the bottom margin is 16, as before.
     set L(bar_y)      0 ; set L(bar_h)   48
-    set L(bar_time_x) 16            ;# time, mono, pinned left
-    # 0.34.1: day at 170. 0.34.0 put it at 130 on a 13px/glyph estimate;
-    # the tablet render (owner report + screenshot) shows the 26px mono
-    # advance is ~15.5px, so "01:10 AM" ends ~141 and the day TOUCHED it.
-    # 170 leaves ~30px after the widest zero-padded 12h time and a looser
-    # (fine) gap in 24h mode. The day position is fixed at creation, so
-    # it must clear the widest format, not the current one.
-    set L(bar_day_x) 170
-    set L(bar_title_x) 670          ;# "Lumen" wordmark, page centre
-    # 0.40.0: water readout moved left 72 (one icon pitch) to 956 so a
-    # fifth tappable fits at 980. Anchored e, 26px mono at ~15.5px per
-    # glyph: the widest value "1500 ml" spans 847..956, one lg clear of
-    # the mug zone at 980 and far from the wordmark ending near 700.
-    set L(bar_water_x) 956
-
-    # 0.32.0: the bar's tappables, right-aligned in escalating
-    # consequence toward the corner (Apple convention: passive status at
-    # one end, controls grouped away from it). 56x48 zones on a 72 pitch,
-    # ending flush with the page margin at 1324; every zone is the bar's
-    # full height, comfortably over the 44px touch floor.
+    # 0.57.0 (owner's mockup): the bar is re-laid out. Sleep (moon) is
+    # ALONE at the far left -- nothing tappable near it, so the corner tap
+    # that used to put the machine to sleep by accident lands on nothing.
+    # The clock takes two rows (time over date) so the water reading can
+    # follow it on the left; the four remaining icons close up to the
+    # right margin; the wordmark is gone; the favorite slots widen to
+    # carry the profile NAMES, centred on the free span between water
+    # and icons. Every zone is the bar's full 48px height.
     #
-    # 0.41.0 removed the sliders icon (gear + sliders side by side both
-    # read as "settings") for a DECENT APP settings row; 0.42.0 reversed
-    # that -- the owner wants the app settings one tap away -- with a
-    # DRAWN side-view-of-the-DE1 icon in the old slot instead of the
-    # ambiguous sliders glyph (see draw_de1_icon).
-    #   mug 980..1036   wrench 1052..1108   gear 1124..1180
-    #   DE1 1196..1252   moon 1268..1324
+    #   moon      0..56
+    #   time     66.. (row 1, 26px mono, widest "12:59 PM" ends ~190)
+    #   date     68.. (row 2, caption)
+    #   water   206.. (anchored w, widest "1500 ml" ends ~315)
+    #   slots   396..576  586..766  776..956  (180 wide, 10 apart)
+    #   mug 1052..1108  wrench 1124..1180  gear 1196..1252  DE1 1268..1324
+    set L(bar_moon_x)   0
+    set L(bar_time_x)  66 ; set L(bar_time_y) 20
+    set L(bar_day_x)   68 ; set L(bar_day_y)  40
+    set L(bar_water_x) 206
     set L(bar_icon_w)    56
     set L(bar_icon_pitch) 72
-    set L(bar_drinkmenu_x) 980
-    set L(bar_wrench_x) 1052
-    set L(bar_gear_x)   1124
-    set L(bar_de1_x)    1196
-    set L(bar_moon_x)   1268
+    set L(bar_drinkmenu_x) 1052
+    set L(bar_wrench_x) 1124
+    set L(bar_gear_x)   1196
+    set L(bar_de1_x)    1268
     # Maintenance state dot: top-right corner of the wrench zone, clear of
-    # the 22px glyph centred at (1080, 24).
-    set L(bar_dot_x)    1102 ; set L(bar_dot_y) 12
+    # the 22px glyph centred at (1152, 24).
+    set L(bar_dot_x)    1174 ; set L(bar_dot_y) 12
 
-    # 0.53.0: three FAVORITE PROFILE slots, left of centre between the
-    # day label and the wordmark -- 56x48 zones on the icon pitch at
-    # 300, 372, 444 (ending 500). The widest day label ("Wed 17 Sep",
-    # 10 caption glyphs at ~9px from 170) ends near 260; the wordmark's
-    # left edge sits near 640. The digits 1 2 3 read dim when the slot
-    # is empty, plain ink when set, accent when that slot's file is the
-    # profile loaded right now.
-    set L(bar_fav_x) {300 372 444}
+    # Favorite profile slots (0.53.0 digits; 0.57.0 text). Three 180-wide
+    # zones, 10 apart, centred on 676 -- the middle of the free span from
+    # the water reading (~315) to the mug (1052). The title is centred on
+    # its slot and ellipsis-truncated to the inner width (180 - 2 x sm),
+    # so a short and a long name sit identically. The active slot's halo
+    # is one photo of fav_glow_w x bar_h design px, inset 2 in the zone.
+    set L(bar_fav_x) {396 586 776}
+    set L(bar_fav_w) 180
+    set L(bar_fav_text_w) 160
+    set L(bar_fav_glow_w) 176
+    set L(bar_fav_glow_soft) 12     ;# halo falloff, design px each side
     # The settings header's "Clear favorite profiles" link: right-aligned
     # to the right column's edge (1170), its zone 56..100 ends above the
     # first row at 110.
@@ -2122,20 +2115,160 @@ proc ::lumen::fav_state { n } {
     return "set"
 }
 
-# Three stacked fixed-ink items per slot share the digit's spot; the
-# digit moves between them (the taskbar dot pattern -- a canvas item's
-# -fill is fixed at creation).
+# 0.57.0: the slots show NAMES. Three stacked fixed-ink items per slot
+# share the slot's centre; the text moves between them (the taskbar dot
+# pattern -- a canvas item's -fill is fixed at creation). Empty reads as
+# a dim "+" (the data mono, the steppers' own plus), set as the profile
+# title in the icons' grey, active as the title in crema over the halo.
 proc ::lumen::data::fav_empty { n } {
-    if { [::lumen::fav_state $n] eq "empty" } { return $n }
+    if { [::lumen::fav_state $n] eq "empty" } { return "+" }
     return ""
 }
 proc ::lumen::data::fav_set { n } {
-    if { [::lumen::fav_state $n] eq "set" } { return $n }
+    if { [::lumen::fav_state $n] eq "set" } { return [::lumen::fav_title $n] }
     return ""
 }
 proc ::lumen::data::fav_active { n } {
-    if { [::lumen::fav_state $n] eq "active" } { return $n }
+    set on [expr {[::lumen::fav_state $n] eq "active"}]
+    ::lumen::_fav_glow_sync $n $on
+    if { $on } { return [::lumen::fav_title $n] }
     return ""
+}
+
+# The slot's title (the file name when the title is blank), fitted to
+# the slot's inner width: measured in the caption font -- physical px,
+# like the font itself -- and cut with an ellipsis until it fits, so a
+# long name never wraps or runs into the next slot. Memoised per title:
+# the 200 ms tick measures nothing once a name has been seen. Off-tablet,
+# or if measuring throws, a 20-character cut stands in.
+namespace eval ::lumen { variable fav_fit [dict create] }
+proc ::lumen::fav_title { n } {
+    variable fav_fit
+    set v [fav_slot $n]
+    if { $v eq "" } { return "" }
+    set title [string trim [lindex $v 1]]
+    if { $title eq "" } { set title [lindex $v 0] }
+    if { [dict exists $fav_fit $title] } { return [dict get $fav_fit $title] }
+    set out [_fit_caption $title $::lumen::L(bar_fav_text_w)]
+    if { [dict size $fav_fit] > 64 } { set fav_fit [dict create] }
+    dict set fav_fit $title $out
+    return $out
+}
+
+# `s` cut to fit `design_w` design px in the caption font, "..." on the
+# cut. Any measuring trouble falls back to a character cap.
+proc ::lumen::_fit_caption { s design_w } {
+    variable L
+    set max_px ""
+    catch {
+        lassign [::lumen::custom::screen] W H
+        if { $W > 0 } { set max_px [expr {int($design_w * $W / 1340.0)}] }
+    }
+    if { $max_px eq "" || [catch { set w [font measure $L(font_caption) $s] }] \
+             || ![string is integer -strict $w] } {
+        return [::lumen::data::_ellipsis $s 20]
+    }
+    if { $w <= $max_px } { return $s }
+    set n [string length $s]
+    while { $n > 1 } {
+        incr n -1
+        set t "[string trimright [string range $s 0 [expr {$n - 1}]]]..."
+        if { [catch { set w [font measure $L(font_caption) $t] }] || ![string is integer -strict $w] } {
+            return [::lumen::data::_ellipsis $s 20]
+        }
+        if { $w <= $max_px } { return $t }
+    }
+    return "..."
+}
+
+# The halo behind the ACTIVE slot (0.57.0). One photo, painted by
+# fav_glow_photo from the theme's crema, is shared by the three slot
+# items; a 1x1 blank stands in the other two. The item is never hidden
+# or shown -- dui re-shows every item on page load -- the IMAGE moves,
+# as the theme's background swap does. Called from the fav_active
+# accessor on the 200 ms tick, so it follows a profile change from
+# anywhere (the stock chooser, Drink Menu, a slot tap) within a tick;
+# it touches the canvas only when a slot's state changes.
+namespace eval ::lumen {
+    variable fav_glow_img ""
+    variable fav_glow_blank ""
+    variable fav_glow_state [dict create]
+}
+proc ::lumen::_fav_glow_sync { n on } {
+    variable fav_glow_img
+    variable fav_glow_blank
+    variable fav_glow_state
+    if { [dict exists $fav_glow_state $n] && [dict get $fav_glow_state $n] == $on } { return }
+    dict set fav_glow_state $n $on
+    if { $fav_glow_img eq "" || $fav_glow_blank eq "" } { return }
+    if { [catch {
+        [dui canvas] itemconfigure lumen_favglow_$n -image [expr {$on ? $fav_glow_img : $fav_glow_blank}]
+    } err] } {
+        msg -ERROR "Lumen: favorite $n halo not switched: $err"
+    }
+}
+
+# 0.57.3 instant tap answer. _fav_light_now lights slot n (and only n)
+# and paints it straight away -- the press_flash precedent's `update
+# idletasks`, no event processing. _fav_refresh_now runs dui's own
+# on-screen variable pass for the page (which cancels and re-arms its own
+# 200 ms timer, as every page load does), so the slot inks and the halo
+# re-derive from the profile actually loaded, then paints.
+proc ::lumen::_fav_light_now { n } {
+    foreach k {1 2 3} { _fav_glow_sync $k [expr {$k == $n}] }
+    update idletasks
+}
+proc ::lumen::_fav_refresh_now {} {
+    if { [catch { dui page update_onscreen_variables } err] } {
+        msg -ERROR "Lumen: favorite slots not refreshed: $err"
+        return
+    }
+    update idletasks
+}
+
+# The halo photo for the CURRENT palette: bar_fav_glow_w x bar_h design
+# px at the screen's scale, crema, 0.62 inside the pill. Throws without
+# Tk or a screen size; the build then draws no halo and the active slot
+# is told apart by its crema text alone.
+proc ::lumen::fav_glow_photo {} {
+    variable C
+    variable L
+    lassign [::lumen::custom::screen] W H
+    if { $W <= 0 } { error "no screen size" }
+    set sx [expr {$W / 1340.0}] ; set sy [expr {$H / 800.0}]
+    if { [scan $C(crema) "#%2x%2x%2x" r g b] != 3 } { error "crema '$C(crema)' is not #rrggbb" }
+    # 0.57.1 (owner: "very dark", then "lighter still"; 0.57.2 "a bit
+    # darker"): quieter than the 0.62 it launched with -- 0.36 inside --
+    # and on LIGHT glass, where the crema is a dark amber that painted a
+    # brown pill, the tint is the crema lifted half way toward white, so
+    # the halo reads as a pale glow behind the name. Light is read off
+    # the ground's luminance, so the custom theme's two halves sort
+    # themselves. Tuned on the tablet: 0.62 brown, 0.30/60% too faint.
+    set a 0.36
+    if { [scan $C(bg) "#%2x%2x%2x" gr gg gb] == 3 \
+             && (0.2126 * $gr + 0.7152 * $gg + 0.0722 * $gb) / 255.0 > 0.45 } {
+        foreach v {r g b} { set $v [expr {int(round([set $v] + (255 - [set $v]) * 0.5))}] }
+    }
+    set png [::lumen::custom::halo_png [list $r $g $b] $a \
+        [expr {int(round($L(bar_fav_glow_w) * $sx))}] [expr {int(round($L(bar_h) * $sy))}] \
+        [expr {int(round($L(bar_fav_glow_soft) * $sy))}]]
+    return [image create photo -data $png]
+}
+
+# A live theme change: paint the halo again from the new crema, hand it
+# to every lit slot, free the old photo. (apply_theme calls this after
+# the photo panels; nothing to do while no halo exists.)
+proc ::lumen::_redraw_fav_glow {} {
+    variable fav_glow_img
+    variable fav_glow_state
+    if { $fav_glow_img eq "" } { return }
+    set old $fav_glow_img
+    set fav_glow_img [fav_glow_photo]
+    set can [dui canvas]
+    dict for {n on} $fav_glow_state {
+        if { $on } { $can itemconfigure lumen_favglow_$n -image $fav_glow_img }
+    }
+    image delete $old
 }
 
 # The settings header link, blank while no slot is set.
@@ -3334,6 +3467,8 @@ proc ::lumen::act::fav_tap { n } {
             return
         }
         msg -NOTICE "Lumen: favorite $n set to '$fn'"
+        # 0.57.3: the slot's name and halo appear on the tap, not a tick later.
+        ::lumen::_fav_refresh_now
         return
     }
     lassign $slot fn title
@@ -3342,11 +3477,18 @@ proc ::lumen::act::fav_tap { n } {
         msg -NOTICE "Lumen: machine busy ($busy), favorite $n not loaded"
         return
     }
+    # 0.57.3: the halo moves to this slot and is PAINTED before the
+    # profile loads, so the tap answers at once; the refresh after the
+    # load brings the name inks along -- or, if the load failed, puts the
+    # halo back on whatever profile is really loaded.
+    ::lumen::_fav_light_now $n
     set r ""
     if { [catch { set r [::select_profile $fn] } err] } {
         msg -ERROR "Lumen: select_profile '$fn' failed: $err"
+        ::lumen::_fav_refresh_now
         return
     }
+    ::lumen::_fav_refresh_now
     if { $r eq "-1" } {
         msg -ERROR "Lumen: favorite $n profile file '$fn' is missing"
         return
@@ -4854,6 +4996,38 @@ proc ::lumen::custom::bloom_png { P rx ry } {
     return [png_encode $w $h $rows]
 }
 
+# 0.57.0: the halo behind the active favorite slot -- a pill (radius
+# h/2) of the accent whose alpha falls from a0 inside its edge to 0 over
+# `soft` px outside it, (1 - d/soft)^2: the shape the mockup's blurred
+# pill had. w x h is the PNG in physical px; the pill is inset `soft` on
+# every side so the falloff fits.
+proc ::lumen::custom::halo_png { rgb a0 w h soft } {
+    lassign $rgb r g b
+    set r [expr {int($r)}] ; set g [expr {int($g)}] ; set b [expr {int($b)}]
+    set pw [expr {$w - 2 * $soft}] ; set ph [expr {$h - 2 * $soft}]
+    if { $pw < 2 || $ph < 2 || $soft < 1 } { error "halo too small ($w x $h, soft $soft)" }
+    set rr [expr {$ph / 2.0}]
+    set hw [expr {$pw / 2.0}] ; set hh [expr {$ph / 2.0}]
+    set cx [expr {$w / 2.0}] ; set cy [expr {$h / 2.0}]
+    set clear [binary format cccc 0 0 0 0]
+    set rows {}
+    for { set y 0 } { $y < $h } { incr y } {
+        set row ""
+        set qy [expr {abs($y + 0.5 - $cy) - ($hh - $rr)}]
+        for { set x 0 } { $x < $w } { incr x } {
+            set qx [expr {abs($x + 0.5 - $cx) - ($hw - $rr)}]
+            # Signed distance to the rounded rect (negative inside).
+            set ox [expr {max($qx, 0.0)}] ; set oy [expr {max($qy, 0.0)}]
+            set d [expr {sqrt($ox * $ox + $oy * $oy) + min(max($qx, $qy), 0.0) - $rr}]
+            if { $d >= $soft } { append row $clear ; continue }
+            set t [expr {$d <= 0.0 ? 1.0 : 1.0 - $d / $soft}]
+            append row [binary format cccc $r $g $b [expr {int(round(255.0 * $a0 * $t * $t))}]]
+        }
+        lappend rows $row
+    }
+    return [png_encode $w $h $rows]
+}
+
 # Pastes src onto img at (tx, ty) with integer zoom z, cropping the source
 # so nothing lands outside img: a Tk photo `copy -to` refuses negative
 # coordinates and GROWS the destination past its right and bottom edges.
@@ -5105,6 +5279,9 @@ proc ::lumen::apply_theme { mode } {
     }
     if { [catch { _redraw_photo_panels } err] } {
         msg -ERROR "Lumen: could not repaint the photo panels: $err" ; incr problems
+    }
+    if { [catch { _redraw_fav_glow } err] } {
+        msg -ERROR "Lumen: could not repaint the favorite halo: $err" ; incr problems
     }
     if { [catch { _retheme_charts } err] } {
         msg -ERROR "Lumen: could not restyle the charts: $err" ; incr problems
@@ -5383,12 +5560,14 @@ proc ::lumen::build_home {} {
     #  Taskbar (0.31.0 geometry + time; 0.32.0 tappables + dot)
     #
     #  Sits naked on the baked gradient -- no glass pill, so the bar
-    #  bakes nothing. Time/day pinned left; five tappables grouped right
-    #  in escalating consequence toward the corner: Drink Menu (mug,
-    #  0.40.0), maintenance (wrench, with the amber/red state dot),
-    #  Lumen settings (gear), the Decent app (drawn DE1 side view,
-    #  0.42.0 -- 0.41.0's sliders glyph was ambiguous next to the gear
-    #  and its DECENT APP row replacement cost two taps), Sleep (moon).
+    #  bakes nothing. 0.57.0 (owner's mockup): Sleep (moon) ALONE at
+    #  the far left, where a stray tap finds nothing else; the clock on
+    #  two rows (time over date) with the water reading beside it; the
+    #  three favorite slots as NAMES across the middle; the other four
+    #  tappables closed up at the right edge in escalating consequence
+    #  toward the corner: Drink Menu (mug, 0.40.0), maintenance (wrench,
+    #  with the amber/red state dot), Lumen settings (gear), the Decent
+    #  app (drawn DE1 side view, 0.42.0). The 0.34.0 wordmark is gone.
     #
     #  Icon glyphs come from the app's own FA6 Pro font (F(symbol), the
     #  scale_bt precedent), as [format %c ...] escapes -- never literal
@@ -5396,23 +5575,20 @@ proc ::lumen::build_home {} {
     #  letter labels stand in so nothing renders as a tofu box.
     ####################################################################
     set bar_mid [expr {$L(bar_y) + $L(bar_h) / 2.0}]
-    var $p $L(bar_time_x) $bar_mid {[::lumen::data::bar_time]} \
+    var $p $L(bar_time_x) $L(bar_time_y) {[::lumen::data::bar_time]} \
         -font $L(font_data) -fill $C(ink) -anchor w -justify left
-    var $p $L(bar_day_x) $bar_mid {[::lumen::data::bar_day]} \
+    var $p $L(bar_day_x) $L(bar_day_y) {[::lumen::data::bar_day]} \
         -font $L(font_caption) -fill $C(ink_3) -anchor w -justify left
-
-    # 0.34.0: the wordmark, dead centre -- passive, muted, not a tap.
-    txt $p $L(bar_title_x) $bar_mid "Lumen" \
-        -font $L(font_button) -fill $C(ink_3) -anchor center -justify center
 
     # 0.34.0: the water readout, moved here from the last-shot card's
     # corner -- machine status belongs on the status bar. Same accessor,
     # same blue, blank when the machine has not reported recently.
-    var $p $L(bar_water_x) $bar_mid {[::lumen::data::water_ml]} \
-        -font $L(font_data) -fill $C(c_flow) -anchor e -justify right
+    # 0.57.0: on the time's row, anchored w after the widest time.
+    var $p $L(bar_water_x) $L(bar_time_y) {[::lumen::data::water_ml]} \
+        -font $L(font_data) -fill $C(c_flow) -anchor w -justify left
     # 0.43.1: the same value in amber when the tank runs low.
-    var $p $L(bar_water_x) $bar_mid {[::lumen::data::water_ml_low]} \
-        -font $L(font_data) -fill $C(warn) -anchor e -justify right
+    var $p $L(bar_water_x) $L(bar_time_y) {[::lumen::data::water_ml_low]} \
+        -font $L(font_data) -fill $C(warn) -anchor w -justify left
 
     set sym_ok [_font_family_ok symbol]
     set bar_font [expr {$sym_ok ? $L(font_bt) : $L(font_label)}]
@@ -5428,21 +5604,45 @@ proc ::lumen::build_home {} {
         tap $p $ix $L(bar_y) $L(bar_icon_w) $L(bar_h) $action $label
     }
 
-    # 0.53.0: the three favorite profile slots, digits in the data mono
-    # (the clock's face). Three stacked fixed-ink items per slot -- dim
-    # empty / plain set / accent active -- and one zone each; a tap on
-    # an empty slot stores the loaded profile, on a set slot loads it.
-    foreach fx $L(bar_fav_x) n {1 2 3} {
-        set fcx [expr {$fx + $L(bar_icon_w) / 2.0}]
-        foreach {code col} [list \
-            "\[::lumen::data::fav_empty $n\]"  $C(ink_3) \
-            "\[::lumen::data::fav_set $n\]"    $C(ink_2) \
-            "\[::lumen::data::fav_active $n\]" $C(crema)] {
-            var $p $fcx $bar_mid $code \
-                -font $L(font_data) -fill $col -anchor center -justify center
+    # 0.53.0: the three favorite profile slots; 0.57.0: NAMES, not
+    # digits. Per slot, bottom to top: the halo photo (blank until the
+    # slot's profile is the loaded one, see _fav_glow_sync), then three
+    # stacked fixed-ink items -- a dim mono "+" when empty, the title in
+    # the icons' grey when set, the title in crema when active -- all
+    # centred on the slot, and one zone; a tap on an empty slot stores
+    # the loaded profile, on a set slot loads it. The halo is painted
+    # once here from the palette (apply_theme repaints it); without Tk
+    # or a screen size the slots go without it.
+    set glow_ok 0
+    if { [info commands image] ne "" } {
+        if { [catch {
+            set ::lumen::fav_glow_img [fav_glow_photo]
+            set ::lumen::fav_glow_blank [image create photo -width 1 -height 1]
+            set glow_ok 1
+        } err] } {
+            msg -NOTICE "Lumen: no halo behind the active favorite slot: $err"
         }
-        tap $p $fx $L(bar_y) $L(bar_icon_w) $L(bar_h) \
-            [list ::lumen::act::fav_tap $n] "Favorite $n"
+    }
+    set glow_dx [expr {($L(bar_fav_w) - $L(bar_fav_glow_w)) / 2.0}]
+    foreach fx $L(bar_fav_x) n {1 2 3} {
+        set fcx [expr {$fx + $L(bar_fav_w) / 2.0}]
+        if { $glow_ok } {
+            uplevel #0 [list dui add canvas_item image $p \
+                [X [expr {$fx + $glow_dx}]] [Y $L(bar_y)] \
+                -image $::lumen::fav_glow_blank -anchor nw \
+                -tags [_tags "" "" [list lumen_favglow_$n]]]
+        }
+        foreach {code col font} [list \
+            "\[::lumen::data::fav_empty $n\]"  $C(ink_3) $L(font_data) \
+            "\[::lumen::data::fav_set $n\]"    $C(ink_2) $L(font_caption) \
+            "\[::lumen::data::fav_active $n\]" $C(crema) $L(font_caption)] {
+            var $p $fcx $bar_mid $code \
+                -font $font -fill $col -anchor center -justify center
+        }
+        # 0.57.3: no press flash -- the halo itself is the tap's answer
+        # (style none still clears any previous flash).
+        tap $p $fx $L(bar_y) $L(bar_fav_w) $L(bar_h) \
+            [list ::lumen::act::fav_tap $n] "Favorite $n" none
     }
 
     # 0.42.0: the Decent app slot -- a drawn icon, not a glyph, so it

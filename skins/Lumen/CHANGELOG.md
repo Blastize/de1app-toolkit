@@ -4,6 +4,56 @@ Entries follow a documentation cap (about 15 lines each; longer only where a
 version added or changed a write capability). The original long-form entries
 survive unchanged in the archive snapshot of each version.
 
+## 0.57.3 - favorite slots answer the tap with the halo, no press flash (2026-09-22)
+
+Base: 0.57.2. Owner: drop the square tap highlight on the three slots and
+make the glow appear the instant the slot is tapped. The slot zones use
+press-flash style `none`. A set-slot tap lights and paints the halo on that
+slot BEFORE `select_profile` runs, then runs dui's own on-screen variable
+pass (it re-arms its own 200 ms timer) so the name inks follow at once; a
+failed load re-derives the halo from the profile really loaded, and a busy
+machine still refuses before anything lights. Storing an empty slot lights
+it on the same tap. Owner also confirmed 0.56.0 Auto flipped the glass by
+itself on the tablet.
+**Safety status: no write path changed; the tap loads the same profile
+through the same `select_profile` call as 0.53.0.**
+
+## 0.57.2 - polish: the favorite halo tuned on the tablet (2026-09-22)
+
+Base: 0.57.1. Owner: "a bit darker". The halo sits at 0.36 inside (0.62 was
+brown, 0.30 too faint) and on light glass its tint is the crema lifted half
+way toward white (was 60%).
+**Safety status: display only, no behaviour or write change.**
+
+## 0.57.1 - polish: a lighter, quieter favorite halo (2026-09-22)
+
+Base: 0.57.0. Owner, on the tablet (light glass): the halo was "very dark" --
+the light crema is a dark amber, so at 0.62 it painted a brown pill. The halo
+now sits at 0.30 (a 0.40 preview was still too much for the owner), and on
+light glass (ground luminance > 0.45, so the custom theme's halves sort
+themselves) its tint is the crema lifted 60% toward white.
+**Safety status: display only, no behaviour or write change.**
+
+## 0.57.0 - taskbar re-layout: sleep far left, profile names in the slots, halo on the active one (pass 08) - verify.sh PASS 2026-09-22 18:30 on run 1 (home dump: three 180-wide slots, the loaded profile's slot carries the 176x48 halo photo, the other two the 1x1 blank; logcat clean; light glass eyeballed, dark on the painter render only -- owner checklist open)
+
+Base: 0.56.1. Owner's mockup: the moon (Sleep) moves ALONE to the far left
+so a stray tap near the corner no longer sleeps the machine; the date sits
+under the time with the water reading beside it; mug / wrench / gear / DE1
+close up to the right edge; the "Lumen" wordmark is gone. The three
+favorite slots widen to 180 and show their PROFILE NAMES, centred and
+ellipsis-cut to the slot (measured in the caption font, memoised): a dim
+mono `+` when empty, the icons' grey when set, crema when active -- over a
+soft crema HALO, one runtime alpha PNG (`custom::halo_png`, the 0.49.0
+encoder) swapped into the slot's image item by the 200 ms accessor, so it
+follows a profile change from anywhere within a tick; `apply_theme`
+repaints it from the new crema.
+**Safety status: no write path changed. `lumen_fav_profiles` is written
+exactly as in 0.53.0 (empty-slot tap, settings Clear); a set-slot tap still
+calls the core's `select_profile`. No file, database or history is touched.**
+
+Files: skin.tcl, tools/check_skin.tcl (bar geometry rewritten; 0.57.0 section
+rebuilds the home page under the photo stub), docs; passes/Lumen/pass_08.*.
+
 ## 0.56.1 - polish: the grind and last-shot tile footers share one row (2026-09-22) - TABLET-VERIFIED 16:45 (headless harness PASSED, home screenshot: both footers at the same row, logcat clean)
 
 Base: 0.56.0. Owner spotted on the home page that "Fair - 6 shots / Curve /
