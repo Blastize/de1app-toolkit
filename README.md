@@ -48,7 +48,7 @@ Then the skin: **Settings > App > Skin**, pick **Lumen** from the list, and rest
 - **Grind Advisor:** open its settings, set your **target shot time** and your grinder's **minimum and maximum**. It starts recommending after the first espresso of a bag and gets sharper with every shot.
 - **Bean Scanner:** it needs an API key of your own (Anthropic or OpenAI, pay as you go; one scan costs a fraction of a cent). Either type it in its settings, or put a file named `api_key_anthropic.txt` or `api_key_openai.txt` containing the key into `de1plus/plugins/BeanScanner/`.
 - **Maintenance Tracker:** tap **Record** on each tracker the next time you actually do that task; counters run from there. Backflush and descale record themselves after a real clean or descale cycle.
-- **Lumen:** the moon/sun button switches dark and light; **Custom** in Lumen's settings opens the colour picker.
+- **Lumen:** the gear on Lumen's taskbar opens its settings; the THEME row's **Change** button opens the colour picker with Lumen dark, Lumen light, four more presets, your own backdrop and accent colours, and an **Auto** base that puts your colours on light glass by day and dark glass by night. The moon on the taskbar is Sleep.
 - **Drink Menu** and **Shot History Editor** need nothing.
 
 ## Safety, in one paragraph
