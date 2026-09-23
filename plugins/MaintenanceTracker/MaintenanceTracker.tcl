@@ -1361,7 +1361,7 @@ namespace eval ::plugins::MaintenanceTracker {
             MaintenanceTracker_confirm {mt_cancel bar_confirm}
             MaintenanceTracker_confirm_burr {minus100 minus10 plus10 plus100 mt_cancel bar_confirm}
             MaintenanceTracker_confirm_bottle {minus1000 minus100 plus100 plus1000 mt_cancel bar_confirm}
-            MaintenanceTracker_detail {btn_edit bar_left mt_hide mt_link mt_unlink mt_load}
+            MaintenanceTracker_detail {btn_edit bar_left mt_hide mt_link mt_linkds mt_linkcl mt_unlink mt_load}
             MaintenanceTracker_add {btn_auto unit_toggle step0 step1 step2 step3
                                     hid0 hid1 hid2 hid3 hid4 hid5 mt_cancel mt_save}
             MaintenanceTracker_edit {auto_toggle step0 step1 step2 step3 mt_cancel mt_save}
@@ -2691,6 +2691,8 @@ namespace eval ::plugins::MaintenanceTracker {
         variable settings
         if {![info exists settings(item_$id)]} { return "" }
         set d $settings(item_$id)
+        # v0.23.0: a Descale / Clean link replaces any profile link.
+        if {[dict exists $d link_kind] && [dict get $d link_kind] in {descale clean}} { return "" }
         if {![dict exists $d profile_fn]} { return "" }
         set fn [string trim [dict get $d profile_fn]]
         if {$fn eq ""} { return "" }
@@ -2755,6 +2757,7 @@ namespace eval ::plugins::MaintenanceTracker {
         set d $settings(item_$id)
         dict set d profile_fn [string range $fn 0 127]
         dict set d profile_title [string range $title 0 79]
+        dict unset d link_kind
         set settings(item_$id) $d
         save_settings
         catch { msg "MaintenanceTracker: linked profile '$fn' to '$id'" }
@@ -2762,18 +2765,186 @@ namespace eval ::plugins::MaintenanceTracker {
         return 1
     }
 
+    # v0.23.0: removes WHATEVER the tracker links (profile, Descale or
+    # Clean) -- the name is kept for the v0.22.0 call sites.
     proc unlink_profile {id} {
         variable settings
         if {![info exists settings(item_$id)]} { return 0 }
         set d $settings(item_$id)
-        if {![dict exists $d profile_fn]} { return 0 }
+        if {![dict exists $d profile_fn] && ![dict exists $d link_kind]} { return 0 }
         dict unset d profile_fn
         dict unset d profile_title
+        dict unset d link_kind
         set settings(item_$id) $d
+        _disarm_clean
         save_settings
-        catch { msg "MaintenanceTracker: unlinked the profile from '$id'" }
-        _set_prof_note [translate "Profile unlinked."]
+        catch { msg "MaintenanceTracker: unlinked '$id'" }
+        _set_prof_note [translate "Unlinked."]
         return 1
+    }
+
+    # ------------------------------------------------------------------
+    #  v0.23.0 (Pass 27): a tracker may link the app's own DESCALE or
+    #  CLEAN action (Settings > Machine > Maintenance) instead of a
+    #  profile. Stored as `link_kind` descale | clean in the item dict.
+    #
+    #  Descale opens the app's "Prepare to descale" page through
+    #  `show_settings descale_prepare` -- the entry the app's own descale
+    #  warning uses (skins/default/standard_includes.tcl:32): it takes a
+    #  fresh settings backup first, so the stock page's Cancel (-> the
+    #  Machine tab) and that tab's Cancel restore the CURRENT settings,
+    #  not a stale backup. The user still presses the stock "Descale
+    #  now"; MT never calls start_decaling.
+    #
+    #  Clean has no stock confirmation page (the Machine tab's Clean
+    #  button calls start_cleaning directly), so MT asks first: the
+    #  first tap arms for 8 s, the second calls the core's
+    #  start_cleaning. Connected + not busy, or it refuses.
+    #
+    #  Both leave MT's own dialog stack one close_dialog per level first
+    #  (the _return_to_page loop), so the core's page load never has to
+    #  unwind stacked dialogs (page_stack truncation bug).
+    # ------------------------------------------------------------------
+
+    variable clean_armed 0
+    variable clean_arm_id ""
+
+    # "" | {profile <fn> <title>} | descale | clean
+    proc _item_link {id} {
+        variable settings
+        if {![info exists settings(item_$id)]} { return "" }
+        set d $settings(item_$id)
+        if {[dict exists $d link_kind]} {
+            set k [dict get $d link_kind]
+            if {$k in {descale clean}} { return $k }
+        }
+        set prof [_item_profile $id]
+        if {$prof ne ""} { return [list profile {*}$prof] }
+        return ""
+    }
+
+    proc link_action {id kind} {
+        variable settings
+        if {$kind ni {descale clean}} { return 0 }
+        if {![info exists settings(item_$id)]} { return 0 }
+        set d $settings(item_$id)
+        dict unset d profile_fn
+        dict unset d profile_title
+        dict set d link_kind $kind
+        set settings(item_$id) $d
+        _disarm_clean
+        save_settings
+        catch { msg "MaintenanceTracker: linked the app's $kind action to '$id'" }
+        if {$kind eq "descale"} {
+            _set_prof_note [translate "Linked: the app's Descale."]
+        } else {
+            _set_prof_note [translate "Linked: the app's Clean cycle."]
+        }
+        return 1
+    }
+
+    proc _disarm_clean {} {
+        variable clean_armed
+        variable clean_arm_id
+        set clean_armed 0
+        if {$clean_arm_id ne ""} {
+            after cancel $clean_arm_id
+            set clean_arm_id ""
+        }
+    }
+
+    # The 8 s timeout: disarm, and repaint the Detail page if it shows.
+    proc _clean_arm_expired {} {
+        variable clean_arm_id
+        set clean_arm_id ""
+        _disarm_clean
+        if {[_page_is_current MaintenanceTracker_detail]} {
+            if {[catch { ::dui::pages::MaintenanceTracker_detail::refresh } err]} {
+                catch { msg "MaintenanceTracker: detail refresh failed: $err" }
+            }
+        }
+    }
+
+    # Leave this plugin's own dialog stack, one close_dialog per level
+    # (the _return_to_page loop): stops at the first page that is not
+    # ours. Failures are logged.
+    proc _leave_own_dialogs {} {
+        set prev ""
+        for {set i 0} {$i < 10} {incr i} {
+            set cur ""
+            catch { set cur [dui page current] }
+            if {![string match "MaintenanceTracker_*" $cur]} { return }
+            if {$cur eq $prev} { break }
+            set prev $cur
+            if {[catch { dui page close_dialog } err]} {
+                catch { msg "MaintenanceTracker: close_dialog failed leaving for a machine page: $err" }
+                break
+            }
+        }
+    }
+
+    # Public: open the app's "Prepare to descale" page. Returns 1 when
+    # the page was asked for.
+    proc open_linked_descale {id} {
+        if {[_item_link $id] ne "descale"} { return 0 }
+        set busy [_machine_busy]
+        if {$busy ne ""} {
+            _set_prof_note "[translate {Machine busy}] ($busy). [translate {Wait until it is idle.}]"
+            return 0
+        }
+        if {[llength [info commands ::show_settings]] == 0} {
+            catch { msg "MaintenanceTracker: the app's show_settings is missing, cannot open descale_prepare" }
+            _set_prof_note [translate "The app's descale page is not available."]
+            return 0
+        }
+        catch { msg "MaintenanceTracker: opening the app's descale page for '$id'" }
+        _leave_own_dialogs
+        if {[catch { ::show_settings descale_prepare } err]} {
+            catch { msg "MaintenanceTracker: ERROR opening descale_prepare: $err" }
+            return 0
+        }
+        return 1
+    }
+
+    # Public: the Clean action's tap. First tap arms (returns "armed"),
+    # the second starts the machine's clean cycle through the core's
+    # start_cleaning (returns "started"); refusals return "refused".
+    proc clean_tap {id} {
+        variable clean_armed
+        variable clean_arm_id
+        if {[_item_link $id] ne "clean"} { return "refused" }
+        set handle 0
+        catch { set handle $::de1(device_handle) }
+        if {$handle eq "0" || $handle eq ""} {
+            _disarm_clean
+            _set_prof_note [translate "The machine is not connected."]
+            return "refused"
+        }
+        set busy [_machine_busy]
+        if {$busy ne ""} {
+            _disarm_clean
+            _set_prof_note "[translate {Machine busy}] ($busy). [translate {Wait until it is idle.}]"
+            return "refused"
+        }
+        if {!$clean_armed} {
+            set clean_armed 1
+            if {$clean_arm_id ne ""} { after cancel $clean_arm_id }
+            set clean_arm_id [after 8000 ::plugins::MaintenanceTracker::_clean_arm_expired]
+            return "armed"
+        }
+        _disarm_clean
+        if {[llength [info commands ::start_cleaning]] == 0} {
+            catch { msg "MaintenanceTracker: the app's start_cleaning is missing" }
+            _set_prof_note [translate "The app's clean cycle is not available."]
+            return "refused"
+        }
+        catch { msg "MaintenanceTracker: starting the app's clean cycle for '$id'" }
+        _leave_own_dialogs
+        if {[catch { ::start_cleaning } err]} {
+            catch { msg "MaintenanceTracker: ERROR starting the clean cycle: $err" }
+            return "refused"
+        }
+        return "started"
     }
 
     # Public: load the tracker's linked profile into the app (the
@@ -3334,6 +3505,13 @@ namespace eval ::dui::pages::MaintenanceTracker_settings {
         set ::plugins::MaintenanceTracker::detail_mode view
         set ::plugins::MaintenanceTracker::edit_delete_armed 0
         ::plugins::MaintenanceTracker::_capture_return_page $page_to_hide
+        # v0.23.1: dui runs show hooks "after idle" (dui.tcl ~6705) but
+        # sets the current page at once (~6487). Open Descale / Start
+        # Clean close this page on their way out in the SAME tap, so its
+        # queued show ran on top of the app's page and the Prev/Next
+        # -state calls (normal/disabled = visible) painted this page's
+        # toolbar over "Prepare to descale". A stale show only resets.
+        if {![::plugins::MaintenanceTracker::_page_is_current MaintenanceTracker_settings]} { return }
         if {[catch { refresh } err]} {
             catch { msg "MaintenanceTracker: settings refresh failed: $err" }
         }
@@ -3669,9 +3847,19 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         set load_x0 [expr {$rx - $L(btn_w_wide)}]
         set unlink_x1 [expr {$load_x0 - $L(md)}]
         set unlink_x0 [expr {$unlink_x1 - $L(btn_w_std)}]
-        set link_x0 [expr {$rx - $L(btn_w_xwide)}]
+        # v0.23.0: unlinked -> three link buttons, right-aligned, all
+        # btn_w_std: [Link profile] md [Link Descale] md [Link Clean].
+        # The page is 1280 ref px wide (right_x 1234), so they start at
+        # 602 -- 112 past value_x (490), where "none" ends near 545.
+        # (240-wide buttons started at 522 and ran over it: caught by
+        # the offline geometry check before the tablet.)
+        set linkcl_x0 [expr {$rx - $L(btn_w_std)}]
+        set linkds_x1 [expr {$linkcl_x0 - $L(md)}]
+        set linkds_x0 [expr {$linkds_x1 - $L(btn_w_std)}]
+        set link_x1 [expr {$linkds_x0 - $L(md)}]
+        set link_x0 [expr {$link_x1 - $L(btn_w_std)}]
         dui add dtext $page $lx $prof_mid -tags prof_label \
-            -text [translate "Profile:"] \
+            -text [translate "Linked to:"] \
             -font $L(font_body) -width $L(label_col_w) -fill $L(text_body) \
             -anchor w -justify left
         dui add dtext $page $L(value_x) $prof_mid -tags prof_value -text "" \
@@ -3685,9 +3873,17 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             -tags mt_load -label [translate "Load profile"] \
             -command ::dui::pages::MaintenanceTracker_detail::load_click \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
-        dui add dbutton $page $link_x0 $prof_y0 $rx $prof_y1 \
-            -tags mt_link -label [translate "Link current profile"] \
+        dui add dbutton $page $link_x0 $prof_y0 $link_x1 $prof_y1 \
+            -tags mt_link -label [translate "Link profile"] \
             -command ::dui::pages::MaintenanceTracker_detail::link_click \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
+        dui add dbutton $page $linkds_x0 $prof_y0 $linkds_x1 $prof_y1 \
+            -tags mt_linkds -label [translate "Link Descale"] \
+            -command ::dui::pages::MaintenanceTracker_detail::link_descale_click \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
+        dui add dbutton $page $linkcl_x0 $prof_y0 $rx $prof_y1 \
+            -tags mt_linkcl -label [translate "Link Clean"] \
+            -command ::dui::pages::MaintenanceTracker_detail::link_clean_click \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
 
         # Confirm-mode message (empty in view mode), above the bottom bar.
@@ -3739,7 +3935,7 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             catch { dui item hide $page bar_undo* -initial 1 }
             catch { dui item hide $page mt_hide* -initial 1 }
             catch { dui item hide $page btn_edit* -initial 1 }
-            foreach t {mt_link* mt_unlink* mt_load*} {
+            foreach t {mt_link* mt_linkds* mt_linkcl* mt_unlink* mt_load*} {
                 catch { dui item hide $page $t -initial 1 }
             }
             catch { dui item config $page prof_value -text "" }
@@ -3851,7 +4047,9 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             catch { dui item hide $page mt_hide* -initial 1 }
             catch { dui item hide $page btn_edit* -initial 1 }
             # v0.22.0: the profile row's controls step aside too.
-            foreach t {mt_link* mt_unlink* mt_load*} {
+            # v0.23.0: and a mode switch disarms an armed Clean.
+            ::plugins::MaintenanceTracker::_disarm_clean
+            foreach t {mt_link* mt_linkds* mt_linkcl* mt_unlink* mt_load*} {
                 catch { dui item hide $page $t -initial 1 }
             }
             catch { dui item config $page prof_value -text "" }
@@ -3870,35 +4068,60 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             catch { dui item show $page mt_hide* -initial 1 }
             set hidden_n 0
             catch { set hidden_n [llength $::plugins::MaintenanceTracker::settings(hidden_ids)] }
-            if {$hidden_n >= $::plugins::MaintenanceTracker::hide_max \
-                    && $id ni $::plugins::MaintenanceTracker::settings(hidden_ids)} {
-                catch { dui item config $page mt_hide* -state disabled }
+            set hide_capped [expr {$hidden_n >= $::plugins::MaintenanceTracker::hide_max \
+                    && $id ni $::plugins::MaintenanceTracker::settings(hidden_ids)}]
+            catch { dui item config $page mt_hide* -state [expr {$hide_capped ? "disabled" : "normal"}] }
+            set link [::plugins::MaintenanceTracker::_item_link $id]
+            set kind [lindex $link 0]
+            set armed [expr {$kind eq "clean" && $::plugins::MaintenanceTracker::clean_armed}]
+            if {$armed} {
+                # v0.23.0: the armed Clean's warning outranks every note.
+                catch { dui item config $page confirm_msg \
+                    -text [translate "Blind basket and cleaning tablet in the group head? Tap again to start the clean cycle."] \
+                    -fill $L(col_red) }
+            } elseif {$hide_capped} {
                 catch { dui item config $page confirm_msg \
                     -text [translate "Hide is unavailable: six trackers are already hidden. Restore one from the New Tracker page first."] \
                     -fill $L(text_mut) }
             } elseif {$::plugins::MaintenanceTracker::prof_note ne ""} {
-                # v0.22.0: the linked-profile outcome (Load / Link /
-                # Unlink), cleared by its own 4 s timer.
-                catch { dui item config $page mt_hide* -state normal }
+                # v0.22.0: the link outcome (Load / Link / Unlink /
+                # refusals), cleared by its own 4 s timer.
                 catch { dui item config $page confirm_msg \
                     -text $::plugins::MaintenanceTracker::prof_note -fill $L(text_hi) }
             } else {
-                catch { dui item config $page mt_hide* -state normal }
                 catch { dui item config $page confirm_msg -text "" }
             }
-            # v0.22.0: linked profile row.
-            set prof [::plugins::MaintenanceTracker::_item_profile $id]
-            if {$prof eq ""} {
+            # v0.22.0 linked profile row; v0.23.0 any of three kinds.
+            if {$kind eq ""} {
                 catch { dui item config $page prof_value \
-                    -text [translate "none linked"] -fill $L(text_mut) }
+                    -text [translate "none"] -fill $L(text_mut) }
                 catch { dui item hide $page mt_unlink* -initial 1 }
                 catch { dui item hide $page mt_load* -initial 1 }
-                catch { dui item show $page mt_link* -initial 1 }
+                foreach t {mt_link* mt_linkds* mt_linkcl*} {
+                    catch { dui item show $page $t -initial 1 }
+                }
             } else {
-                catch { dui item config $page prof_value \
-                    -text [::plugins::MaintenanceTracker::_short_text [lindex $prof 1] 28] \
-                    -fill $L(text_hi) }
-                catch { dui item hide $page mt_link* -initial 1 }
+                switch -- $kind {
+                    profile {
+                        set vtxt [::plugins::MaintenanceTracker::_short_text [lindex $link 2] 28]
+                        set atxt [translate "Load profile"]
+                    }
+                    descale {
+                        set vtxt [translate "Descale (app)"]
+                        set atxt [translate "Open Descale"]
+                    }
+                    default {
+                        set vtxt [translate "Clean cycle (app)"]
+                        set atxt [expr {$armed ? [translate "Yes, start Clean"] : [translate "Start Clean"]}]
+                    }
+                }
+                catch { dui item config $page prof_value -text $vtxt -fill $L(text_hi) }
+                # Relabel through the BARE dbutton tag (the wildcard
+                # form silently fails on-device).
+                catch { dui item config $page mt_load -label $atxt }
+                foreach t {mt_link* mt_linkds* mt_linkcl*} {
+                    catch { dui item hide $page $t -initial 1 }
+                }
                 catch { dui item show $page mt_unlink* -initial 1 }
                 catch { dui item show $page mt_load* -initial 1 }
             }
@@ -3920,9 +4143,37 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             catch { msg "MaintenanceTracker: detail refresh failed: $err" }
         }
     }
+    # v0.23.0: the action button acts on whatever the tracker links.
+    # A page the tap has left (Descale opened, Clean started) is not
+    # repainted.
     proc load_click {} {
         if {$::plugins::MaintenanceTracker::detail_mode ne "view"} { return }
-        ::plugins::MaintenanceTracker::load_linked_profile $::plugins::MaintenanceTracker::detail_item
+        set id $::plugins::MaintenanceTracker::detail_item
+        switch -- [lindex [::plugins::MaintenanceTracker::_item_link $id] 0] {
+            descale {
+                if {[::plugins::MaintenanceTracker::open_linked_descale $id]} { return }
+            }
+            clean {
+                if {[::plugins::MaintenanceTracker::clean_tap $id] eq "started"} { return }
+            }
+            default {
+                ::plugins::MaintenanceTracker::load_linked_profile $id
+            }
+        }
+        if {[catch { refresh } err]} {
+            catch { msg "MaintenanceTracker: detail refresh failed: $err" }
+        }
+    }
+    proc link_descale_click {} {
+        if {$::plugins::MaintenanceTracker::detail_mode ne "view"} { return }
+        ::plugins::MaintenanceTracker::link_action $::plugins::MaintenanceTracker::detail_item descale
+        if {[catch { refresh } err]} {
+            catch { msg "MaintenanceTracker: detail refresh failed: $err" }
+        }
+    }
+    proc link_clean_click {} {
+        if {$::plugins::MaintenanceTracker::detail_mode ne "view"} { return }
+        ::plugins::MaintenanceTracker::link_action $::plugins::MaintenanceTracker::detail_item clean
         if {[catch { refresh } err]} {
             catch { msg "MaintenanceTracker: detail refresh failed: $err" }
         }
@@ -3980,8 +4231,13 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
     }
 
     proc show {page_to_hide page_to_show} {
-        # Stuck-flag rule: every show starts in view mode.
+        # Stuck-flag rule: every show starts in view mode, and (v0.23.0)
+        # with the Clean action disarmed.
         set ::plugins::MaintenanceTracker::detail_mode view
+        ::plugins::MaintenanceTracker::_disarm_clean
+        # v0.23.1: a show hook queued before the page was left (dui runs
+        # them after idle) must not repaint over the page now on screen.
+        if {![::plugins::MaintenanceTracker::_page_is_current MaintenanceTracker_detail]} { return }
         if {[catch { refresh } err]} {
             catch { msg "MaintenanceTracker: detail refresh failed: $err" }
         }

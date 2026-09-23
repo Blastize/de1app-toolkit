@@ -1,6 +1,22 @@
 #
 # Maintenance Tracker -- DE1app plugin manifest
 #
+# Pass 28 (v0.23.1): the list and Detail pages' show hooks skip their
+# refresh unless the page is still on screen. Open Descale left the
+# list page's queued (after idle) show to paint Prev/Next over the app's
+# "Prepare to descale" page. No write behavior changes.
+#
+# Pass 27 (v0.23.0): a tracker may link the app's own DESCALE or CLEAN
+# action (Settings > Machine > Maintenance) instead of a profile. The
+# Detail row reads "Linked to:" with [Link profile] [Link Descale]
+# [Link Clean]. Open Descale shows the app's "Prepare to descale" page
+# through the core's show_settings (fresh settings backup; the user still
+# presses the stock "Descale now"). Start Clean asks first -- the first
+# tap arms for 8 s, the second calls the core's start_cleaning, refused
+# unless the machine is connected and idle or asleep. FIRST capability
+# in this plugin that starts a machine cycle, and only on that second tap.
+# Writes: the link taps save settings.tdb (link_kind in the item dict).
+#
 # Pass 26 (v0.22.0): linked profile per tracker. The Detail page gains
 # a "Profile:" row -- "Link current profile" stores the profile loaded
 # in the app (filename + title) in the tracker's item dict, "Unlink"
@@ -193,7 +209,7 @@ namespace eval ::plugins::MaintenanceTracker {
     variable contact     "n/a"
     # Bare number, no "v" prefix (ShotHistoryEditor v0.6.4 lesson: the
     # startup log message prepends one).
-    variable version     "0.22.0"
+    variable version     "0.23.1"
     variable name        "Maintenance Tracker"
     variable description "Tracks machine maintenance (backflush, descale, gasket, burrs, water filter, water bottle level, plus your own custom trackers) from user-recorded events and the machine's own dispense reports. Read-only by design; writes only its own settings file."
 
@@ -266,7 +282,7 @@ proc ::plugins::MaintenanceTracker::main {} {
             set hooked 1
         }
     }
-    catch { msg "MaintenanceTracker: started v$::plugins::MaintenanceTracker::version (Pass 26: linked profile per tracker, SDB read-only)" }
+    catch { msg "MaintenanceTracker: started v$::plugins::MaintenanceTracker::version (Pass 28: stale show hooks no longer repaint; links to a profile or the app's Descale / Clean, SDB read-only)" }
     return
 }
 

@@ -7,7 +7,7 @@
 | ![Lumen home screen](docs/lumen.png) | ![Grind Advisor popup](docs/grindadvisor.png) |
 | A glass dashboard home screen: next grind, last shot, live graph, next-shot beans, favorite profile slots, your own colours. | After every espresso: your next grind setting and why. Nothing to type. |
 
-| Drink Menu 1.17.0 | Maintenance Tracker 0.22.0 |
+| Drink Menu 1.17.0 | Maintenance Tracker 0.23.1 |
 |---|---|
 | ![Drink Menu](docs/drinkmenu.png) | ![Maintenance Tracker](docs/maintenancetracker.png) |
 | 45 drinks drawn as cups with their layers; favorites, custom drinks, one tap to load a linked profile. | Backflush, descale, gaskets, burrs, filter, bottle level, counted from your shots. Alerts can load the cleaning profile. |
@@ -47,13 +47,13 @@ Then the skin: **Settings > App > Skin**, pick **Lumen** from the list, and rest
 
 - **Grind Advisor:** open its settings, set your **target shot time** and your grinder's **minimum and maximum**. It starts recommending after the first espresso of a bag and gets sharper with every shot.
 - **Bean Scanner:** it needs an API key of your own (Anthropic or OpenAI, pay as you go; one scan costs a fraction of a cent). Either type it in its settings, or put a file named `api_key_anthropic.txt` or `api_key_openai.txt` containing the key into `de1plus/plugins/BeanScanner/`.
-- **Maintenance Tracker:** tap **Record** on each tracker the next time you actually do that task; counters run from there. Backflush and descale record themselves after a real clean or descale cycle.
+- **Maintenance Tracker:** tap **Record** on each tracker the next time you actually do that task; counters run from there. Backflush and descale record themselves after a real clean or descale cycle. On a tracker's page you can link a profile, or the app's own Descale or Clean, so the next one is a tap away.
 - **Lumen:** the gear on Lumen's taskbar opens its settings; the THEME row's **Change** button opens the colour picker with Lumen dark, Lumen light, four more presets, your own backdrop and accent colours, and an **Auto** base that puts your colours on light glass by day and dark glass by night. The moon at the far left of the taskbar is Sleep, and the three names across the middle are favorite profiles: tap one to load it, and the loaded one glows.
 - **Drink Menu** and **Shot History Editor** need nothing.
 
 ## Safety, in one paragraph
 
-Nothing here writes to your shot database. Grind Advisor, Maintenance Tracker and Lumen only read it. Shot History Editor edits one line of one shot file at a time, after a backup, and deletes into its own trash folder. Bean Scanner writes only into DYE's next shot, and only after you press Accept. Drink Menu, Maintenance Tracker and Lumen store their own preferences through the app's own settings calls. Nothing ever starts a flow on the machine by itself.
+Nothing here writes to your shot database. Grind Advisor, Maintenance Tracker and Lumen only read it. Shot History Editor edits one line of one shot file at a time, after a backup, and deletes into its own trash folder. Bean Scanner writes only into DYE's next shot, and only after you press Accept. Drink Menu, Maintenance Tracker and Lumen store their own preferences through the app's own settings calls. Nothing ever starts a flow on the machine by itself: the one exception you can choose is Maintenance Tracker's Start Clean, which asks and only starts the clean cycle on your second tap.
 
 ## Updating
 
@@ -66,7 +66,7 @@ Download the zip again and copy the two folders over the old ones. Your settings
 | `skins/Lumen` | 0.57.3 |
 | `plugins/GrindAdvisor` | 3.16.3 |
 | `plugins/DrinkMenu` | 1.17.0 |
-| `plugins/MaintenanceTracker` | 0.22.0 |
+| `plugins/MaintenanceTracker` | 0.23.1 |
 | `plugins/ShotHistoryEditor` | 0.13.0 |
 | `plugins/BeanScanner` | 0.9.13 |
 

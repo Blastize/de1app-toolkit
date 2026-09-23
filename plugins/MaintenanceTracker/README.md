@@ -1,7 +1,7 @@
 # Maintenance Tracker
 
 **Backflush, descale, gaskets, burrs, water filter, bottle level. Counted from your shots, recorded with one tap.**
-Version 0.22.0 · a plugin for the Decent DE1app · by Blastize
+Version 0.23.1 · a plugin for the Decent DE1app · by Blastize
 
 ![The tracker list: every item with its counter and a green, amber or red bar](docs/trackers.png)
 
@@ -9,7 +9,7 @@ Version 0.22.0 · a plugin for the Decent DE1app · by Blastize
 
 ![Tracker detail: the record history and a linked profile with Load profile](docs/detail.png)
 
-**Tracker detail.** The history of records, undo for the last one, and a linked profile: tap Load profile and the cleaning profile is on the machine, ready for the run.
+**Tracker detail.** The history of records, undo for the last one, and a link: a profile (tap Load profile and it is on the machine, ready for the run), or the app's own Descale or Clean action.
 
 ![New Tracker: name, count by days, shots or ml, threshold and icon](docs/new_tracker.png)
 
@@ -21,7 +21,7 @@ Copy the folder to `de1plus/plugins/MaintenanceTracker/`, restart the app, enabl
 
 ## Safety
 
-Counters come from read-only queries of the shot database; it is never written. The only file the plugin writes is its own settings file. Load profile uses the app's own profile call and never starts a flow.
+Counters come from read-only queries of the shot database; it is never written. The only file the plugin writes is its own settings file. Load profile uses the app's own profile call and never starts a flow. The one thing that can start the machine is a tracker linked to the app's Clean action, and only on a second, confirming tap.
 
 <details>
 <summary><b>Full reference and version notes</b></summary>
@@ -36,7 +36,7 @@ measured from the machine's own dispense reports) — plus your own
 **custom trackers** (a second grinder, a water tank clean, anything)
 with their own name, unit and threshold.
 
-Author: **Blastize** · Current version: **0.22.0** (Pass 26)
+Author: **Blastize** · Current version: **0.23.1** (Pass 28)
 
 ## What it will do (target design)
 
@@ -50,8 +50,25 @@ Author: **Blastize** · Current version: **0.22.0** (Pass 26)
 - A small public API (`status_summary`, `open_page`) lets the Lumen skin
   show a notification dot near a maintenance icon.
 
-## What it does right now (v0.22.0 — Pass 26)
+## What it does right now (v0.23.0 — Pass 27)
 
+- **Link the app's Descale or Clean** (v0.23.0): the Detail row reads
+  **Linked to:** and, while nothing is linked, offers **Link profile**,
+  **Link Descale** and **Link Clean** (the two actions on the app's
+  Settings > Machine > Maintenance tab). Linking one replaces any other
+  link; **Unlink** removes it.
+  - **Open Descale** shows the app's own "Prepare to descale" page,
+    entered the way the app's own descale warning enters it (a fresh
+    settings backup first, so its Cancel is safe). You still press the
+    app's **Descale now**.
+  - **Start Clean** asks first: the button turns into **Yes, start
+    Clean** with a red reminder (blind basket and cleaning tablet in)
+    for 8 seconds; the second tap starts the machine's clean cycle
+    through the app's own call. It is refused unless the machine is
+    connected and idle or asleep, and any page change, undo or unlink
+    cancels the question.
+  - The completed cycle still auto-records on trackers set to record
+    Clean or Descale cycles, as before.
 - **Linked profile** (v0.22.0): every tracker's Detail page has a
   **Profile:** row. **Link current profile** remembers the profile
   loaded in the app right now (load it once from the app's profile
@@ -265,7 +282,12 @@ Author: **Blastize** · Current version: **0.22.0** (Pass 26)
   `profile_fn` / `profile_title` keys) and one app-facing action
   (Load profile: the core's `select_profile`, then `save_settings` +
   `save_settings_to_de1`), which writes nothing of ours and starts no
-  flow.
+  flow. v0.23.0 adds Link Descale / Link Clean (the `link_kind` key,
+  saved on the tap) and two app-facing actions: Open Descale (the
+  core's `show_settings descale_prepare`; never `start_decaling`) and
+  Start Clean, the **only machine cycle this plugin can start**: the
+  core's `start_cleaning`, on the second tap of an 8-second
+  confirmation, refused unless connected and idle or asleep.
 
 ## Install
 

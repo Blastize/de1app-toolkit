@@ -4,6 +4,60 @@ Entries follow the CLAUDE.md doc cap (~15 lines each; entries that added or
 changed a write capability keep their full write-path description). The long
 pre-trim entries survive in the Desktop archive snapshot of each version.
 
+## v0.23.1 - 2026-09-23 - Pass 28: stale show hooks no longer repaint - verify.sh PASS 2026-09-23 on run 1 (three page dumps + logcat clean; list page renders in full; owner re-tap of Open Descale open)
+
+Base: v0.23.0. Owner, tablet screenshot 23:09: Open Descale shows the app's
+"Prepare to descale" page with MT's Prev / Next buttons painted on top.
+
+- Cause: dui runs page show hooks `after idle` (dui.tcl ~6705) but sets the
+  current page at once (~6487). Leaving for the app's page closes Detail
+  (queues the list page's show), closes the list and loads descale_prepare
+  in one tap; the queued list show then refreshed and its Prev / Next
+  `-state normal|disabled` calls made them visible over the app's page.
+  Start Clean shared the path (stray buttons on home after the cycle).
+- Fix: the list and Detail `show` hooks still reset their flags, then skip
+  the refresh unless their page is current.
+- pass_28_offline.tcl replays the tap with an after-idle queue: it FAILS on
+  the v0.23.0 archive and PASSES here.
+
+**Safety status: no write behavior changes; display-only guard. Link
+writes and the Start Clean confirmation are exactly as in v0.23.0.**
+
+## v0.23.0 - 2026-09-23 - Pass 27: link the app's Descale or Clean action - verify.sh PASS 2026-09-23 on run 1 (settings, detail, diagnostics dumps clean; logcat clean; link row proven offline incl. geometry; owner checklist open)
+
+Base: v0.22.0 (verify.sh PASS, on the tablet). Owner request: a tracker may
+link the app's own Descale or Clean (Settings > Machine > Maintenance)
+instead of a profile.
+
+- Item dict gains optional `link_kind` descale | clean. Linking any kind
+  clears the others; Unlink (`unlink_profile`, name kept) removes
+  `profile_fn`, `profile_title` and `link_kind`. `_item_profile` reads ""
+  under a Descale / Clean link. `status_summary` unchanged.
+- Detail row "Linked to:". Unlinked: value "none" + [Link profile] [Link
+  Descale] [Link Clean], all btn_w_std (240-wide ones ran over the value:
+  caught by the new offline geometry check). Linked: [Unlink] + the action
+  button relabelled (bare tag): Load profile | Open Descale | Start Clean.
+- Open Descale: busy guard, leave MT's own dialogs one close_dialog per
+  level, then the core's `show_settings descale_prepare` -- the app's own
+  descale-warning entry (standard_includes.tcl:32). It backs settings up
+  first, so the stock Cancel -> Machine tab -> Cancel restores CURRENT
+  settings (a bare page switch would restore a stale backup). The user
+  presses the stock "Descale now"; MT never calls `start_decaling`.
+- Start Clean: refused unless connected and not busy. First tap arms for
+  8 s ("Yes, start Clean" + red reminder); the second leaves MT's dialogs
+  and calls the core's `start_cleaning` (the Machine tab Clean button's
+  call). Timeout, page show, undo-confirm and Unlink disarm.
+
+**Safety status: FIRST capability in this plugin that starts a machine
+cycle -- the clean cycle, via the core's `start_cleaning`, only on the
+second tap of an 8 s confirmation, connected and Idle/Sleep/GoingToSleep
+only. One new settings.tdb key (`link_kind`), written on the Link Descale /
+Link Clean / Unlink taps through the existing `save_settings`. Descale is
+never started by MT. SDB stays read-only; history/ untouched.**
+
+Files: plugin.tcl, MaintenanceTracker.tcl, README, CHANGELOG, PROJECT_STATE,
+passes/MaintenanceTracker/pass_27.md, pass_27_offline.tcl, pass_27.checks.json.
+
 ## v0.22.0 - 2026-09-18 - Pass 26: linked profile per tracker - verify.sh PASS 2026-09-18 12:2x (settings, detail, diagnostics dumps: no text overlap, inside the virtual canvas; logcat clean; tap behaviour proven offline, owner checklist open)
 
 Base: v0.21.3 (tablet-verified). Owner request: a backflush alert should
