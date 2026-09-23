@@ -19,6 +19,14 @@ Version v0.13.0 · a plugin for the Decent DE1app · by Blastize
 
 **Source Inspector.** The raw rows behind the cards, for when you want to see exactly what the database recorded.
 
+## Recommended: the Lumen skin
+
+![Lumen's Last Shot card: profile, bean, grind, dose, yield, time and when it was pulled, with the Shot history link](docs/lumen_last_shot.png)
+
+Shot History Editor is designed around the [Lumen skin](https://github.com/Blastize/de1app-skin-Lumen). Lumen's home screen shows your last real espresso on its **Last Shot** card, read from the shot file itself, so a correction you make here shows up there. The card's **Shot history** link opens the shot list in one tap. Without Lumen the plugin still works, but you reach it through the app's Settings, Extensions and the plugin's settings button.
+
+Both are in the [de1app-toolkit](https://github.com/Blastize/de1app-toolkit) download.
+
 ## Install
 
 Copy the folder to `de1plus/plugins/ShotHistoryEditor/`, restart the app, enable **Shot History Editor** under Extensions.

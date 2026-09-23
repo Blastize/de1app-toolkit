@@ -15,6 +15,22 @@ Version 3.16.3 · a plugin for the Decent DE1app · by Blastize
 
 **Settings.** Target shot time, your grinder's range, the popup theme and whether it opens by itself. History and Bag Stats are one tap away; Advanced holds the tools.
 
+![Bag Stats: every bag with its ideal grind, slope, drift and how many shots it took to land on target](docs/bag_stats.png)
+
+**Bag Stats.** Every bag you have pulled: the grind it settled on, how strongly grind moves shot time, how it drifted as it aged, and how many shots it took to hit the target.
+
+![Recent Shot History: each shot's grind change, time and bag shot number](docs/history.png)
+
+**History.** Shot by shot: what you dialled, what it recommended, how long the shot ran.
+
+## Recommended: the Lumen skin
+
+![Lumen's Recommended Grind tile: the next grind, the change from the last one, the method, confidence and shot count, with Curve and Shot analysis links](docs/lumen_grind_tile.png)
+
+Grind Advisor is designed around the [Lumen skin](https://github.com/Blastize/de1app-skin-Lumen). Lumen's home screen keeps a **Recommended Grind** tile up at all times: the next setting for the bag you have loaded, the change from the last one, the method, how confident it is and how many shots it is based on. A bag with no shots yet shows its starting estimate. **Shot analysis** opens the after-shot card, **Curve** opens the Calibration Curve, and a tap on the tile opens the settings, each in one tap. The popups float on glass in your theme's colours. On other skins the after-shot popup works the same, but between shots you reach everything through the app's Settings, Extensions and the plugin's settings button.
+
+Both are in the [de1app-toolkit](https://github.com/Blastize/de1app-toolkit) download.
+
 ## Install
 
 Copy the folder to `de1plus/plugins/GrindAdvisor/`, restart the app, enable **Grind Advisor** under Extensions. Needs the SDB plugin (ships with the app). Works with any skin; Lumen adds the glass look.

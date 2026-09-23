@@ -11,6 +11,14 @@ Version 0.9.13 · a plugin for the Decent DE1app · by Blastize
 
 **Settings.** Scan, reuse the latest photo or reopen the last result. Choose Claude or GPT and the model, set your API key, pick the camera and capture size. Light and dark palette.
 
+## Recommended: the Lumen skin
+
+![Lumen's Next Shot strip: the bag's roaster, name and notes, grind, dose and yield, with the Scan bag button](docs/lumen_next_shot.png)
+
+Bean Scanner is designed around the [Lumen skin](https://github.com/Blastize/de1app-skin-Lumen). Lumen's home screen has a **Scan bag** button on its Next Shot strip that opens the camera straight away, and Cancel brings you back home. Once you accept a scan, the strip shows the new bag at once: roaster, bean, origin and tasting notes, ready for the next shot. Without Lumen the plugin still works, but you reach the camera through the app's Settings, Extensions and the plugin's settings page, and the result lives in DYE's editor.
+
+Both are in the [de1app-toolkit](https://github.com/Blastize/de1app-toolkit) download.
+
 ## Install
 
 Copy the folder to `de1plus/plugins/BeanScanner/`, restart the app, enable **Bean Scanner** under Extensions. Needs the DYE plugin and your own API key (Anthropic or OpenAI, pay-as-you-go; one scan costs a fraction of a cent).

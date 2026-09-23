@@ -15,6 +15,18 @@ Version 1.17.0 · a plugin for the Decent DE1app · by Blastize
 
 **Custom drinks.** Pick a vessel, add and reorder layers, write the method, choose where it sits in the menu, link a profile.
 
+![The Favorites tab: only the starred drinks](docs/favorites.png)
+
+**Favorites.** Star a drink and the Favorites tab becomes your own short menu.
+
+## Recommended: the Lumen skin
+
+![The Lumen taskbar: the cup icon on the left opens the Drink Menu in one tap](docs/lumen_mug.png)
+
+Drink Menu is designed to sit one tap from the home screen, and the [Lumen skin](https://github.com/Blastize/de1app-skin-Lumen) puts it there: the **cup** on Lumen's taskbar opens the menu straight away. Without Lumen the plugin still works, but you reach it through the app's Settings, Extensions and the plugin's settings button every time.
+
+Both are in the [de1app-toolkit](https://github.com/Blastize/de1app-toolkit) download.
+
 ## Install
 
 Copy the folder to `de1plus/plugins/DrinkMenu/` (including the three `<width>x<height>/bg.png` folders), restart the app, enable **Drink Menu** under Extensions.

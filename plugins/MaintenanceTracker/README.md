@@ -7,13 +7,21 @@ Version 0.23.1 · a plugin for the Decent DE1app · by Blastize
 
 **Everything on one page.** Each tracker shows shots or days since it was last done and a bar that goes amber, then red. Backflush and descale record themselves when the machine runs a real clean or descale cycle.
 
-![Tracker detail: the record history and a linked profile with Load profile](docs/detail.png)
+![Tracker detail: the record history and a link to the app's Descale, with Unlink and Open Descale](docs/detail.png)
 
 **Tracker detail.** The history of records, undo for the last one, and a link: a profile (tap Load profile and it is on the machine, ready for the run), or the app's own Descale or Clean action.
 
 ![New Tracker: name, count by days, shots or ml, threshold and icon](docs/new_tracker.png)
 
 **Your own trackers.** A second grinder, a water tank clean, anything: name it, count by days, shots or millilitres, set the threshold, pick an icon.
+
+## Recommended: the Lumen skin
+
+![The Lumen taskbar: the wrench icon wears an amber dot because a tracker is due soon](docs/lumen_wrench.png)
+
+Maintenance Tracker is built to remind you, and it works best with the [Lumen skin](https://github.com/Blastize/de1app-skin-Lumen). Lumen puts a **wrench** on its home-screen taskbar that wears an **amber dot** when a tracker is due soon and a **red dot** when one is overdue, so you see it without opening anything. One tap on the wrench opens the tracker list. Without Lumen the plugin still works, but you reach it through the app's Settings, Extensions and the plugin's settings button, and nothing tells you when something is due.
+
+Both are in the [de1app-toolkit](https://github.com/Blastize/de1app-toolkit) download.
 
 ## Install
 
