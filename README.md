@@ -25,6 +25,18 @@ Each one has its own page with more screenshots, a changelog and the full refere
 [Shot History Editor](https://github.com/Blastize/de1app-plugin-ShotHistoryEditor) ·
 [Bean Scanner](https://github.com/Blastize/de1app-plugin-BeanScanner)
 
+## Better together: plugins on Lumen
+
+Every plugin works on any skin, but they are designed around Lumen. On Lumen each one has a place on the home screen, one tap away; on other skins you reach them through **Settings > App > Extensions** and each plugin's settings button.
+
+![Lumen's taskbar icons: the cup for Drink Menu, the wrench for Maintenance Tracker with its amber "due soon" dot, Lumen's gear and the app's settings](docs/lumen_taskbar_icons.png)
+
+- **Grind Advisor:** the **Recommended Grind** tile keeps your next setting, its change, method and confidence on screen between shots. **Shot analysis** and **Curve** open its cards; a tap on the tile opens its settings. Its popups float on glass in your theme's colours.
+- **Maintenance Tracker:** the **wrench** on the taskbar wears an amber dot when something is due soon and a red one when it is overdue, so you see it without opening anything. One tap opens the trackers.
+- **Drink Menu:** the **cup** on the taskbar opens the menu.
+- **Shot History Editor:** the **Last Shot** card shows your last real espresso as its shot file records it, so your corrections show up there; its **Shot history** link opens the shot list.
+- **Bean Scanner:** **Scan bag** on the Next Shot strip opens the camera, and the accepted bag appears on the strip at once.
+
 ## Install (3 steps)
 
 1. **Download.** Green **Code** button > **Download ZIP**, or grab the zip from [Releases](../../releases). Unzip it.
