@@ -1,7 +1,7 @@
 # Lumen
 
 **A glass dashboard home screen for the Decent DE1: grind recommendation, last shot, shot graph and next-shot beans, without opening Settings.**
-Version 0.57.3 · a skin for the Decent DE1app · by Blastize
+Version 0.57.5 · a skin for the Decent DE1app · by Blastize
 
 ![The Lumen home screen in a custom theme: grind tile, last shot, live graph, next-shot strip, and the taskbar with three favorite profile names, the loaded one glowing](docs/home_custom_theme.png)
 
@@ -226,7 +226,9 @@ backdrop and let the shadow do the separating.
 
 The bag cycler reads your recent beans through SDB's public API and applies
 the chosen one through DYE, so the skin itself opens no database. How many
-bags it offers is set on the Lumen settings page (3–10, default 5).
+bags it offers is set on the Lumen settings page (3–10, default 5). The dots
+under it catch up as soon as SDB records a shot, so a newly scanned bag's dot
+lights after its first shot without touching the arrows.
 
 There are no Espresso/Steam/Water/Flush buttons — the machine's GHC starts
 those, and the flow pages take over the screen as soon as it does.
@@ -272,9 +274,11 @@ app's own behaviour, not a quirk of the skin.
 The two cards do answer different questions, though, and 0.25.0 made that
 real: **LAST SHOT is the record** — grind, dose and yield as the shot file
 holds them, corrections included — while **NEXT SHOT is the plan**, the live
-and DYE-staged values the next shot will use. The card falls back to the live
-settings once a shot has run in this session, because those are exactly what
-that shot recorded.
+and DYE-staged values the next shot will use. Since 0.57.5 the card reads a
+new shot's record back from the file the app just saved, so Grind Advisor
+moving the grind to its next recommendation no longer changes LAST SHOT. It
+only falls back to the live settings while a shot is running, or if the app
+did not save one.
 
 ## Typography
 

@@ -5,7 +5,7 @@ package require de1plus 1.0
 #  LUMEN  --  a glass dashboard skin for the Decent DE1
 #
 #  Author:  Blastize
-#  Version: 0.57.3  (favorite slots: no press flash, the halo answers the tap at once; see `variable version`)
+#  Version: 0.57.5  (LAST SHOT reads the just-saved shot file, not the live grind; see `variable version`)
 #
 #
 #
@@ -102,7 +102,7 @@ package require de1plus 1.0
 #############################################################################
 
 namespace eval ::lumen {
-    variable version "0.57.3"
+    variable version "0.57.5"
 
     variable C        ;# colour tokens
     array set C {}
@@ -157,6 +157,7 @@ namespace eval ::lumen {
     # stops describing the last shot the moment you switch -- which is exactly
     # the case this line exists to show.
     variable last_shot_profile ""
+    variable shot_rec_pending 0 ;# 0.57.5: see record_saved_shot
 
     # What the loaded shot FILE records: grind, dose and yield, read out of
     # its settings block by load_last_shot_curves. Keys grind, dose, yield,
@@ -2843,24 +2844,12 @@ proc ::lumen::load_last_shot_curves { {force 0} {path ""} {bag ""} } {
     msg -NOTICE "Lumen: none of [llength $cands] candidate shot files is a real espresso; chart left as-is"
 }
 
-# Reads ONE shot file into the chart vectors and the LAST SHOT record.
-# Returns 1 when loaded, 0 when unreadable or (strict) rejected by
-# _shot_reject_reason -- and a rejected file touches nothing, so the
-# previous record survives while the caller tries the next candidate.
-proc ::lumen::_load_shot_file { path strict } {
-    if { [catch {
-        array set props [encoding convertfrom utf-8 [read_binary_file $path]]
-    } err] } {
-        msg -ERROR "Lumen: could not read $path: $err"
-        return 0
-    }
-    if { $strict } {
-        set why [_shot_reject_reason props]
-        if { $why ne "" } {
-            msg -INFO "Lumen: skipping [file tail $path]: $why"
-            return 0
-        }
-    }
+# The LAST SHOT record from a parsed shot file (an array NAME in the
+# caller): profile, clock, grind, dose, yield, roaster, bean. Split out of
+# _load_shot_file in 0.57.5 so record_saved_shot can refresh the card
+# without touching the chart vectors.
+proc ::lumen::_read_shot_rec { propsvar } {
+    upvar 1 $propsvar props
     # Seed the last shot's profile from the file's own settings block. This
     # reads into a LOCAL array on purpose -- the stock preview_history does
     # `array set ::settings $props(settings)`, which would replace the entire
@@ -2907,6 +2896,61 @@ proc ::lumen::_load_shot_file { path strict } {
         }
         array unset _shot_settings
     }
+}
+
+# 0.57.5: the shot that just ended, read back from the file the core just
+# wrote, into the LAST SHOT record only -- the chart vectors already hold
+# it. latch_shot_profile empties the record when a shot starts, so until
+# now the card fell back to the live ::settings, and Grind Advisor moves
+# grinder_setting to its next recommendation the moment the shot ends: the
+# card said 3.8 for a shot pulled at 2.8 (owner screenshots 2026-09-24).
+# The path is the core's own history_saved_shot_filename (vars.tcl:3465),
+# trusted only when history_saved says the save happened and the name is
+# this shot's espresso_clock; anything else keeps the fallback. Read-only.
+proc ::lumen::record_saved_shot {} {
+    set path ""
+    if { [info exists ::settings(history_saved)] && $::settings(history_saved) eq "1" \
+      && [info exists ::settings(history_saved_shot_filename)] \
+      && [info exists ::settings(espresso_clock)] \
+      && [string is integer -strict $::settings(espresso_clock)] } {
+        set want "[clock format $::settings(espresso_clock) -format %Y%m%dT%H%M%S].shot"
+        if { [file tail $::settings(history_saved_shot_filename)] eq $want } {
+            set path $::settings(history_saved_shot_filename)
+        }
+    }
+    if { $path eq "" || ![file isfile $path] } {
+        msg -INFO "Lumen: no saved file for this shot; LAST SHOT keeps the live values"
+        return
+    }
+    if { [catch {
+        array set props [encoding convertfrom utf-8 [read_binary_file $path]]
+    } err] } {
+        msg -ERROR "Lumen: could not read $path: $err"
+        return
+    }
+    _read_shot_rec props
+    msg -INFO "Lumen: LAST SHOT record read from [file tail $path]"
+}
+
+# Reads ONE shot file into the chart vectors and the LAST SHOT record.
+# Returns 1 when loaded, 0 when unreadable or (strict) rejected by
+# _shot_reject_reason -- and a rejected file touches nothing, so the
+# previous record survives while the caller tries the next candidate.
+proc ::lumen::_load_shot_file { path strict } {
+    if { [catch {
+        array set props [encoding convertfrom utf-8 [read_binary_file $path]]
+    } err] } {
+        msg -ERROR "Lumen: could not read $path: $err"
+        return 0
+    }
+    if { $strict } {
+        set why [_shot_reject_reason props]
+        if { $why ne "" } {
+            msg -INFO "Lumen: skipping [file tail $path]: $why"
+            return 0
+        }
+    }
+    _read_shot_rec props
 
     if { ![info exists props(espresso_elapsed)] } { return 1 }
 
@@ -3128,6 +3172,8 @@ proc ::lumen::latch_shot_profile { args } {
     # and its title; either naming a non-espresso run arms
     # after_flow_complete to put the bean's last real shot back.
     set last_flow_nonespresso 0
+    # 0.57.5: arms after_flow_complete to read this shot's record back.
+    variable shot_rec_pending 1
     catch {
         foreach f {beverage_type profile_title} {
             if { [text_is_nonespresso [::lumen::data::_s ::settings($f)]] } {
@@ -3158,10 +3204,22 @@ proc ::lumen::latch_shot_profile { args } {
 #
 # Only a flow that latch_shot_profile flagged as non-espresso triggers a
 # reload; a real shot leaves the live vectors alone (they ARE the last
-# shot). `args` is the core's event dict, unused.
+# shot) and, since 0.57.5, reads its LAST SHOT record back from the saved
+# file -- once per espresso-page flow, so a later steam or flush does not
+# re-read it. `args` is the core's event dict, unused.
 proc ::lumen::after_flow_complete { args } {
     variable last_flow_nonespresso
-    if { !$last_flow_nonespresso } { return }
+    variable shot_rec_pending
+    set pending [expr {[info exists shot_rec_pending] && $shot_rec_pending}]
+    set shot_rec_pending 0
+    if { !$last_flow_nonespresso } {
+        if { $pending } {
+            if { [catch { record_saved_shot } err] } {
+                msg -ERROR "Lumen: reading the saved shot's record failed: $err"
+            }
+        }
+        return
+    }
     set last_flow_nonespresso 0
     msg -INFO "Lumen: a non-espresso run finished; reloading the loaded bean's last real shot"
     if { [catch { load_last_shot_curves 1 } err] } {
@@ -7089,6 +7147,25 @@ after 5000 {
     # Same deferral, same reason: SDB is a plugin and has not finished
     # loading while the skin is being sourced.
     ::lumen::refresh_bag_list
+    ::lumen::hook_sdb_save
+}
+
+# 0.57.4: the bag list also follows SDB's own save. The page-show refresh
+# below fires the moment a shot ends, but SDB writes the new row later --
+# on after_flow_complete, or after the Visualizer upload when that plugin
+# is on (SDB.tcl:107-117). So the first shot on a newly scanned bag left
+# the cached list without that bag: every dot hollow until an arrow tap
+# re-read SDB (owner report 2026-09-24). A leave trace on the hook SDB runs
+# on both paths re-reads once the row exists; one query per saved shot.
+proc ::lumen::hook_sdb_save {} {
+    set p ::plugins::SDB::save_espresso_to_history_hook
+    if { [info procs $p] eq "" } {
+        msg -INFO "Lumen: SDB save hook not found; the bag dots refresh on page show only"
+        return
+    }
+    if { [lsearch -exact [trace info execution $p] {leave ::lumen::refresh_bag_list}] >= 0 } { return }
+    trace add execution $p leave ::lumen::refresh_bag_list
+    msg -INFO "Lumen: bag dots follow SDB's shot save"
 }
 
 # The bag cycler's window, rebuilt whenever the home page is shown -- which

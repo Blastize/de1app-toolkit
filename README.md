@@ -2,7 +2,7 @@
 
 **Five plugins and a skin for the classic Decent DE1 app, in one download. Drop two folders into the app, tick a few boxes, done.**
 
-| Lumen skin 0.57.3 | Grind Advisor 3.16.3 |
+| Lumen skin 0.57.5 | Grind Advisor 3.16.3 |
 |---|---|
 | ![Lumen home screen](docs/lumen.png) | ![Grind Advisor popup](docs/grindadvisor.png) |
 | A glass dashboard home screen: next grind, last shot, live graph, next-shot beans, favorite profile slots, your own colours. | After every espresso: your next grind setting and why. Nothing to type. |
@@ -75,7 +75,7 @@ Download the zip again and copy the two folders over the old ones. Your settings
 
 | Folder | Version |
 |---|---|
-| `skins/Lumen` | 0.57.3 |
+| `skins/Lumen` | 0.57.5 |
 | `plugins/GrindAdvisor` | 3.16.3 |
 | `plugins/DrinkMenu` | 1.17.0 |
 | `plugins/MaintenanceTracker` | 0.23.1 |

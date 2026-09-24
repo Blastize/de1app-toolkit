@@ -4,6 +4,33 @@ Entries follow a documentation cap (about 15 lines each; longer only where a
 version added or changed a write capability). The original long-form entries
 survive unchanged in the archive snapshot of each version.
 
+## 0.57.5 - LAST SHOT shows the grind the shot was pulled at (2026-09-24)
+
+Base: 0.57.4. Same owner screenshots: right after a shot the LAST SHOT card
+said grind 3.8 for a shot pulled at 2.8. A shot start empties the card's
+record, so it fell back to the live `grinder_setting`, which Grind Advisor
+had already moved to its next recommendation. `after_flow_complete` now
+reads the record back from the file the core just wrote
+(`history_saved_shot_filename`, trusted only when `history_saved` is 1 and
+the name matches `espresso_clock`), once per espresso-page flow; the chart
+vectors are not touched. The record parser moved out of `_load_shot_file`
+into `_read_shot_rec`, unchanged.
+**Safety status: read-only change; one history/*.shot file read per shot,
+nothing written.**
+
+## 0.57.4 - the bag dots follow SDB's shot save (2026-09-24)
+
+Base: 0.57.3. Owner (two tablet screenshots): after the first shot on a
+newly scanned bag, all five dots stayed hollow until right-then-left on the
+arrows. The cached bag list refreshed on the home page's `show`, which fires
+as the shot ends, while SDB writes the new row later (after_flow_complete, or
+after the Visualizer upload). A leave trace on
+`::plugins::SDB::save_espresso_to_history_hook`, added 5 s after startup
+with the first refresh (guarded, never doubled), re-reads the list once the
+row exists: one `available_categories` query per saved shot.
+**Safety status: read-only change; no new write path. SDB is only observed
+through a trace, its hook and return value untouched.**
+
 ## 0.57.3 - favorite slots answer the tap with the halo, no press flash (2026-09-22)
 
 Base: 0.57.2. Owner: drop the square tap highlight on the three slots and
