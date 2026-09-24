@@ -4,6 +4,23 @@ Entries follow the CLAUDE.md doc cap (about 15 lines each; entries that added or
 capability keep their full write-path description). The long pre-trim entries survive in the
 Desktop archive snapshot of each version ("GrindAdvisor Archive/GrindAdvisor vX.Y.Z").
 
+## v3.16.4 (only espresso counts: beverage-type whitelist) - 2026-09-25
+
+Base: v3.16.3.
+
+- The validity gate rejected non-espresso rows only by keyword (rinse, flush, clean, water,
+  steam, ...). The core's other beverage types (pourover, tea, tea_portafilter, manual) carry
+  none of them, so a "Pour Over 15g" or tea row with grind/dose/yield passed as espresso into
+  the popup, history, calibration and recommendations. Found by the 2026-09-17 review.
+- New `_bev_type_is_espresso`: a SET beverage type must be `espresso` (case/space-insensitive);
+  a blank one is still accepted (older untagged shots, as DYE does). `_row_is_valid_espresso`
+  applies it beside the keyword reject, which stays. No bev_type column => unchanged.
+- tools/check_guards.tcl: 10 new assertions through the real gate; the 4 non-espresso cases
+  fail on v3.16.3 and pass here.
+
+**Safety status: read-only, unchanged. No write behavior exists in this version beyond the
+v3.9.0 Recalculate button (SDB's own resync). Filter only.**
+
 ## v3.16.3 (popup timer vs Visualizer upload race) - 2026-09-17
 
 Base: v3.16.2.

@@ -1140,6 +1140,19 @@ namespace eval ::plugins::GrindAdvisor {
         return [regexp -nocase -- $_reject_re $t]
     }
 
+    # Beverage-type whitelist (v3.16.4). The keyword reject above only knows
+    # the names of non-espresso runs; the core's other beverage types
+    # (pourover, tea, tea_portafilter, manual, ...) carry none of them, so a
+    # "Pour Over 15g" or tea row with grind/dose/yield passed as espresso.
+    # A SET beverage type must be espresso. A blank one is still accepted:
+    # older untagged shots are real espresso (DYE keeps them the same way,
+    # COALESCE(beverage_type,'')).
+    proc _bev_type_is_espresso {text} {
+        set t [string tolower [string trim $text]]
+        if {$t eq ""} { return 1 }
+        return [expr {$t eq "espresso"}]
+    }
+
     # ------------------------------------------------------------------
     #  Deleted-shot tolerance (v2.1.1)
     #
@@ -1190,6 +1203,10 @@ namespace eval ::plugins::GrindAdvisor {
             if {[dict exists $fields $key] && [_text_is_nonespresso [_dget $row $key]]} {
                 return 0
             }
+        }
+        # ... and anything whose beverage type is set but not espresso.
+        if {[dict exists $fields bev_type] && ![_bev_type_is_espresso [_dget $row bev_type]]} {
+            return 0
         }
         # Reject deleted shots (see deleted-shot tolerance note above).
         if {[dict exists $fields removed]} {
