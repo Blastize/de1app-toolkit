@@ -1,7 +1,7 @@
 # Maintenance Tracker
 
 **Backflush, descale, gaskets, burrs, water filter, bottle level. Counted from your shots, recorded with one tap.**
-Version 0.23.1 · a plugin for the Decent DE1app · by Blastize
+Version 0.24.1 · a plugin for the Decent DE1app · by Blastize
 
 ![The tracker list: every item with its counter and a green, amber or red bar](docs/trackers.png)
 
@@ -44,7 +44,7 @@ measured from the machine's own dispense reports) — plus your own
 **custom trackers** (a second grinder, a water tank clean, anything)
 with their own name, unit and threshold.
 
-Author: **Blastize** · Current version: **0.23.1** (Pass 28)
+Author: **Blastize** · Current version: **0.24.1** (Pass 30)
 
 ## What it will do (target design)
 
@@ -58,8 +58,20 @@ Author: **Blastize** · Current version: **0.23.1** (Pass 28)
 - A small public API (`status_summary`, `open_page`) lets the Lumen skin
   show a notification dot near a maintenance icon.
 
-## What it does right now (v0.23.0 — Pass 27)
+## What it does right now (v0.24.1 — Pass 30)
 
+- **Missing profile files are caught** (v0.24.1): Load profile first checks the
+  linked profile's file still exists in `profiles/`; if not, it says "Profile
+  file missing. Unlink and link it again." and leaves the app's profile alone.
+  Link profile refuses a loaded profile that has no saved file.
+- **A linked cleaning profile records its own tracker** (v0.24.0): when a
+  run of a `cleaning` profile finishes, the trackers linked to *that*
+  profile auto-record — and only those, even with their Auto-record
+  source off. So "Backflush - Cafiza" linked to the Powder profile and
+  "Backflush - Water" linked to the plain one each record their own run.
+  A cleaning run of a profile no tracker links still records every
+  tracker set to Clean cycle, as before. Such trackers wear
+  **AUTO-RECORD** and the Detail page names the profile.
 - **Link the app's Descale or Clean** (v0.23.0): the Detail row reads
   **Linked to:** and, while nothing is linked, offers **Link profile**,
   **Link Descale** and **Link Clean** (the two actions on the app's
@@ -85,8 +97,8 @@ Author: **Blastize** · Current version: **0.23.1** (Pass 28)
   call DrinkMenu makes) and sends it to the machine a second later.
   It never starts a flow — the GHC does. So a Backflush alert is:
   wrench, card, Load profile, press the machine's espresso button,
-  and the run auto-records as before (the profile must carry beverage
-  type `cleaning`). Refused while the machine is running anything;
+  and the run auto-records that tracker (the profile must carry beverage
+  type `cleaning`; since v0.24.0 only the trackers linked to it). Refused while the machine is running anything;
   the row's message line says what happened for four seconds.
 - **Fast taps** (v0.21.1): the main page renders through cached canvas
   ids (DrinkMenu v0.6.2 mechanism) and plain navigation no longer
@@ -214,7 +226,8 @@ Author: **Blastize** · Current version: **0.23.1** (Pass 28)
   records every subscribed tracker automatically once the cycle
   completes (aborted cycles are ignored via duration thresholds), and a
   blind-basket backflush run as a "cleaning" espresso profile counts as
-  a Clean cycle. Which trackers subscribe to which cycle is set per
+  a Clean cycle (since v0.24.0: for the trackers linked to that profile,
+  or, when none is, every Clean-cycle tracker). Which trackers subscribe to which cycle is set per
   tracker on its Edit page (v0.20.0). Auto events appear in the Detail
   page history as "recorded automatically" and can be undone exactly
   like manual ones. Turn the whole feature off with the `auto_record`

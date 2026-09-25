@@ -673,6 +673,10 @@ namespace eval ::plugins::MaintenanceTracker {
     variable _cycle_state ""
     variable _cycle_enter 0
     variable _espresso_enter 0
+    # v0.24.0: the profile loaded when the Espresso state began -- the
+    # one that actually ran, even if something reloads another profile
+    # before after_flow_complete fires.
+    variable _espresso_profile ""
 
     # Append one auto event, with the same cap/sync/save path as manual
     # recording. Rejects a duplicate within 30s of the item's newest
@@ -712,6 +716,85 @@ namespace eval ::plugins::MaintenanceTracker {
             catch { set a [dict get $settings(item_$id) auto_src] }
             if {$a eq $src} { _record_auto $id $now }
         }
+    }
+
+    # v0.24.0 (Pass 29): a finished cleaning-PROFILE run records the
+    # trackers linked to that exact profile, and only those (owner: the
+    # Powder backflush recorded "Backflush - Water", because every
+    # cleaning run went to all Clean-cycle subscribers and the link was
+    # never consulted). A linked tracker records even with its Auto
+    # source off -- linking a cleaning profile names the runs it tracks.
+    # No tracker linked to the profile -> the v0.20.0 rule unchanged:
+    # every Clean-cycle subscriber records.
+    proc _record_auto_profile {fn now} {
+        set hits {}
+        if {$fn ne ""} {
+            foreach id [_all_item_ids] {
+                set prof [_item_profile $id]
+                if {$prof ne "" && [string equal -nocase [lindex $prof 0] $fn]} {
+                    lappend hits $id
+                }
+            }
+        }
+        if {[llength $hits] == 0} {
+            _record_auto_src clean $now
+            return
+        }
+        catch { msg -INFO "MaintenanceTracker: cleaning profile '$fn' -> linked tracker(s) $hits" }
+        foreach id $hits { _record_auto $id $now }
+    }
+
+    # v0.24.0: beverage type of a profile file, read-only and cached for
+    # the session ("" when the file is missing or unreadable). Parsed
+    # the way the core's load_settings_vars reads it (vars.tcl:3217).
+    variable _prof_bev_cache [dict create]
+    proc _profile_bev {fn} {
+        variable _prof_bev_cache
+        if {$fn eq ""} { return "" }
+        if {[dict exists $_prof_bev_cache $fn]} { return [dict get $_prof_bev_cache $fn] }
+        # The core's homedir is where select_profile looks (vars.tcl:2940);
+        # without it (offline) there is nothing to read -- and no caching.
+        if {![llength [info commands ::homedir]]} { return "" }
+        set bev ""
+        set path [file join [::homedir] profiles "${fn}.tcl"]
+        if {[file isfile $path] && [file readable $path] \
+                && [llength [info commands ::read_binary_file]]} {
+            if {[catch {
+                set data [encoding convertfrom utf-8 [::read_binary_file $path]]
+                if {[string is list $data] && [llength $data] % 2 == 0} {
+                    foreach {k v} $data {
+                        if {$k eq "beverage_type"} { set bev [string tolower [string trim $v]] }
+                    }
+                }
+            } err]} {
+                catch { msg -WARN "MaintenanceTracker: could not read profile '$fn': $err" }
+                set bev ""
+            }
+        }
+        dict set _prof_bev_cache $fn $bev
+        return $bev
+    }
+
+    # v0.24.1 (Pass 30): 1 when `profiles/<fn>.tcl` exists -- the exact
+    # path select_profile loads (vars.tcl:2940) -- 0 when it does not,
+    # "" when unknown (no core homedir: offline only). Checked BEFORE
+    # select_profile: the core resets part of ::settings before its own
+    # file check, and Graphical_Flow_Calibrator's wrapper (its
+    # plugin.tcl:456) drops the core's "-1", so the return value alone
+    # cannot be trusted on a real tablet.
+    proc _profile_file_exists {fn} {
+        if {$fn eq ""} { return 0 }
+        if {![llength [info commands ::homedir]]} { return "" }
+        return [file isfile [file join [::homedir] profiles "${fn}.tcl"]]
+    }
+
+    # v0.24.0: {filename title} when the tracker links a CLEANING
+    # profile (so its runs auto-record it), else "".
+    proc _item_cleaning_profile {id} {
+        set prof [_item_profile $id]
+        if {$prof eq ""} { return "" }
+        if {[_profile_bev [lindex $prof 0]] ne "cleaning"} { return "" }
+        return $prof
     }
 
     # ------------------------------------------------------------------
@@ -758,6 +841,7 @@ namespace eval ::plugins::MaintenanceTracker {
         variable _cycle_state
         variable _cycle_enter
         variable _espresso_enter
+        variable _espresso_profile
         variable settings
         variable water_states
         variable _water_active
@@ -809,6 +893,8 @@ namespace eval ::plugins::MaintenanceTracker {
             # measured here and consumed by _on_flow_complete.
             if {$this eq "Espresso"} {
                 set _espresso_enter $now
+                set _espresso_profile ""
+                catch { set _espresso_profile [string trim $::settings(profile_filename)] }
             }
         } err]} {
             catch { msg "MaintenanceTracker: state-change handler error: $err" }
@@ -822,6 +908,7 @@ namespace eval ::plugins::MaintenanceTracker {
     # would log a phantom error -- so the checks nest instead.
     proc _on_flow_complete {args} {
         variable _espresso_enter
+        variable _espresso_profile
         variable settings
         _invalidate_status_cache
         if {[catch {
@@ -834,10 +921,16 @@ namespace eval ::plugins::MaintenanceTracker {
                     && [string is wide -strict $_espresso_enter] && $_espresso_enter > 0} {
                 set dur [expr {[clock seconds] - $_espresso_enter}]
                 set _espresso_enter 0
+                set fn $_espresso_profile
+                set _espresso_profile ""
+                if {$fn eq ""} {
+                    catch { set fn [string trim $::settings(profile_filename)] }
+                }
                 if {$dur >= $settings(auto_bf_shot_min_s)} {
-                    # A blind-basket backflush run as an espresso profile
-                    # counts as a clean cycle for auto_src purposes.
-                    _record_auto_src clean [clock seconds]
+                    # v0.24.0: trackers linked to THIS profile record;
+                    # none linked -> every Clean-cycle subscriber, as
+                    # before (_record_auto_profile).
+                    _record_auto_profile $fn [clock seconds]
                 }
             }
         } err]} {
@@ -2135,9 +2228,11 @@ namespace eval ::plugins::MaintenanceTracker {
     #   count  -- no auto_src, but its shots/ml counter climbs on its
     #            own (recording the maintenance stays manual);
     #   ""     -- fully manual (days unit, no auto_src).
+    # v0.24.0: a linked CLEANING profile also makes it `record`.
     proc _item_auto_kind {id} {
         variable settings
         if {[_item_auto_src $id] ne ""} { return record }
+        if {[_item_cleaning_profile $id] ne ""} { return record }
         set u ""
         catch { set u [dict get $settings(item_$id) unit] }
         if {$u in {shots ml}} { return count }
@@ -2749,6 +2844,13 @@ namespace eval ::plugins::MaintenanceTracker {
             _set_prof_note [translate "No profile is loaded in the app. Pick one in the profile list first."]
             return 0
         }
+        # v0.24.1: a profile with no file (e.g. loaded from a shot) would
+        # make a link that can never load again.
+        if {[_profile_file_exists $fn] eq "0"} {
+            catch { msg -WARN "MaintenanceTracker: not linking '$fn' to '$id': no profiles/$fn.tcl" }
+            _set_prof_note [translate "No saved file for this profile. Pick it in the profile list first."]
+            return 0
+        }
         set title $fn
         catch {
             set t [string trim $::settings(profile_title)]
@@ -2957,6 +3059,13 @@ namespace eval ::plugins::MaintenanceTracker {
         set busy [_machine_busy]
         if {$busy ne ""} {
             _set_prof_note "[translate {Machine busy}] ($busy). [translate {Wait until it is idle.}]"
+            return 0
+        }
+        # v0.24.1: never hand the core a missing file -- see
+        # _profile_file_exists. Nothing is called, saved or sent.
+        if {[_profile_file_exists $fn] eq "0"} {
+            catch { msg -WARN "MaintenanceTracker: linked profile '$fn' for '$id' has no profiles/$fn.tcl; not loading" }
+            _set_prof_note [translate "Profile file missing. Unlink and link it again."]
             return 0
         }
         set r ""
@@ -3968,7 +4077,17 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         set auto_txt ""
         switch -- [::plugins::MaintenanceTracker::_item_auto_kind $id] {
             record {
-                set auto_txt "[translate {Auto-records on:}] [::plugins::MaintenanceTracker::_auto_src_label [::plugins::MaintenanceTracker::_item_auto_src $id]]"
+                # v0.24.0: name the linked cleaning profile too.
+                set srcs {}
+                set asrc [::plugins::MaintenanceTracker::_item_auto_src $id]
+                if {$asrc ne ""} {
+                    lappend srcs [::plugins::MaintenanceTracker::_auto_src_label $asrc]
+                }
+                set cprof [::plugins::MaintenanceTracker::_item_cleaning_profile $id]
+                if {$cprof ne ""} {
+                    lappend srcs [::plugins::MaintenanceTracker::_short_text [lindex $cprof 1] 36]
+                }
+                set auto_txt "[translate {Auto-records on:}] [join $srcs {, }]"
             }
             count {
                 set u ""
@@ -4684,10 +4803,16 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
         }
         ::plugins::MaintenanceTracker::_refresh_picker $page \
             $::plugins::MaintenanceTracker::edit_icon
-        # v0.20.0: current auto-record source.
-        catch { dui item config $page auto_value \
-            -text [::plugins::MaintenanceTracker::_auto_src_label \
-                $::plugins::MaintenanceTracker::edit_auto] }
+        # v0.20.0: current auto-record source. v0.24.0: "off" on a
+        # tracker linked to a cleaning profile says that profile's runs
+        # still record it.
+        set auto_txt [::plugins::MaintenanceTracker::_auto_src_label \
+            $::plugins::MaintenanceTracker::edit_auto]
+        if {$::plugins::MaintenanceTracker::edit_auto eq "" && [::plugins::MaintenanceTracker::_item_cleaning_profile \
+                $::plugins::MaintenanceTracker::edit_item] ne ""} {
+            set auto_txt [translate "off (linked profile records)"]
+        }
+        catch { dui item config $page auto_value -text $auto_txt }
         # v0.15.0: delete lives here now (customs only), two-step. While
         # armed, Save hides, the button carries the explicit "Yes, ..."
         # label and the message line says exactly what the second tap

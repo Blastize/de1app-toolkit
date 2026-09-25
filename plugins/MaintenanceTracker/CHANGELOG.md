@@ -4,6 +4,45 @@ Entries follow the CLAUDE.md doc cap (~15 lines each; entries that added or
 changed a write capability keep their full write-path description). The long
 pre-trim entries survive in the Desktop archive snapshot of each version.
 
+## v0.24.1 - 2026-09-25 - Pass 30: Load / Link profile refuse a missing profile file - verify.sh PASS 2026-09-25 on run 1 (three page dumps + logcat clean; owner checklist open)
+
+Base: v0.24.0. Owner, 2026-09-25 16:26: Load profile on "Backflush - Water" (linked
+`Cleaning_forward_flush_x5`, no such file) said "Loaded"; the run went out as "Gentle and
+sweet". The core's select_profile resets part of ::settings before its file check
+(vars.tcl:2932-2960) and Graphical_Flow_Calibrator's wrapper drops its "-1", so MT's
+return-value guard never fired and MT saved + sent the half-reset profile.
+
+- New `_profile_file_exists` (`[homedir]/profiles/<fn>.tcl`, the path select_profile loads).
+- Load profile: missing file -> note "Profile file missing. Unlink and link it again.", WARN
+  log; select_profile is not called, nothing saved or sent, the link is kept for relinking.
+- Link profile: a loaded profile without a file is refused ("No saved file for this profile.").
+- pass_30_offline.tcl (GFC-style wrapper stub) FAILS on v0.24.0 (12 checks), PASSES here.
+
+**Safety status: no write behavior added; one path removed (Load no longer saves/sends when
+the file is missing). Profile files are only tested for existence / read.**
+
+## v0.24.0 - 2026-09-25 - Pass 29: linked cleaning profiles auto-record their tracker - verify.sh PASS 2026-09-25 on run 1 (three page dumps + logcat clean; Cafiza card shows AUTO-RECORD on the tablet; owner checklist open)
+
+Base: v0.23.1. Owner, 2026-09-25 16:18: ran "Cleaning/Forward Flush x5 Powder" (loaded from
+"Backflush - Cafiza/Cafetto", linked to it); MT auto-recorded "Backflush - Water" instead. The
+cleaning-profile detector sent every cleaning run to all Clean-cycle trackers and never looked
+at the link (Cafiza's own Auto source was off).
+
+- A finished cleaning-profile run (gates unchanged: auto_record, >= 15 s, beverage_type
+  cleaning) records the trackers linked to the profile loaded at Espresso entry (case-
+  insensitive), and only those, even with Auto off. None linked: every Clean-cycle tracker, as
+  before. Machine Clean / Descale cycles unchanged.
+- Such trackers wear AUTO-RECORD; Detail reads "Auto-records on: <profile>"; Edit's Auto row
+  reads "off (linked profile records)". The profile's beverage type is read from its file
+  (read-only, cached per session).
+- Found, NOT fixed (next pass): Graphical_Flow_Calibrator wraps `::select_profile` and drops
+  its return, so Load profile on a link whose file is gone reports success and sends a
+  half-reset profile. "Backflush - Water" links `Cleaning_forward_flush_x5`, which does not
+  exist -- relink it.
+
+**Safety status: no new write path. Auto events go through the existing `_record_auto` ->
+`save_settings` (settings.tdb only). Profile files are only read; nothing else is touched.**
+
 ## v0.23.1 - 2026-09-23 - Pass 28: stale show hooks no longer repaint - verify.sh PASS 2026-09-23 on run 1 (three page dumps + logcat clean; list page renders in full; owner re-tap of Open Descale open)
 
 Base: v0.23.0. Owner, tablet screenshot 23:09: Open Descale shows the app's
