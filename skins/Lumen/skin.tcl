@@ -5,7 +5,7 @@ package require de1plus 1.0
 #  LUMEN  --  a glass dashboard skin for the Decent DE1
 #
 #  Author:  Blastize
-#  Version: 0.57.5  (LAST SHOT reads the just-saved shot file, not the live grind; see `variable version`)
+#  Version: 0.58.0  (cleaning-profile banner on home; see `variable version`)
 #
 #
 #
@@ -102,7 +102,7 @@ package require de1plus 1.0
 #############################################################################
 
 namespace eval ::lumen {
-    variable version "0.57.5"
+    variable version "0.58.0"
 
     variable C        ;# colour tokens
     array set C {}
@@ -2447,6 +2447,91 @@ proc ::lumen::data::maint_state {} {
     return ""
 }
 
+# 0.58.0 cleaning-profile banner (owner: "if I go back to the Lumen home
+# page, something obvious should say it is set to the cleaning profile").
+# Shown whenever the LOADED profile is a cleaning profile (beverage_type
+# cleaning), however it got loaded. When Maintenance Tracker 0.27.0+ holds
+# a switch-back for it (its Start), the banner says which profile comes
+# back and when, and a tap asks MT to switch back now. Read-only here:
+# MT's pending run is read from its settings(run_restore) dict (keys
+# prev_title clean_fn ts, MT CHANGELOG 0.27.0) behind info-exists gates,
+# and the only call is MT's public cancel_profile_run.
+namespace eval ::lumen {
+    variable cbanner_on 0
+    variable cbanner_fill ""
+}
+proc ::lumen::data::_sep {} { return "  [format %c 0xB7]  " }
+
+proc ::lumen::data::clean_loaded {} {
+    set bev ""
+    catch { set bev [string tolower [string trim $::settings(beverage_type)]] }
+    return [expr {$bev eq "cleaning"}]
+}
+
+# MT's pending switch-back for the LOADED profile as a dict
+# {prev_title back_at started}, or "" (none, MT absent, or malformed).
+proc ::lumen::data::mt_run {} {
+    if { ![info exists ::plugins::MaintenanceTracker::settings(run_restore)] } { return "" }
+    set rr $::plugins::MaintenanceTracker::settings(run_restore)
+    if { ![string is list $rr] || [llength $rr] % 2 != 0 } { return "" }
+    foreach k {prev_title clean_fn ts} { if { ![dict exists $rr $k] } { return "" } }
+    set cur ""
+    catch { set cur [string trim $::settings(profile_filename)] }
+    if { ![string equal -nocase $cur [dict get $rr clean_fn]] } { return "" }
+    set ts [dict get $rr ts]
+    if { ![string is wide -strict $ts] } { return "" }
+    set tmo 600
+    catch {
+        set t $::plugins::MaintenanceTracker::run_timeout_s
+        if { [string is wide -strict $t] && $t > 0 } { set tmo $t }
+    }
+    set started 0
+    catch { if { $::plugins::MaintenanceTracker::run_started } { set started 1 } }
+    return [dict create prev_title [dict get $rr prev_title] \
+        back_at [clock format [expr {$ts + $tmo}] -format %H:%M] started $started]
+}
+
+# The banner's two lines of text; the left one also paints / blanks the
+# banner face (the fav-halo pattern: items are never hidden or shown --
+# dui re-shows every item on page load -- the FILL moves, and the canvas
+# is touched only when the state or the theme colour changes).
+proc ::lumen::data::clean_banner_left {} {
+    set on [clean_loaded]
+    ::lumen::_cbanner_sync $on
+    if { !$on } { return "" }
+    set t [_s ::settings(profile_title)]
+    if { $t eq "" } { set t [_s ::settings(profile_filename)] }
+    if { [string length $t] > 40 } { set t "[string range $t 0 36]..." }
+    return "[translate {CLEANING PROFILE LOADED}][_sep]$t"
+}
+
+proc ::lumen::data::clean_banner_right {} {
+    if { ![clean_loaded] } { return "" }
+    set run [mt_run]
+    if { $run eq "" } { return [translate "Pick your espresso profile before brewing"] }
+    set prev [dict get $run prev_title]
+    if { [string length $prev] > 28 } { set prev "[string range $prev 0 24]..." }
+    if { [dict get $run started] } {
+        return "$prev [translate {comes back after the run}]"
+    }
+    return "$prev [translate {comes back at}] [dict get $run back_at][_sep][translate {Tap to switch back now}]"
+}
+
+proc ::lumen::_cbanner_sync { on } {
+    variable cbanner_on
+    variable cbanner_fill
+    variable C
+    set fill [expr {$on ? $C(danger) : ""}]
+    if { $on == $cbanner_on && $fill eq $cbanner_fill } { return }
+    set cbanner_on $on
+    set cbanner_fill $fill
+    if { [catch {
+        [dui canvas] itemconfigure lumen_cbanner -fill $fill -outline $fill
+    } err] } {
+        msg -ERROR "Lumen: cleaning banner not painted: $err"
+    }
+}
+
 # Two stacked fixed-colour items share the dot's spot; the glyph moves
 # between them (the settings mode-line pattern -- a canvas item's -fill is
 # fixed at creation). U+25CF via format %c: the proven glyph path.
@@ -3499,6 +3584,17 @@ proc ::lumen::machine_busy {} {
 }
 
 namespace eval ::lumen::act { variable fav_send_id "" }
+
+# 0.58.0: the cleaning banner's tap. Only while the banner shows AND MT
+# holds a switch-back for the loaded profile; otherwise the band is inert
+# (no flash -- nothing on the chart legend was ever tappable).
+proc ::lumen::act::clean_banner_tap {} {
+    if { ![::lumen::data::clean_loaded] || [::lumen::data::mt_run] eq "" } { return }
+    if { [info procs ::plugins::MaintenanceTracker::cancel_profile_run] eq "" } { return }
+    if { [catch { ::plugins::MaintenanceTracker::cancel_profile_run } err] } {
+        msg -ERROR "Lumen: Maintenance Tracker switch-back failed: $err"
+    }
+}
 
 proc ::lumen::act::fav_tap { n } {
     variable fav_send_id
@@ -5928,6 +6024,31 @@ proc ::lumen::build_home {} {
         [expr {$L(chart_y) + $L(chart_h) / 2.0}] \
         {[::lumen::data::chart_empty_note]} \
         -font $L(font_body) -fill $C(ink_3) -anchor center -justify center
+
+    # 0.58.0 cleaning-profile banner, over the legend band (the graph is a
+    # Tk window from chart_y + 52 and would cover any canvas item below
+    # that). Face born with no fill (invisible); the accessors paint it and
+    # fill the two white lines while a cleaning profile is loaded. White is
+    # a named colour, not a palette token: never retheme-tagged, it stays
+    # white on danger red in every theme. The tap zone is inert unless MT
+    # holds a switch-back.
+    set bx1 [expr {$L(chart_x) + 10}] ; set bx2 [expr {$L(chart_x) + $L(chart_w) - 10}]
+    set by1 [expr {$L(chart_y) + 6}]  ; set by2 [expr {$L(chart_y) + 48}]
+    set bmid [expr {($by1 + $by2) / 2.0}]
+    rounded_rect $p [X $bx1] [Y $by1] [X $bx2] [Y $by2] [Y 28] \
+        -fill "" -outline "" -tags lumen_cbanner
+    uplevel #0 [list dui add variable $p [X [expr {$bx1 + $L(pad_x)}]] [Y $bmid] \
+        -textvariable {[::lumen::data::clean_banner_left]} \
+        -font $L(font_primary) -fill white -anchor w -justify left \
+        -tags [_tags "" "" lumen_cbanner_l]]
+    uplevel #0 [list dui add variable $p [X [expr {$bx2 - $L(pad_x)}]] [Y $bmid] \
+        -textvariable {[::lumen::data::clean_banner_right]} \
+        -font $L(font_body) -fill white -anchor e -justify right \
+        -tags [_tags "" "" lumen_cbanner_r]]
+    # style none: no flash (the banner switching off is the answer), the
+    # 0.57.3 favorite-slot precedent.
+    tap $p $bx1 $by1 [expr {$bx2 - $bx1}] [expr {$by2 - $by1}] \
+        ::lumen::act::clean_banner_tap "Switch back" none
 
     ####################################################################
     #  Next shot / bean strip   (data wired in Pass 2)

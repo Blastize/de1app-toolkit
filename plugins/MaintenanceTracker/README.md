@@ -1,15 +1,21 @@
 # Maintenance Tracker
 
 **Backflush, descale, gaskets, burrs, water filter, bottle level. Counted from your shots, recorded with one tap.**
-Version 0.24.1 · a plugin for the Decent DE1app · by Blastize
+Version 0.28.0 · a plugin for the Decent DE1app · by Blastize
 
 ![The tracker list: every item with its counter and a green, amber or red bar](docs/trackers.png)
 
 **Everything on one page.** Each tracker shows shots or days since it was last done and a bar that goes amber, then red. Backflush and descale record themselves when the machine runs a real clean or descale cycle.
 
-![Tracker detail: the record history and a link to the app's Descale, with Unlink and Open Descale](docs/detail.png)
+![Tracker detail: the record history, a linked cleaning profile and a green Start button](docs/detail.png)
 
-**Tracker detail.** The history of records, undo for the last one, and a link: a profile (tap Load profile and it is on the machine, ready for the run), or the app's own Descale or Clean action.
+**Tracker detail.** The history of records, Record and undo for the last one, and the tracker's link: a profile, or the app's own Descale or Clean action (links are set on the Edit page). The green Start button opens the steps.
+
+![Steps: numbered instructions for a water backflush, with Mark done and a green Start button](docs/steps.png)
+
+**Steps.** Numbered instructions for the job and one green button to do it. Edit steps (top right) lets you reword, add, remove and reorder them. For a cleaning profile, Start loads it, tells you to press the espresso button on the group head, and puts your espresso profile back when the run is done. Descale and Clean links open the app's own actions; anything else is marked done.
+
+![Edit steps: numbered steps with Up, Down and Remove, and Cancel, Reset to default, Add step and a green Save](docs/step_editor.png)
 
 ![New Tracker: name, count by days, shots or ml, threshold and icon](docs/new_tracker.png)
 
@@ -44,7 +50,7 @@ measured from the machine's own dispense reports) — plus your own
 **custom trackers** (a second grinder, a water tank clean, anything)
 with their own name, unit and threshold.
 
-Author: **Blastize** · Current version: **0.24.1** (Pass 30)
+Author: **Blastize** · Current version: **0.28.0** (Pass 34)
 
 ## What it will do (target design)
 
@@ -58,8 +64,42 @@ Author: **Blastize** · Current version: **0.24.1** (Pass 30)
 - A small public API (`status_summary`, `open_page`) lets the Lumen skin
   show a notification dot near a maintenance icon.
 
-## What it does right now (v0.24.1 — Pass 30)
+## What it does right now (v0.28.0 — Pass 34)
 
+- **Your own steps** (v0.28.0): **Edit steps** (top right of a tracker's
+  Steps page) lists its steps with **Up**, **Down** and **Remove**; tap a
+  step to rewrite it, **Add step** for a new one (up to eight, one line
+  each). Nothing changes until **Save**; **Cancel** drops the edits and
+  **Reset to default** brings back the built-in steps. The "tap Start"
+  line keeps following the tracker's link until you rewrite it.
+- **Start, then back to your espresso profile** (v0.27.0): on a tracker
+  linked to a cleaning profile, the Steps page's green **Start** remembers
+  the profile you have loaded, loads the cleaning profile and shows
+  "press the espresso button on the group head" (on a machine with a
+  group head controller only the group head can start espresso). Your
+  profile comes back by itself a few seconds after the run, when you tap
+  **Switch back now**, 10 minutes after Start if the run never began, or
+  at the next app start. It never switches while the machine is busy, and
+  if you picked another profile in the meantime, that one stays. Start
+  refuses when your current profile has unsaved changes.
+- **Step-by-step instructions** (v0.26.0): every tracker's Detail page has a
+  green **Start** button that opens its Steps page: numbered instructions
+  and one green button for the job: **Load profile**, **Open Descale** or
+  **Start Clean** for a linked tracker, **Mark done** otherwise (a linked
+  tracker has Mark done beside it too). The steps come from a built-in
+  library matched to the tracker's name (backflush with detergent or water,
+  Rinza steam wand soak, descale, drip tray, water tank, drain, group head,
+  burrs, water filter, water bottle, ball-joint grease, and a generic set),
+  and the "how to start" step follows the tracker's link. Editing steps
+  comes later.
+- **Tidier Detail page, links on the Edit page** (v0.25.0): Link profile,
+  Link Descale, Link Clean and Unlink moved to the Edit page, beside the
+  name, and only take effect when you tap Save (Cancel undoes a stray
+  Unlink). Detail shows the link in full with its one action, has a green
+  **Record** button that comes back to Detail, and Undo Last Record is a
+  normal button that turns red only after the first tap.
+- **Worst first, properly** (v0.25.0): inside each colour, the tracker
+  closest to due comes first.
 - **Missing profile files are caught** (v0.24.1): Load profile first checks the
   linked profile's file still exists in `profiles/`; if not, it says "Profile
   file missing. Unlink and link it again." and leaves the app's profile alone.
@@ -181,7 +221,8 @@ Author: **Blastize** · Current version: **0.24.1** (Pass 30)
   ships), the state word in color, a right-aligned counter, a segmented
   wear bar with a tick at the amber threshold, and the last-done date.
   The list sorts **worst first** (overdue → due soon → OK → never
-  recorded), so what needs attention is always on page one.
+  recorded; within each, closest to due first), so what needs attention
+  is always on page one.
 - **Icon picker**: when adding (or editing) a tracker you pick its icon
   from **two rows of twelve** — wrench, hot mug, beans, filter,
   droplet, drip-tray grate, O-ring, steam wand, faucet, water tank,
@@ -240,7 +281,7 @@ Author: **Blastize** · Current version: **0.24.1** (Pass 30)
 - **Tapping a card's text area** (anywhere left of its Record button)
   opens a per-item **Detail page**: current state and counter, the 5
   newest events with date and how they were recorded, and — when at
-  least one event exists — an **Undo Last Record** button (red). Undo
+  least one event exists — an **Undo Last Record** button (red once armed). Undo
   asks for confirmation on the same page, showing exactly which record
   will be removed and what the counter falls back to; confirming pops
   just that one event and returns to the card list.

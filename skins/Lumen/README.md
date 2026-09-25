@@ -1,7 +1,7 @@
 # Lumen
 
 **A glass dashboard home screen for the Decent DE1: grind recommendation, last shot, shot graph and next-shot beans, without opening Settings.**
-Version 0.57.5 · a skin for the Decent DE1app · by Blastize
+Version 0.58.0 · a skin for the Decent DE1app · by Blastize
 
 ![The Lumen home screen in a custom theme: grind tile, last shot, live graph, next-shot strip, and the taskbar with three favorite profile names, the loaded one glowing](docs/home_custom_theme.png)
 
@@ -10,6 +10,10 @@ Version 0.57.5 · a skin for the Decent DE1app · by Blastize
 ![The default dark theme home screen](docs/screenshot.png)
 
 **Dark, the default.** Light, the presets and your own colours are behind the THEME row's Change button.
+
+![A red banner over the graph card: CLEANING PROFILE LOADED, Cleaning/Forward Flush x5; Gentle and sweet comes back at 18:31, tap to switch back now](docs/cleaning_banner.png)
+
+**Never brew on the cleaning profile.** While a cleaning profile is loaded, a red banner says so. After Maintenance Tracker's Start it also says when your espresso profile comes back, and one tap brings it back now.
 
 ![Grind Advisor's after-shot popup on Lumen's glass, in the theme's colours](docs/glass_popup.png)
 
@@ -210,6 +214,7 @@ backdrop and let the shadow do the separating.
 | Taskbar (top) | Live clock over the date, and the water left in the tank in mL — amber under 300 ml, blank when no machine is connected | The five icons: moon (far left, alone) = sleep; at the right, mug = Drink Menu, wrench = MaintenanceTracker's card list, gear = Lumen settings, DE1 side view = the stock app settings |
 | Favorite profiles (taskbar, three slots across the middle) | Each slot shows its profile's name, centred and cut with an ellipsis when long: a dim `+` is an empty slot, grey is a set one, and the loaded profile's slot reads in crema over a soft crema halo | Tap an empty slot to store the profile loaded now; tap a set slot to load its profile (refused while the machine is running). Put your backflush profile in one and a cleaning run is one tap plus the GHC button. "Clear favorite profiles" on the Lumen settings page empties all three |
 | Maintenance dot (at the wrench) | Amber when a maintenance item is due soon, red when one is overdue — driven by the MaintenanceTracker plugin's status; blank when all is well or the plugin is absent | — |
+| Cleaning banner (top of the graph card, 0.58.0) | A red strip while a cleaning profile is loaded: "CLEANING PROFILE LOADED" and its name, plus which espresso profile comes back and when (after Maintenance Tracker's Start), or "Pick your espresso profile before brewing" | While Maintenance Tracker holds a switch-back: switch back to the espresso profile now |
 | Grind | GrindAdvisor's next setting for the loaded bag, the change from the last one, method, confidence and shot count. A bag with no shots yet shows the **starting estimate** instead (GrindAdvisor 3.13.0): STARTING ESTIMATE header, `~` before the number, an Estimate chip, and which bags it was borrowed from | Opens GrindAdvisor's settings (target time, rounding, history) |
 | Shot analysis (on the grind tile) | — | Opens GrindAdvisor's result popup |
 | Curve (on the grind tile) | — | Opens GrindAdvisor's Calibration Curve directly |

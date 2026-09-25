@@ -1,6 +1,29 @@
 #
 # Maintenance Tracker -- DE1app plugin manifest
 #
+# Pass 34 (v0.28.0): step editor. The Steps page's Edit steps opens a
+# page to edit, add, remove and reorder a tracker's steps (DrinkMenu's
+# Method pattern: a draft, written once by Save into the tracker's own
+# `steps`; Reset to default returns it to the built-in template).
+#
+# Pass 33 (v0.27.0): Start on a profile-linked tracker remembers the
+# loaded espresso profile, loads the cleaning profile and asks for the
+# group head's espresso button; the espresso profile comes back after the
+# run, on Switch back now, after 10 min unused, or at the next app start.
+# New automatic write: the switch-back's select_profile + save + send.
+#
+# Pass 32 (v0.26.0): every tracker gets a Steps page -- numbered
+# instructions (built-in templates picked by keywords in its name,
+# "{start}" resolved for its link) and one green action: Load profile,
+# Open Descale, Start Clean or Mark done. Detail's Start opens it. No
+# new write behavior.
+#
+# Pass 31 (v0.25.0): tracker list sorts worst first by how close each
+# tracker is to due (was: by status only, creation order inside it).
+# Detail: Link / Unlink moved to the Edit page (a draft, applied on Save),
+# the linked profile shows in full, a green Record button, Undo demoted
+# to a normal button that turns red only when armed. Same write paths.
+#
 # Pass 30 (v0.24.1): Load profile and Link profile check that
 # profiles/<fn>.tcl exists before touching the app's profile. The core
 # resets part of the profile before its own check, and a wrapper from
@@ -220,7 +243,7 @@ namespace eval ::plugins::MaintenanceTracker {
     variable contact     "n/a"
     # Bare number, no "v" prefix (ShotHistoryEditor v0.6.4 lesson: the
     # startup log message prepends one).
-    variable version     "0.24.1"
+    variable version     "0.28.0"
     variable name        "Maintenance Tracker"
     variable description "Tracks machine maintenance (backflush, descale, gasket, burrs, water filter, water bottle level, plus your own custom trackers) from user-recorded events and the machine's own dispense reports. Read-only by design; writes only its own settings file."
 
@@ -293,7 +316,10 @@ proc ::plugins::MaintenanceTracker::main {} {
             set hooked 1
         }
     }
-    catch { msg "MaintenanceTracker: started v$::plugins::MaintenanceTracker::version (Pass 30: Load / Link profile refuse a missing profile file; links to a profile or the app's Descale / Clean, SDB read-only)" }
+    # v0.27.0: a switch-back left pending by an app restart comes back
+    # once the profile and the connection have settled.
+    after 20000 ::plugins::MaintenanceTracker::_resume_pending_run
+    catch { msg "MaintenanceTracker: started v$::plugins::MaintenanceTracker::version (Pass 34: step editor -- edit, add, remove and reorder a tracker's steps; links to a profile or the app's Descale / Clean, SDB read-only)" }
     return
 }
 

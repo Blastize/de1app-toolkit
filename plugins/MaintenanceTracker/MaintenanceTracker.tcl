@@ -267,6 +267,8 @@ namespace eval ::plugins::MaintenanceTracker {
         # firmware's CleanSoak substate alone is a fixed 60s
         # (de1app-core/machine.tcl:630); descales run many minutes.
         if {![info exists settings(auto_record)]}            { set settings(auto_record) 1 }
+        # v0.27.0: a pending switch-back ("" = none), see start_profile_run.
+        if {![info exists settings(run_restore)]}            { set settings(run_restore) "" }
         if {![info exists settings(auto_clean_min_s)]}       { set settings(auto_clean_min_s) 90 }
         if {![info exists settings(auto_descale_min_s)]}     { set settings(auto_descale_min_s) 300 }
         if {![info exists settings(auto_bf_shot_min_s)]}     { set settings(auto_bf_shot_min_s) 15 }
@@ -889,6 +891,8 @@ namespace eval ::plugins::MaintenanceTracker {
                 set _cycle_state $this
                 set _cycle_enter $now
             }
+            # v0.27.0: the profile-run switch-back watches Espresso too.
+            _run_on_state $this $prev
             # Espresso timing for the cleaning-profile backflush check,
             # measured here and consumed by _on_flow_complete.
             if {$this eq "Espresso"} {
@@ -935,6 +939,11 @@ namespace eval ::plugins::MaintenanceTracker {
             }
         } err]} {
             catch { msg "MaintenanceTracker: flow-complete handler error: $err" }
+        }
+        # v0.27.0: AFTER the auto-record above (it reads the cleaning
+        # profile's beverage_type) -- schedule the switch-back.
+        if {[catch { _run_on_flow_complete } err]} {
+            catch { msg "MaintenanceTracker: switch-back scheduling error: $err" }
         }
         return
     }
@@ -1352,6 +1361,7 @@ namespace eval ::plugins::MaintenanceTracker {
             MaintenanceTracker_confirm MaintenanceTracker_confirm_burr
             MaintenanceTracker_confirm_bottle MaintenanceTracker_detail
             MaintenanceTracker_add MaintenanceTracker_edit
+            MaintenanceTracker_steps MaintenanceTracker_stepedit
         }
         foreach p $all_pages {
             catch { dui item config $p page_bg -fill $L(page_bg) -outline $L(page_bg) }
@@ -1397,6 +1407,11 @@ namespace eval ::plugins::MaintenanceTracker {
             MaintenanceTracker_edit icon_label text_body
             MaintenanceTracker_edit auto_label text_body
             MaintenanceTracker_edit auto_value text_hi
+            MaintenanceTracker_edit link_value text_body
+            MaintenanceTracker_steps page_title text_hi
+            MaintenanceTracker_steps steps_sub text_mut
+            MaintenanceTracker_stepedit page_title text_hi
+            MaintenanceTracker_stepedit se_sub text_mut
             MaintenanceTracker_edit edit_note text_mut
             MaintenanceTracker_diagnostics page_title text_hi
             MaintenanceTracker_diagnostics subtitle text_mut
@@ -1454,10 +1469,16 @@ namespace eval ::plugins::MaintenanceTracker {
             MaintenanceTracker_confirm {mt_cancel bar_confirm}
             MaintenanceTracker_confirm_burr {minus100 minus10 plus10 plus100 mt_cancel bar_confirm}
             MaintenanceTracker_confirm_bottle {minus1000 minus100 plus100 plus1000 mt_cancel bar_confirm}
-            MaintenanceTracker_detail {btn_edit bar_left mt_hide mt_link mt_linkds mt_linkcl mt_unlink mt_load}
+            MaintenanceTracker_detail {btn_edit bar_left mt_hide bar_undo mt_record}
+            MaintenanceTracker_steps {mt_sback mt_sdone mt_sedit}
+            MaintenanceTracker_stepedit {mt_secancel mt_sereset mt_seadd mt_sefcancel
+                                         mt_seup0 mt_seup1 mt_seup2 mt_seup3 mt_seup4 mt_seup5 mt_seup6 mt_seup7
+                                         mt_sedn0 mt_sedn1 mt_sedn2 mt_sedn3 mt_sedn4 mt_sedn5 mt_sedn6 mt_sedn7
+                                         mt_serm0 mt_serm1 mt_serm2 mt_serm3 mt_serm4 mt_serm5 mt_serm6 mt_serm7}
             MaintenanceTracker_add {btn_auto unit_toggle step0 step1 step2 step3
                                     hid0 hid1 hid2 hid3 hid4 hid5 mt_cancel mt_save}
-            MaintenanceTracker_edit {auto_toggle step0 step1 step2 step3 mt_cancel mt_save}
+            MaintenanceTracker_edit {auto_toggle step0 step1 step2 step3 mt_cancel mt_save
+                                     mt_elink mt_elinkds mt_elinkcl mt_eunlink}
             MaintenanceTracker_diagnostics {mt_back}
         }
         foreach {p tags} $btn_list {
@@ -1644,6 +1665,14 @@ namespace eval ::plugins::MaintenanceTracker {
                 fill $L(col_red) disabledfill $L(btn_disabled_fill)]
             dui aspect set -theme default -type dbutton_label -style mt_btn_danger [list \
                 fill white disabledfill "#999999"]
+            # v0.25.0: primary style -- the page's ONE go-ahead action
+            # (Detail's Record), state-green in both themes so it reads
+            # at a glance. No pressfill (the flash would stick).
+            dui aspect set -theme default -type dbutton -style mt_btn_primary [list \
+                shape round radius $L(btn_radius) \
+                fill $L(col_ok) disabledfill $L(btn_disabled_fill)]
+            dui aspect set -theme default -type dbutton_label -style mt_btn_primary [list \
+                fill white disabledfill "#999999"]
         }
     }
 
@@ -1697,6 +1726,8 @@ namespace eval ::plugins::MaintenanceTracker {
         dui page add MaintenanceTracker_detail -namespace true -theme default -type fpdialog
         dui page add MaintenanceTracker_add -namespace true -theme default -type fpdialog
         dui page add MaintenanceTracker_edit -namespace true -theme default -type fpdialog
+        dui page add MaintenanceTracker_steps -namespace true -theme default -type fpdialog
+        dui page add MaintenanceTracker_stepedit -namespace true -theme default -type fpdialog
         return MaintenanceTracker_settings
     }
 
@@ -2079,6 +2110,39 @@ namespace eval ::plugins::MaintenanceTracker {
         }
     }
 
+    # v0.25.0 (Pass 31): card order. State rank first (red, amber, ok,
+    # unknown, never recorded), then -- within a rank -- how far along
+    # the tracker is (value / threshold, highest first), then the
+    # original order. Until v0.24.1 a rank kept creation order, so a
+    # 71%-due tracker sat under a 5% one. lsort is stable (merge sort),
+    # so sorting by the minor keys first and the rank last nests them.
+    proc _worst_first_ids {summary ids} {
+        set rows {}
+        set idx 0
+        foreach id $ids {
+            set st unset
+            set frac 0.0
+            if {[dict exists $summary items $id]} {
+                set e [dict get $summary items $id]
+                if {[dict exists $e state]} { set st [dict get $e state] }
+                if {[dict exists $e value] && [dict exists $e threshold]} {
+                    set v [dict get $e value]
+                    set t [dict get $e threshold]
+                    if {[string is double -strict $v] && [string is double -strict $t] && $t > 0} {
+                        set frac [expr {double($v) / $t}]
+                    }
+                }
+            }
+            lappend rows [list [_state_rank $st] $frac $idx $id]
+            incr idx
+        }
+        set rows [lsort -real -decreasing -index 1 $rows]
+        set rows [lsort -integer -index 0 $rows]
+        set out {}
+        foreach r $rows { lappend out [lindex $r 3] }
+        return $out
+    }
+
     # Human-readable item names, shared by all pages.
     variable item_labels {
         backflush     "Backflush"
@@ -2262,11 +2326,16 @@ namespace eval ::plugins::MaintenanceTracker {
     # ------------------------------------------------------------------
 
     variable pending_item ""
+    # v0.25.0: where Record's confirm returns (the list, or Detail when
+    # Record was tapped there). Reset by every return and by the list
+    # page's show (stuck-flag rule).
+    variable record_return MaintenanceTracker_settings
     variable burr_offset 0
     variable bottle_size 18900
 
-    proc request_record {id} {
+    proc request_record {id {from MaintenanceTracker_settings}} {
         variable pending_item
+        variable record_return
         variable burr_offset
         variable bottle_size
         variable settings
@@ -2275,6 +2344,8 @@ namespace eval ::plugins::MaintenanceTracker {
             return
         }
         set pending_item $id
+        set record_return MaintenanceTracker_settings
+        if {$from eq "MaintenanceTracker_detail"} { set record_return MaintenanceTracker_detail }
         if {$id eq "burr_install"} {
             set burr_offset 0
             open_page MaintenanceTracker_confirm_burr
@@ -2306,7 +2377,16 @@ namespace eval ::plugins::MaintenanceTracker {
     proc cancel_record {} {
         variable pending_item
         set pending_item ""
-        _return_to_page MaintenanceTracker_settings
+        _return_to_page [_take_record_return]
+    }
+
+    # v0.25.0: the confirm pages' way back, consumed once.
+    proc _take_record_return {} {
+        variable record_return
+        set r $record_return
+        set record_return MaintenanceTracker_settings
+        if {$r ne "MaintenanceTracker_detail"} { set r MaintenanceTracker_settings }
+        return $r
     }
 
     proc adjust_burr_offset {delta} {
@@ -2328,7 +2408,7 @@ namespace eval ::plugins::MaintenanceTracker {
         variable settings
         if {$pending_item eq "" || ![info exists settings(item_$pending_item)]} {
             catch { msg "MaintenanceTracker: nothing pending to record" }
-            _return_to_page MaintenanceTracker_settings
+            _return_to_page [_take_record_return]
             return
         }
         set d $settings(item_$pending_item)
@@ -2366,7 +2446,7 @@ namespace eval ::plugins::MaintenanceTracker {
         catch { msg "MaintenanceTracker: recorded '$pending_item' done now" }
         set pending_item ""
         _invalidate_status_cache
-        _return_to_page MaintenanceTracker_settings
+        _return_to_page [_take_record_return]
     }
 
     # v0.5.0: pop the newest event off an item's log; last_done falls back
@@ -2627,6 +2707,11 @@ namespace eval ::plugins::MaintenanceTracker {
     variable edit_error ""
     # v0.15.0: two-step delete lives on the Edit page (customs only).
     variable edit_delete_armed 0
+    # v0.25.0 (Pass 31): the link, as a DRAFT in _item_link's shape
+    # ("" | descale | clean | {profile fn title}). Link / Unlink only
+    # change the draft; Save writes it with everything else, Cancel
+    # drops it -- an accidental Unlink is one Cancel away from undone.
+    variable edit_link ""
 
     proc open_edit {id} {
         variable edit_item
@@ -2635,6 +2720,7 @@ namespace eval ::plugins::MaintenanceTracker {
         variable edit_unit
         variable edit_icon
         variable edit_auto
+        variable edit_link
         variable edit_error
         variable edit_delete_armed
         variable picker_icons
@@ -2666,9 +2752,85 @@ namespace eval ::plugins::MaintenanceTracker {
             if {$ic ne ""} { set edit_icon $ic }
         }
         set edit_auto [_item_auto_src $id]
+        set edit_link [_item_link $id]
         set edit_error ""
         open_page MaintenanceTracker_edit
         return 1
+    }
+
+    # v0.25.0: Edit-page link controls (draft only, no save here). The
+    # profile capture applies link_profile's checks: a loaded profile,
+    # with a file (v0.24.1).
+    proc edit_link_profile {} {
+        variable edit_link
+        variable edit_error
+        variable edit_delete_armed
+        if {$edit_delete_armed} { return 0 }
+        set fn ""
+        catch { set fn [string trim $::settings(profile_filename)] }
+        if {$fn eq ""} {
+            set edit_error [translate "No profile is loaded in the app. Pick one in the profile list first."]
+            return 0
+        }
+        if {[_profile_file_exists $fn] eq "0"} {
+            set edit_error [translate "No saved file for this profile. Pick it in the profile list first."]
+            return 0
+        }
+        set title $fn
+        catch {
+            set t [string trim $::settings(profile_title)]
+            if {$t ne ""} { set title $t }
+        }
+        set edit_link [list profile [string range $fn 0 127] [string range $title 0 79]]
+        set edit_error ""
+        return 1
+    }
+
+    proc edit_link_kind {kind} {
+        variable edit_link
+        variable edit_error
+        variable edit_delete_armed
+        if {$edit_delete_armed || $kind ni {descale clean}} { return 0 }
+        set edit_link $kind
+        set edit_error ""
+        return 1
+    }
+
+    proc edit_unlink {} {
+        variable edit_link
+        variable edit_error
+        variable edit_delete_armed
+        if {$edit_delete_armed} { return 0 }
+        set edit_link ""
+        set edit_error ""
+        return 1
+    }
+
+    # Human text for a link draft (Edit page value).
+    proc _link_text {link} {
+        switch -- [lindex $link 0] {
+            profile { return [_short_text [lindex $link 2] 40] }
+            descale { return [translate "Descale (app)"] }
+            clean   { return [translate "Clean cycle (app)"] }
+        }
+        return [translate "none"]
+    }
+
+    # Writes a link draft into an item dict (pure; edit_save saves).
+    proc _apply_link {d link} {
+        dict unset d profile_fn
+        dict unset d profile_title
+        dict unset d link_kind
+        switch -- [lindex $link 0] {
+            profile {
+                dict set d profile_fn [lindex $link 1]
+                dict set d profile_title [lindex $link 2]
+            }
+            descale - clean {
+                dict set d link_kind [lindex $link 0]
+            }
+        }
+        return $d
     }
 
     # v0.20.0: cycle the Edit page's auto-record source through the
@@ -2710,6 +2872,7 @@ namespace eval ::plugins::MaintenanceTracker {
         variable edit_threshold
         variable edit_icon
         variable edit_auto
+        variable edit_link
         variable edit_error
         variable edit_delete_armed
         variable picker_icons
@@ -2747,9 +2910,15 @@ namespace eval ::plugins::MaintenanceTracker {
         if {$edit_auto in {{} clean descale}} {
             dict set d auto_src $edit_auto
         }
+        # v0.25.0: the link draft (Link / Unlink moved here from Detail).
+        set old_link [_item_link $id]
+        if {$edit_link ne $old_link} {
+            set d [_apply_link $d $edit_link]
+            _disarm_clean
+        }
         set settings(item_$id) $d
         save_settings
-        catch { msg "MaintenanceTracker: edited '$id' ($label, [dict get $d threshold] [dict get $d unit], [dict get $d icon], auto '[dict get $d auto_src]')" }
+        catch { msg "MaintenanceTracker: edited '$id' ($label, [dict get $d threshold] [dict get $d unit], [dict get $d icon], auto '[dict get $d auto_src]', link '[lindex $edit_link 0] [lindex $edit_link 1]')" }
         set edit_error ""
         # The threshold feeds the state math -- recompute on return.
         _invalidate_status_cache
@@ -2816,9 +2985,17 @@ namespace eval ::plugins::MaintenanceTracker {
     proc _clear_prof_note {} {
         variable prof_note
         set prof_note ""
-        if {[_page_is_current MaintenanceTracker_detail]} {
-            if {[catch { ::dui::pages::MaintenanceTracker_detail::refresh } err]} {
-                catch { msg "MaintenanceTracker: detail refresh failed: $err" }
+        _refresh_action_pages
+    }
+
+    # v0.26.0: the pages that show action notes / the Clean arm (Detail
+    # and, since Pass 32, Steps) repaint only when on screen.
+    proc _refresh_action_pages {} {
+        foreach pg {MaintenanceTracker_detail MaintenanceTracker_steps} {
+            if {[_page_is_current $pg]} {
+                if {[catch { ::dui::pages::${pg}::refresh } err]} {
+                    catch { msg "MaintenanceTracker: $pg refresh failed: $err" }
+                }
             }
         }
     }
@@ -2960,11 +3137,7 @@ namespace eval ::plugins::MaintenanceTracker {
         variable clean_arm_id
         set clean_arm_id ""
         _disarm_clean
-        if {[_page_is_current MaintenanceTracker_detail]} {
-            if {[catch { ::dui::pages::MaintenanceTracker_detail::refresh } err]} {
-                catch { msg "MaintenanceTracker: detail refresh failed: $err" }
-            }
-        }
+        _refresh_action_pages
     }
 
     # Leave this plugin's own dialog stack, one close_dialog per level
@@ -3049,34 +3222,23 @@ namespace eval ::plugins::MaintenanceTracker {
         return "started"
     }
 
-    # Public: load the tracker's linked profile into the app (the
-    # machine receives it on the debounced send). Returns 1 on success.
-    proc load_linked_profile {id} {
+    # v0.27.0: the ONE way this plugin changes the app's profile (Load,
+    # Start, and the automatic switch-back all come here): file check
+    # first (v0.24.1), the core's select_profile, then the debounced
+    # save + send to the machine (DrinkMenu v1.16.0's To-machine tap).
+    # Returns "" on success, else the reason for the page's message line.
+    proc _switch_profile {fn} {
         variable prof_send_id
-        set prof [_item_profile $id]
-        if {$prof eq ""} { return 0 }
-        lassign $prof fn title
-        set busy [_machine_busy]
-        if {$busy ne ""} {
-            _set_prof_note "[translate {Machine busy}] ($busy). [translate {Wait until it is idle.}]"
-            return 0
-        }
-        # v0.24.1: never hand the core a missing file -- see
-        # _profile_file_exists. Nothing is called, saved or sent.
         if {[_profile_file_exists $fn] eq "0"} {
-            catch { msg -WARN "MaintenanceTracker: linked profile '$fn' for '$id' has no profiles/$fn.tcl; not loading" }
-            _set_prof_note [translate "Profile file missing. Unlink and link it again."]
-            return 0
+            return [translate "Profile file missing. Unlink and link it again."]
         }
         set r ""
         if {[catch { set r [::select_profile $fn] } err]} {
             catch { msg "MaintenanceTracker: select_profile '$fn' failed: $err" }
-            _set_prof_note [translate "Could not load the profile (see the log)."]
-            return 0
+            return [translate "Could not load the profile (see the log)."]
         }
         if {$r eq "-1"} {
-            _set_prof_note [translate "Profile file missing. Unlink and link it again."]
-            return 0
+            return [translate "Profile file missing. Unlink and link it again."]
         }
         catch { after cancel $prof_send_id }
         set prof_send_id [after 1000 {
@@ -3087,8 +3249,659 @@ namespace eval ::plugins::MaintenanceTracker {
                 catch { msg "MaintenanceTracker: could not send the machine settings: $err" }
             }
         }]
+        return ""
+    }
+
+    # Public: load the tracker's linked profile into the app (the
+    # machine receives it on the debounced send). Returns 1 on success.
+    proc load_linked_profile {id} {
+        set prof [_item_profile $id]
+        if {$prof eq ""} { return 0 }
+        lassign $prof fn title
+        set busy [_machine_busy]
+        if {$busy ne ""} {
+            _set_prof_note "[translate {Machine busy}] ($busy). [translate {Wait until it is idle.}]"
+            return 0
+        }
+        # v0.24.1: never hand the core a missing file (logged here, the
+        # check itself lives in _switch_profile).
+        if {[_profile_file_exists $fn] eq "0"} {
+            catch { msg -WARN "MaintenanceTracker: linked profile '$fn' for '$id' has no profiles/$fn.tcl; not loading" }
+        }
+        set why [_switch_profile $fn]
+        if {$why ne ""} {
+            _set_prof_note $why
+            return 0
+        }
         catch { msg "MaintenanceTracker: loaded linked profile '$fn' for '$id'" }
         _set_prof_note "[translate {Loaded:}] $title. [translate {Press the espresso button on the machine.}]"
+        return 1
+    }
+
+    # ------------------------------------------------------------------
+    #  Profile run with switch-back (Pass 33, v0.27.0). Start on a
+    #  profile-linked tracker's Steps page remembers the loaded (espresso)
+    #  profile, loads the cleaning profile and asks for the group head's
+    #  espresso button (a GHC machine refuses tablet-started espresso:
+    #  de1app-core machine.tcl:936, vars.tcl:3476). The remembered profile
+    #  comes back:
+    #    - 5 s after the cleaning run's after_flow_complete (the core
+    #      saves the shot file and MT auto-records in that same event, so
+    #      the profile must still be the cleaning one then), or 20 s after
+    #      the Espresso state ends if the run never reached the pour;
+    #    - on "Switch back now";
+    #    - 10 minutes after Start if the group head was never pressed;
+    #    - on the next app start, if the app restarted in between.
+    #  Never while the machine is busy (retries every 5 s), and only when
+    #  the cleaning profile is still the loaded one -- a profile the user
+    #  picked meanwhile is theirs, and the switch-back is dropped. The
+    #  pending switch-back is persisted in settings(run_restore) so a
+    #  restart cannot strand the cleaning profile.
+    # ------------------------------------------------------------------
+
+    variable run_timeout_s 600
+    variable run_started 0
+    variable _run_timeout_id ""
+    variable _run_restore_id ""
+    variable _run_retry_id ""
+    variable _run_tries 0
+
+    # The pending switch-back as a dict, or "" when none.
+    proc _run_pending {} {
+        variable settings
+        set rr ""
+        catch { set rr $settings(run_restore) }
+        if {![string is list $rr] || [llength $rr] % 2 != 0 || ![dict exists $rr prev_fn] \
+                || ![dict exists $rr clean_fn]} {
+            return ""
+        }
+        return $rr
+    }
+
+    proc _run_pending_for {id} {
+        set rr [_run_pending]
+        if {$rr eq ""} { return 0 }
+        return [expr {[dict exists $rr item] && [dict get $rr item] eq $id}]
+    }
+
+    proc _loaded_profile {} {
+        set fn ""
+        catch { set fn [string trim $::settings(profile_filename)] }
+        return $fn
+    }
+
+    proc _cancel_run_timers {} {
+        variable _run_timeout_id
+        variable _run_restore_id
+        variable _run_retry_id
+        foreach v {_run_timeout_id _run_restore_id _run_retry_id} {
+            set idv [set $v]
+            if {$idv ne ""} { catch { after cancel $idv } }
+            set $v ""
+        }
+    }
+
+    proc _clear_run {} {
+        variable settings
+        variable run_started
+        variable _run_tries
+        _cancel_run_timers
+        set run_started 0
+        set _run_tries 0
+        set settings(run_restore) ""
+        save_settings
+    }
+
+    # Public: the Steps page's Start on a profile-linked tracker. Returns
+    # "armed" or "refused" (the reason lands in the message line).
+    proc start_profile_run {id} {
+        variable settings
+        variable run_started
+        variable run_timeout_s
+        variable _run_timeout_id
+        set prof [_item_profile $id]
+        if {$prof eq ""} { return "refused" }
+        lassign $prof clean_fn clean_title
+        set busy [_machine_busy]
+        if {$busy ne ""} {
+            _set_prof_note "[translate {Machine busy}] ($busy). [translate {Wait until it is idle.}]"
+            return "refused"
+        }
+        if {[_profile_file_exists $clean_fn] eq "0"} {
+            _set_prof_note [translate "Profile file missing. Unlink and link it again."]
+            return "refused"
+        }
+        set changed 0
+        catch { set changed $::settings(profile_has_changed) }
+        if {$changed eq "1"} {
+            _set_prof_note [translate "Your current profile has unsaved changes. Save it first, then tap Start."]
+            return "refused"
+        }
+        set cur [_loaded_profile]
+        set cur_title $cur
+        catch {
+            set t [string trim $::settings(profile_title)]
+            if {$t ne ""} { set cur_title $t }
+        }
+        # The profile to come back to. A switch-back already pending (a
+        # cleaning profile loaded by an earlier Start) keeps ITS espresso
+        # profile -- never "come back" to a cleaning profile.
+        set rr [_run_pending]
+        if {$rr ne "" && [string equal -nocase $cur [dict get $rr clean_fn]]} {
+            set prev_fn [dict get $rr prev_fn]
+            set prev_title [dict get $rr prev_title]
+        } elseif {[string equal -nocase $cur $clean_fn]} {
+            _set_prof_note [translate "The cleaning profile is already loaded. Pick your espresso profile in the app first, so it can come back afterwards."]
+            return "refused"
+        } else {
+            set prev_fn $cur
+            set prev_title $cur_title
+        }
+        if {$prev_fn eq "" || [_profile_file_exists $prev_fn] eq "0"} {
+            _set_prof_note [translate "Your current profile has no saved file, so it could not come back. Pick a saved profile first."]
+            return "refused"
+        }
+        _cancel_run_timers
+        set settings(run_restore) [dict create prev_fn $prev_fn prev_title $prev_title \
+            clean_fn $clean_fn clean_title $clean_title item $id ts [clock seconds]]
+        save_settings
+        set why [_switch_profile $clean_fn]
+        if {$why ne ""} {
+            _clear_run
+            _set_prof_note $why
+            return "refused"
+        }
+        set run_started 0
+        set _run_timeout_id [after [expr {$run_timeout_s * 1000}] ::plugins::MaintenanceTracker::_run_timeout]
+        catch { msg -NOTICE "MaintenanceTracker: run armed for '$id': '$clean_fn' loaded, '$prev_fn' comes back after the run (or in [expr {$run_timeout_s / 60}] min)" }
+        _refresh_action_pages
+        return "armed"
+    }
+
+    # Public: "Switch back now".
+    proc cancel_profile_run {} {
+        if {[_run_pending] eq ""} { return 0 }
+        _restore_profile cancel
+        return 1
+    }
+
+    proc _run_timeout {} {
+        variable _run_timeout_id
+        variable run_started
+        set _run_timeout_id ""
+        if {!$run_started} { _restore_profile timeout }
+    }
+
+    # Switch back to the remembered profile. Idempotent; never throws.
+    proc _restore_profile {reason} {
+        variable _run_retry_id
+        variable _run_tries
+        set _run_retry_id ""
+        if {[catch {
+            set rr [_run_pending]
+            if {$rr ne ""} {
+                set busy [_machine_busy]
+                if {$busy ne "" && $_run_tries < 120} {
+                    incr _run_tries
+                    set _run_retry_id [after 5000 [list ::plugins::MaintenanceTracker::_restore_profile $reason]]
+                } elseif {$busy ne ""} {
+                    catch { msg -WARN "MaintenanceTracker: switch-back gave up, machine busy ($busy) for 10 min; '[dict get $rr clean_fn]' stays loaded" }
+                    _clear_run
+                    _refresh_action_pages
+                } else {
+                    set cur [_loaded_profile]
+                    set prev_fn [dict get $rr prev_fn]
+                    set prev_title [dict get $rr prev_title]
+                    if {![string equal -nocase $cur [dict get $rr clean_fn]]} {
+                        catch { msg -NOTICE "MaintenanceTracker: switch-back dropped ($reason): '$cur' is loaded now, not the cleaning profile" }
+                        _clear_run
+                    } else {
+                        set why [_switch_profile $prev_fn]
+                        _clear_run
+                        if {$why eq ""} {
+                            catch { msg -NOTICE "MaintenanceTracker: switched back to '$prev_fn' ($reason)" }
+                            _set_prof_note "[translate {Switched back to}] $prev_title."
+                        } else {
+                            catch { msg -WARN "MaintenanceTracker: switch-back to '$prev_fn' failed ($reason): $why" }
+                            _set_prof_note "[translate {Could not switch back to}] $prev_title: $why"
+                        }
+                    }
+                    _refresh_action_pages
+                }
+            }
+        } err]} {
+            catch { msg "MaintenanceTracker: switch-back error: $err" }
+        }
+        return
+    }
+
+    # State-change hook (from _on_state_change).
+    proc _run_on_state {this prev} {
+        variable run_started
+        variable _run_timeout_id
+        variable _run_restore_id
+        set rr [_run_pending]
+        if {$rr eq ""} { return }
+        if {$this eq "Espresso" && $prev ne "Espresso"} {
+            if {[string equal -nocase [_loaded_profile] [dict get $rr clean_fn]]} {
+                set run_started 1
+                if {$_run_timeout_id ne ""} { catch { after cancel $_run_timeout_id } }
+                set _run_timeout_id ""
+                catch { msg -NOTICE "MaintenanceTracker: cleaning run started with '[dict get $rr clean_fn]'" }
+            } else {
+                catch { msg -NOTICE "MaintenanceTracker: a run started with '[_loaded_profile]', not the cleaning profile; switch-back dropped" }
+                _clear_run
+            }
+        } elseif {$prev eq "Espresso" && $this ne "Espresso" && $run_started} {
+            # Fallback for a run that never reached the pour (no
+            # after_flow_complete); the flow-complete path replaces it.
+            if {$_run_restore_id ne ""} { catch { after cancel $_run_restore_id } }
+            set _run_restore_id [after 20000 [list ::plugins::MaintenanceTracker::_restore_profile run-ended]]
+        }
+    }
+
+    # Flow-complete hook (from _on_flow_complete, after auto-record).
+    proc _run_on_flow_complete {} {
+        variable run_started
+        variable _run_restore_id
+        if {[_run_pending] eq "" || !$run_started} { return }
+        if {$_run_restore_id ne ""} { catch { after cancel $_run_restore_id } }
+        set _run_restore_id [after 5000 [list ::plugins::MaintenanceTracker::_restore_profile run-complete]]
+    }
+
+    # App start: a switch-back left pending by a restart. Runs once, 20 s
+    # after main (profile and connection settled).
+    proc _resume_pending_run {} {
+        set rr [_run_pending]
+        if {$rr eq ""} { return }
+        catch { msg -NOTICE "MaintenanceTracker: a switch-back was pending at start; restoring '[dict get $rr prev_fn]'" }
+        _restore_profile restart
+    }
+
+    # ------------------------------------------------------------------
+    #  Instructions (Pass 32, v0.26.0). Every tracker gets a Steps page:
+    #  numbered instructions plus ONE coloured action (the link's: Load
+    #  profile / Open Descale / Start Clean, or Mark done). Steps come
+    #  from the item's own `steps` list when it has one (the Pass 34
+    #  editor writes it; nothing writes it yet) or from a built-in
+    #  template picked by keywords in the tracker's name, so every user,
+    #  and every custom tracker, starts with sensible steps. "{start}" in
+    #  a template becomes the link-aware "how to start it" line.
+    #  Read-only: nothing on this page writes anything new.
+    # ------------------------------------------------------------------
+
+    variable steps_max 8
+    variable steps_item ""
+    variable step_templates {
+        backflush_detergent {
+            "Put the blind basket in the portafilter."
+            "Add one scoop of Cafetto Evo powder (or your cleaner's dose) to the basket."
+            "Add a little warm water and stir until the powder dissolves."
+            "Lock the portafilter into the group head."
+            "{start}"
+            "When it finishes, rinse the basket and run a water backflush to clear the detergent."
+        }
+        backflush_water {
+            "Put the clean blind basket in the portafilter, with no detergent."
+            "Lock the portafilter into the group head."
+            "{start}"
+            "When it finishes, remove the portafilter and run a short flush."
+        }
+        steam_wand_soak {
+            "Dissolve half a Rinza tablet in 500 ml of water in a milk jug."
+            "Submerge the tip of the steam wand in the solution."
+            "Leave it to soak for 15 to 30 minutes."
+            "Wipe the wand and purge steam for a few seconds to rinse it."
+        }
+        ball_joint_grease {
+            "Let the steam wand cool down completely."
+            "Apply a thin layer of food-safe silicone grease to the ball joint O-rings."
+            "Move the wand through its full range to spread the grease."
+        }
+        descale {
+            "Mix the descaling solution (citric acid: use the dose on the pack)."
+            "{start}"
+            "Afterwards, rinse the water tank and refill it with fresh water."
+        }
+        drip_tray {
+            "Pull out the drip tray and lift off its grate."
+            "Empty it and wash both parts in warm soapy water."
+            "Rinse, dry and slide the tray back in."
+        }
+        water_tank {
+            "Lift out the water tank and empty it."
+            "Wash it with warm water and a soft brush, leaving no soap behind."
+            "Rinse it well, refill with fresh water and put it back."
+        }
+        drain {
+            "Check the drain pipe for coffee build-up and kinks."
+            "Flush it with hot water (a little espresso machine cleaner if it smells)."
+            "Make sure it runs freely into the drain before refitting it."
+        }
+        gasket_change {
+            "Let the machine cool down and remove the portafilter."
+            "Take out the shower screen and pry out the old group gasket."
+            "Clean the gasket seat, then press the new gasket in evenly."
+            "Refit the shower screen and pull a test shot to check for leaks."
+        }
+        group_inspection {
+            "With the machine cool, check the group gasket for cracks, hardness or leaks."
+            "Check the shower screen for coffee build-up."
+            "Wipe the group head with a damp cloth or a group brush."
+            "Plan a gasket change if it leaks or feels hard."
+        }
+        burr_clean {
+            "Unplug the grinder."
+            "Open the burr chamber and brush the burrs and the chute clean."
+            "Reassemble, then grind a few beans to purge it."
+        }
+        burr_install {
+            "Unplug the grinder and remove the old burrs."
+            "Clean the burr carrier and the chamber."
+            "Fit the new burrs and re-zero the grind setting."
+            "Grind a few doses to season them before dialling in."
+        }
+        water_filter {
+            "Remove the old filter cartridge."
+            "Soak or flush the new cartridge as its instructions say."
+            "Fit it and run some water through before the next shot."
+        }
+        water_supply {
+            "Swap the empty water bottle for a full one."
+            "Check that the intake tube reaches the bottom and the lid seals."
+            "Tap Mark done to restart the bottle meter."
+        }
+        generic {
+            "Do the maintenance task."
+            "Check that everything is refitted, clean and dry."
+            "Tap Mark done to record it."
+        }
+    }
+
+    # Keyword rules, first match wins (the tracker's name, lower-cased,
+    # plus its id). Grease before steam wand, water before backflush's
+    # detergent default, supply/bottle before tank/filter.
+    variable step_rules {
+        {ball joint|grease|silicone}                           ball_joint_grease
+        {backflush.*water|water.*backflush}                    backflush_water
+        {backflush|back flush|cafiza|cafetto|detergent}        backflush_detergent
+        {rinza|steam wand|steam tip|wand}                      steam_wand_soak
+        {descal|citric}                                        descale
+        {drip tray|drip}                                       drip_tray
+        {water supply|bottle|water_bottle}                     water_supply
+        {water tank|tank}                                      water_tank
+        {drain}                                                drain
+        {inspect}                                              group_inspection
+        {gasket.*(change|replace|new)|(change|replace|new).*gasket|group_gasket} gasket_change
+        {gasket|group head|inspect}                            group_inspection
+        {burr.*(install|replace|new|change)|burr_install}      burr_install
+        {burr|grinder}                                         burr_clean
+        {filter}                                               water_filter
+    }
+
+    proc _steps_template_id {id} {
+        variable step_rules
+        set hay [string tolower "[_item_label $id] $id"]
+        foreach {re tpl} $step_rules {
+            if {[regexp -- $re $hay]} { return $tpl }
+        }
+        return generic
+    }
+
+    # The link-aware "how to start it" step.
+    proc _start_step {kind} {
+        switch -- $kind {
+            profile { return [translate "Tap Start below, then press the espresso button on the group head."] }
+            descale { return [translate "Tap Open Descale below and follow the app's steps."] }
+            clean   { return [translate "Tap Start Clean below, then tap it again to confirm."] }
+        }
+        return [translate "Load the cleaning profile in the app, then press the espresso button on the group head."]
+    }
+
+    # The tracker's steps, ready to show: its own list when it has one
+    # (trimmed, empties dropped, capped), else the template; "{start}"
+    # resolved for the tracker's current link.
+    proc _item_steps {id} {
+        set raw [_item_steps_raw $id]
+        set kind [lindex [_item_link $id] 0]
+        set out {}
+        foreach st $raw {
+            if {$st eq "{start}"} { set st [_start_step $kind] }
+            lappend out [translate $st]
+        }
+        return $out
+    }
+
+    # The Steps page's coloured action for a tracker's link.
+    proc _steps_action_label {id} {
+        variable clean_armed
+        switch -- [lindex [_item_link $id] 0] {
+            profile { return [expr {[_run_pending_for $id] ? [translate "Switch back now"] : [translate "Start"]}] }
+            descale { return [translate "Open Descale"] }
+            clean   { return [expr {$clean_armed ? [translate "Yes, start Clean"] : [translate "Start Clean"]}] }
+        }
+        return [translate "Mark done"]
+    }
+
+    proc open_steps {id} {
+        variable steps_item
+        variable settings
+        if {![info exists settings(item_$id)]} { return 0 }
+        set steps_item $id
+        _disarm_clean
+        open_page MaintenanceTracker_steps
+        return 1
+    }
+
+    # ------------------------------------------------------------------
+    #  Step editor (Pass 34, v0.28.0) -- DrinkMenu's Method editor
+    #  pattern: every change edits a DRAFT (se_draft); only Save writes,
+    #  once, into the tracker's own `steps` list (settings.tdb via
+    #  save_settings). Cancel drops the draft. A draft equal to the
+    #  built-in template is stored as NO list (the key is removed), so
+    #  the tracker keeps following the template. "{start}" (the
+    #  link-aware start line) stays a token until its row is edited.
+    # ------------------------------------------------------------------
+
+    variable se_item ""
+    variable se_draft {}
+    variable se_mode list
+    variable se_form_idx -1
+    variable se_text ""
+    variable se_error ""
+    variable step_max_chars 120
+
+    # The template's raw steps ({start} kept as a token).
+    proc _steps_template_raw {id} {
+        variable step_templates
+        variable steps_max
+        return [lrange [dict get $step_templates [_steps_template_id $id]] 0 [expr {$steps_max - 1}]]
+    }
+
+    # The tracker's raw steps: its own list, else the template.
+    proc _item_steps_raw {id} {
+        variable settings
+        variable steps_max
+        variable step_max_chars
+        set own {}
+        if {[info exists settings(item_$id)] && [dict exists $settings(item_$id) steps]} {
+            foreach st [dict get $settings(item_$id) steps] {
+                set st [string trim $st]
+                if {$st ne ""} { lappend own [string range $st 0 [expr {$step_max_chars - 1}]] }
+            }
+        }
+        if {[llength $own] > 0} { return [lrange $own 0 [expr {$steps_max - 1}]] }
+        return [_steps_template_raw $id]
+    }
+
+    # One draft row as shown ({start} resolved for the tracker's link).
+    proc _se_display {st} {
+        variable se_item
+        if {$st eq "{start}"} { return [_start_step [lindex [_item_link $se_item] 0]] }
+        return $st
+    }
+
+    # Typed text, cleaned: whitespace runs (incl. Android newlines) -> one
+    # space, trimmed, capped.
+    proc _se_clean {txt} {
+        variable step_max_chars
+        set t [string trim [regsub -all {\s+} $txt " "]]
+        return [string range $t 0 [expr {$step_max_chars - 1}]]
+    }
+
+    proc open_step_editor {id} {
+        variable settings
+        variable se_item
+        variable se_draft
+        variable se_mode
+        variable se_form_idx
+        variable se_text
+        variable se_error
+        if {![info exists settings(item_$id)]} { return 0 }
+        set se_item $id
+        set se_draft [_item_steps_raw $id]
+        set se_mode list
+        set se_form_idx -1
+        set se_text ""
+        set se_error ""
+        open_page MaintenanceTracker_stepedit
+        return 1
+    }
+
+    proc se_move {i delta} {
+        variable se_draft
+        variable se_mode
+        if {$se_mode ne "list"} { return 0 }
+        set j [expr {$i + $delta}]
+        if {$i < 0 || $j < 0 || $i >= [llength $se_draft] || $j >= [llength $se_draft]} { return 0 }
+        set a [lindex $se_draft $i]
+        lset se_draft $i [lindex $se_draft $j]
+        lset se_draft $j $a
+        return 1
+    }
+
+    proc se_remove {i} {
+        variable se_draft
+        variable se_mode
+        variable se_error
+        if {$se_mode ne "list" || $i < 0 || $i >= [llength $se_draft]} { return 0 }
+        set se_draft [lreplace $se_draft $i $i]
+        set se_error ""
+        return 1
+    }
+
+    # Open the form for row i (-1 = a new step at the end).
+    proc se_edit {i} {
+        variable se_draft
+        variable se_mode
+        variable se_form_idx
+        variable se_text
+        variable se_error
+        variable steps_max
+        if {$se_mode ne "list"} { return 0 }
+        if {$i < 0} {
+            if {[llength $se_draft] >= $steps_max} {
+                set se_error [translate "Eight steps is the most a tracker can hold."]
+                return 0
+            }
+            set se_form_idx -1
+            set se_text ""
+        } else {
+            if {$i >= [llength $se_draft]} { return 0 }
+            set se_form_idx $i
+            set se_text [_se_display [lindex $se_draft $i]]
+        }
+        set se_error ""
+        set se_mode form
+        return 1
+    }
+
+    proc se_form_save {} {
+        variable se_draft
+        variable se_mode
+        variable se_form_idx
+        variable se_text
+        variable se_error
+        if {$se_mode ne "form"} { return 0 }
+        set t [_se_clean $se_text]
+        if {$t eq ""} {
+            set se_error [translate "Type the step first, or tap Cancel."]
+            return 0
+        }
+        if {$se_form_idx < 0} {
+            lappend se_draft $t
+        } else {
+            set old [lindex $se_draft $se_form_idx]
+            # An untouched start line stays the link-aware token.
+            if {!($old eq "{start}" && $t eq [_se_clean [_se_display $old]])} {
+                lset se_draft $se_form_idx $t
+            }
+        }
+        set se_mode list
+        set se_form_idx -1
+        set se_text ""
+        set se_error ""
+        return 1
+    }
+
+    proc se_form_cancel {} {
+        variable se_mode
+        variable se_form_idx
+        variable se_text
+        variable se_error
+        set se_mode list
+        set se_form_idx -1
+        set se_text ""
+        set se_error ""
+        return 1
+    }
+
+    proc se_reset {} {
+        variable se_item
+        variable se_draft
+        variable se_mode
+        variable se_error
+        if {$se_mode ne "list"} { return 0 }
+        set se_draft [_steps_template_raw $se_item]
+        set se_error ""
+        return 1
+    }
+
+    # The ONE write of this editor: the draft into the tracker's `steps`
+    # (or the key removed when the draft is the template). One save.
+    proc se_save {} {
+        variable settings
+        variable se_item
+        variable se_draft
+        variable se_mode
+        variable se_error
+        variable steps_max
+        if {$se_mode ne "list"} { return 0 }
+        set id $se_item
+        if {![info exists settings(item_$id)]} { return 0 }
+        set clean {}
+        foreach st $se_draft {
+            if {$st eq "{start}"} { lappend clean $st ; continue }
+            set t [_se_clean $st]
+            if {$t ne ""} { lappend clean $t }
+        }
+        set clean [lrange $clean 0 [expr {$steps_max - 1}]]
+        if {[llength $clean] == 0} {
+            set se_error [translate "Keep at least one step, or tap Reset to default."]
+            return 0
+        }
+        set d $settings(item_$id)
+        if {$clean eq [_steps_template_raw $id]} {
+            dict unset d steps
+            set how "template"
+        } else {
+            dict set d steps $clean
+            set how "[llength $clean] own steps"
+        }
+        set settings(item_$id) $d
+        save_settings
+        catch { msg "MaintenanceTracker: steps saved for '$id' ($how)" }
+        set se_error ""
         return 1
     }
 
@@ -3416,23 +4229,8 @@ namespace eval ::dui::pages::MaintenanceTracker_settings {
         # composite integer key. Recomputed on every refresh from the
         # same summary the cards render, so taps always match the screen.
         variable displayed_ids
-        set pairs {}
-        set idx 0
-        foreach id [::plugins::MaintenanceTracker::_visible_item_ids] {
-            set st unset
-            catch {
-                if {[dict exists $s items $id]} {
-                    set st [dict get [dict get $s items $id] state]
-                }
-            }
-            lappend pairs [list \
-                [expr {[::plugins::MaintenanceTracker::_state_rank $st] * 1000 + $idx}] $id]
-            incr idx
-        }
-        set displayed_ids {}
-        foreach p [lsort -integer -index 0 $pairs] {
-            lappend displayed_ids [lindex $p 1]
-        }
+        set displayed_ids [::plugins::MaintenanceTracker::_worst_first_ids $s \
+            [::plugins::MaintenanceTracker::_visible_item_ids]]
 
         set n [llength $displayed_ids]
         # v0.7.0: deleting (or v0.8.0 hiding) a tracker can shrink the
@@ -3611,6 +4409,7 @@ namespace eval ::dui::pages::MaintenanceTracker_settings {
         # and the 600 s TTL covers long-idle staleness; re-running the
         # full SDB pass on every arrival made Done/Back taps lag.
         set ::plugins::MaintenanceTracker::pending_item ""
+        set ::plugins::MaintenanceTracker::record_return MaintenanceTracker_settings
         set ::plugins::MaintenanceTracker::detail_mode view
         set ::plugins::MaintenanceTracker::edit_delete_armed 0
         ::plugins::MaintenanceTracker::_capture_return_page $page_to_hide
@@ -3913,7 +4712,8 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             -label_font $L(font_button) -style mt_btn -initial_state hidden
 
         # State header: dot + counter line + last-done line, left-aligned.
-        set head_y [expr {int(round(180 * $L(scale)))}]
+        # v0.25.0: 180 -> 150 ref (the band under the title was dead space).
+        set head_y [expr {int(round(150 * $L(scale)))}]
         set dot_x1 $lx
         set dot_x2 [expr {$dot_x1 + $L(dot_size)}]
         set head_text_x [expr {$dot_x2 + $L(md)}]
@@ -3930,7 +4730,8 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             -anchor w -justify left
 
         # Event history: section label + up to 5 one-line events.
-        set hist_y [expr {int(round(290 * $L(scale)))}]
+        # v0.25.0: 290 -> 240 ref, following the header up.
+        set hist_y [expr {int(round(240 * $L(scale)))}]
         dui add dtext $page $lx $hist_y -tags hist_title \
             -text [translate "History (newest first)"] \
             -font $L(font_primary) -width $L(content_w) -fill $L(text_hi) \
@@ -3950,50 +4751,31 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         # two lines 599..649) still clears the bar at 716. All three
         # buttons are born hidden; refresh shows the right pair and
         # hides them all while an undo is armed.
-        set prof_y0 [expr {int(round(520 * $L(scale)))}]
+        # v0.25.0 (Pass 31): the row only SHOWS the link and offers its
+        # one action -- Link / Unlink moved to the Edit page (owner:
+        # Unlink sat beside Load profile, same size, easy to hit by
+        # mistake). The value gets the room the Unlink button had, so a
+        # profile title shows in full. Row 520 -> 476 ref with the
+        # history; the last event line ends ~444.
+        set prof_y0 [expr {int(round(476 * $L(scale)))}]
         set prof_y1 [expr {$prof_y0 + $L(btn_h)}]
         set prof_mid [expr {($prof_y0 + $prof_y1) / 2}]
         set load_x0 [expr {$rx - $L(btn_w_wide)}]
-        set unlink_x1 [expr {$load_x0 - $L(md)}]
-        set unlink_x0 [expr {$unlink_x1 - $L(btn_w_std)}]
-        # v0.23.0: unlinked -> three link buttons, right-aligned, all
-        # btn_w_std: [Link profile] md [Link Descale] md [Link Clean].
-        # The page is 1280 ref px wide (right_x 1234), so they start at
-        # 602 -- 112 past value_x (490), where "none" ends near 545.
-        # (240-wide buttons started at 522 and ran over it: caught by
-        # the offline geometry check before the tablet.)
-        set linkcl_x0 [expr {$rx - $L(btn_w_std)}]
-        set linkds_x1 [expr {$linkcl_x0 - $L(md)}]
-        set linkds_x0 [expr {$linkds_x1 - $L(btn_w_std)}]
-        set link_x1 [expr {$linkds_x0 - $L(md)}]
-        set link_x0 [expr {$link_x1 - $L(btn_w_std)}]
         dui add dtext $page $lx $prof_mid -tags prof_label \
             -text [translate "Linked to:"] \
             -font $L(font_body) -width $L(label_col_w) -fill $L(text_body) \
             -anchor w -justify left
         dui add dtext $page $L(value_x) $prof_mid -tags prof_value -text "" \
-            -font $L(font_primary) -width [expr {$unlink_x0 - $L(lg) - $L(value_x)}] \
+            -font $L(font_primary) -width [expr {$load_x0 - $L(lg) - $L(value_x)}] \
             -fill $L(text_hi) -anchor w -justify left
-        dui add dbutton $page $unlink_x0 $prof_y0 $unlink_x1 $prof_y1 \
-            -tags mt_unlink -label [translate "Unlink"] \
-            -command ::dui::pages::MaintenanceTracker_detail::unlink_click \
-            -label_font $L(font_button) -style mt_btn -initial_state hidden
+        # v0.26.0 (Pass 32): the row's button is always "Start" (primary,
+        # green): it opens the tracker's Steps page, where the link's own
+        # action (Load profile / Open Descale / Start Clean / Mark done)
+        # sits under the instructions.
         dui add dbutton $page $load_x0 $prof_y0 $rx $prof_y1 \
-            -tags mt_load -label [translate "Load profile"] \
-            -command ::dui::pages::MaintenanceTracker_detail::load_click \
-            -label_font $L(font_button) -style mt_btn -initial_state hidden
-        dui add dbutton $page $link_x0 $prof_y0 $link_x1 $prof_y1 \
-            -tags mt_link -label [translate "Link profile"] \
-            -command ::dui::pages::MaintenanceTracker_detail::link_click \
-            -label_font $L(font_button) -style mt_btn -initial_state hidden
-        dui add dbutton $page $linkds_x0 $prof_y0 $linkds_x1 $prof_y1 \
-            -tags mt_linkds -label [translate "Link Descale"] \
-            -command ::dui::pages::MaintenanceTracker_detail::link_descale_click \
-            -label_font $L(font_button) -style mt_btn -initial_state hidden
-        dui add dbutton $page $linkcl_x0 $prof_y0 $rx $prof_y1 \
-            -tags mt_linkcl -label [translate "Link Clean"] \
-            -command ::dui::pages::MaintenanceTracker_detail::link_clean_click \
-            -label_font $L(font_button) -style mt_btn -initial_state hidden
+            -tags mt_start -label [translate "Start"] \
+            -command ::dui::pages::MaintenanceTracker_detail::start_click \
+            -label_font $L(font_button) -style mt_btn_primary -initial_state hidden
 
         # Confirm-mode message (empty in view mode), above the bottom bar.
         # v0.22.0: also the linked-profile outcome note for 4 s.
@@ -4011,19 +4793,32 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         # Geometry: Back ends at lx+400, Hide spans cx +/- 300, Undo
         # starts at rx-600 (virtual px) -- a full button-width of empty
         # canvas separates the danger button from its neighbors.
+        # v0.25.0 (Pass 31): [Back] [Undo Last Record] ... [Hide Tracker]
+        # [Record]. Record is the page's one go-ahead action (primary,
+        # green, right). Undo lost the red main-action slot: it is a
+        # normal button beside Back and turns red only once armed (its
+        # second tap is the destructive one; Back becomes its Cancel).
+        # Gaps = (content_w - 2 std - 2 xwide) / 3 (62 ref).
+        set bar_gap [expr {($L(content_w) - 2 * $L(btn_w_std) - 2 * $L(btn_w_xwide)) / 3}]
+        set undo_x0 [expr {$lx + $L(btn_w_std) + $bar_gap}]
+        set rec_x0 [expr {$rx - $L(btn_w_std)}]
+        set hide_x1 [expr {$rec_x0 - $bar_gap}]
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags bar_left -label [translate "Back"] \
             -command ::dui::pages::MaintenanceTracker_detail::left_click \
             -label_font $L(font_button) -style mt_btn
-        dui add dbutton $page [expr {$cx - $L(btn_w_xwide) / 2}] $L(bar_y0) \
-            [expr {$cx + $L(btn_w_xwide) / 2}] $L(bar_y1) \
+        dui add dbutton $page $undo_x0 $L(bar_y0) [expr {$undo_x0 + $L(btn_w_xwide)}] $L(bar_y1) \
+            -tags bar_undo -label [translate "Undo Last Record"] \
+            -command ::dui::pages::MaintenanceTracker_detail::right_click \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
+        dui add dbutton $page [expr {$hide_x1 - $L(btn_w_xwide)}] $L(bar_y0) $hide_x1 $L(bar_y1) \
             -tags mt_hide -label [translate "Hide Tracker"] \
             -command ::dui::pages::MaintenanceTracker_detail::hide_click \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
-        dui add dbutton $page [expr {$rx - $L(btn_w_xwide)}] $L(bar_y0) $rx $L(bar_y1) \
-            -tags bar_undo -label [translate "Undo Last Record"] \
-            -command ::dui::pages::MaintenanceTracker_detail::right_click \
-            -label_font $L(font_button) -style mt_btn_danger -initial_state hidden
+        dui add dbutton $page $rec_x0 $L(bar_y0) $rx $L(bar_y1) \
+            -tags mt_record -label [translate "Record"] \
+            -command ::dui::pages::MaintenanceTracker_detail::record_click \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
     }
 
     proc refresh {} {
@@ -4044,9 +4839,8 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             catch { dui item hide $page bar_undo* -initial 1 }
             catch { dui item hide $page mt_hide* -initial 1 }
             catch { dui item hide $page btn_edit* -initial 1 }
-            foreach t {mt_link* mt_linkds* mt_linkcl* mt_unlink* mt_load*} {
-                catch { dui item hide $page $t -initial 1 }
-            }
+            catch { dui item hide $page mt_start* -initial 1 }
+            catch { dui item hide $page mt_record* -initial 1 }
             catch { dui item config $page prof_value -text "" }
             catch { dui item config $page bar_left -label [translate "Back"] }
             catch { dui item hide $page det_plate* -initial 1 }
@@ -4163,18 +4957,23 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             # warning, not just the message text above it.
             catch { dui item config $page bar_undo -label [translate "Yes, Delete Last Record"] }
             catch { dui item show $page bar_undo* -initial 1 }
+            # v0.25.0: red only while armed (the bare-tag face recolor,
+            # the same mechanism as the theme walk).
+            catch { dui item config $page bar_undo-btn -fill $L(col_red) -outline $L(col_red) }
             catch { dui item hide $page mt_hide* -initial 1 }
             catch { dui item hide $page btn_edit* -initial 1 }
+            catch { dui item hide $page mt_record* -initial 1 }
             # v0.22.0: the profile row's controls step aside too.
             # v0.23.0: and a mode switch disarms an armed Clean.
             ::plugins::MaintenanceTracker::_disarm_clean
-            foreach t {mt_link* mt_linkds* mt_linkcl* mt_unlink* mt_load*} {
-                catch { dui item hide $page $t -initial 1 }
-            }
+            catch { dui item hide $page mt_start* -initial 1 }
+            catch { dui item hide $page prof_label -initial 1 }
             catch { dui item config $page prof_value -text "" }
         } else {
             catch { dui item config $page bar_left -label [translate "Back"] }
             catch { dui item config $page bar_undo -label [translate "Undo Last Record"] }
+            catch { dui item config $page bar_undo-btn -fill $L(btn_fill) -outline $L(btn_fill) }
+            catch { dui item show $page mt_record* -initial 1 }
             if {$n > 0} {
                 catch { dui item show $page bar_undo* -initial 1 }
             } else {
@@ -4192,13 +4991,8 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             catch { dui item config $page mt_hide* -state [expr {$hide_capped ? "disabled" : "normal"}] }
             set link [::plugins::MaintenanceTracker::_item_link $id]
             set kind [lindex $link 0]
-            set armed [expr {$kind eq "clean" && $::plugins::MaintenanceTracker::clean_armed}]
-            if {$armed} {
-                # v0.23.0: the armed Clean's warning outranks every note.
-                catch { dui item config $page confirm_msg \
-                    -text [translate "Blind basket and cleaning tablet in the group head? Tap again to start the clean cycle."] \
-                    -fill $L(col_red) }
-            } elseif {$hide_capped} {
+            # v0.26.0: the Clean arm lives on the Steps page now.
+            if {$hide_capped} {
                 catch { dui item config $page confirm_msg \
                     -text [translate "Hide is unavailable: six trackers are already hidden. Restore one from the New Tracker page first."] \
                     -fill $L(text_mut) }
@@ -4211,91 +5005,34 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
                 catch { dui item config $page confirm_msg -text "" }
             }
             # v0.22.0 linked profile row; v0.23.0 any of three kinds.
+            # v0.25.0: display only; Link / Unlink live on the Edit page.
+            # v0.26.0: Start (every tracker) opens the Steps page.
+            catch { dui item show $page prof_label -initial 1 }
             if {$kind eq ""} {
                 catch { dui item config $page prof_value \
-                    -text [translate "none"] -fill $L(text_mut) }
-                catch { dui item hide $page mt_unlink* -initial 1 }
-                catch { dui item hide $page mt_load* -initial 1 }
-                foreach t {mt_link* mt_linkds* mt_linkcl*} {
-                    catch { dui item show $page $t -initial 1 }
-                }
+                    -text [translate "none -- link one on the Edit page"] -fill $L(text_mut) }
             } else {
-                switch -- $kind {
-                    profile {
-                        set vtxt [::plugins::MaintenanceTracker::_short_text [lindex $link 2] 28]
-                        set atxt [translate "Load profile"]
-                    }
-                    descale {
-                        set vtxt [translate "Descale (app)"]
-                        set atxt [translate "Open Descale"]
-                    }
-                    default {
-                        set vtxt [translate "Clean cycle (app)"]
-                        set atxt [expr {$armed ? [translate "Yes, start Clean"] : [translate "Start Clean"]}]
-                    }
-                }
-                catch { dui item config $page prof_value -text $vtxt -fill $L(text_hi) }
-                # Relabel through the BARE dbutton tag (the wildcard
-                # form silently fails on-device).
-                catch { dui item config $page mt_load -label $atxt }
-                foreach t {mt_link* mt_linkds* mt_linkcl*} {
-                    catch { dui item hide $page $t -initial 1 }
-                }
-                catch { dui item show $page mt_unlink* -initial 1 }
-                catch { dui item show $page mt_load* -initial 1 }
+                catch { dui item config $page prof_value \
+                    -text [::plugins::MaintenanceTracker::_link_text $link] -fill $L(text_hi) }
             }
+            catch { dui item show $page mt_start* -initial 1 }
         }
     }
 
-    # v0.22.0: linked-profile controls, view mode only.
-    proc link_click {} {
-        if {$::plugins::MaintenanceTracker::detail_mode ne "view"} { return }
-        ::plugins::MaintenanceTracker::link_profile $::plugins::MaintenanceTracker::detail_item
-        if {[catch { refresh } err]} {
-            catch { msg "MaintenanceTracker: detail refresh failed: $err" }
-        }
-    }
-    proc unlink_click {} {
-        if {$::plugins::MaintenanceTracker::detail_mode ne "view"} { return }
-        ::plugins::MaintenanceTracker::unlink_profile $::plugins::MaintenanceTracker::detail_item
-        if {[catch { refresh } err]} {
-            catch { msg "MaintenanceTracker: detail refresh failed: $err" }
-        }
-    }
-    # v0.23.0: the action button acts on whatever the tracker links.
-    # A page the tap has left (Descale opened, Clean started) is not
-    # repainted.
-    proc load_click {} {
+    # v0.25.0: Record from Detail -- the list's confirm flow, returning
+    # here. View mode only (an armed Undo hides the button anyway).
+    proc record_click {} {
         if {$::plugins::MaintenanceTracker::detail_mode ne "view"} { return }
         set id $::plugins::MaintenanceTracker::detail_item
-        switch -- [lindex [::plugins::MaintenanceTracker::_item_link $id] 0] {
-            descale {
-                if {[::plugins::MaintenanceTracker::open_linked_descale $id]} { return }
-            }
-            clean {
-                if {[::plugins::MaintenanceTracker::clean_tap $id] eq "started"} { return }
-            }
-            default {
-                ::plugins::MaintenanceTracker::load_linked_profile $id
-            }
-        }
-        if {[catch { refresh } err]} {
-            catch { msg "MaintenanceTracker: detail refresh failed: $err" }
-        }
+        if {$id eq ""} { return }
+        ::plugins::MaintenanceTracker::request_record $id MaintenanceTracker_detail
     }
-    proc link_descale_click {} {
+
+    # v0.26.0 (Pass 32): Start opens the tracker's Steps page; the link's
+    # action lives there now. View mode only.
+    proc start_click {} {
         if {$::plugins::MaintenanceTracker::detail_mode ne "view"} { return }
-        ::plugins::MaintenanceTracker::link_action $::plugins::MaintenanceTracker::detail_item descale
-        if {[catch { refresh } err]} {
-            catch { msg "MaintenanceTracker: detail refresh failed: $err" }
-        }
-    }
-    proc link_clean_click {} {
-        if {$::plugins::MaintenanceTracker::detail_mode ne "view"} { return }
-        ::plugins::MaintenanceTracker::link_action $::plugins::MaintenanceTracker::detail_item clean
-        if {[catch { refresh } err]} {
-            catch { msg "MaintenanceTracker: detail refresh failed: $err" }
-        }
+        ::plugins::MaintenanceTracker::open_steps $::plugins::MaintenanceTracker::detail_item
     }
 
     # v0.12.0 -> v0.15.0: Edit, any tracker, view mode only.
@@ -4686,6 +5423,44 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
             -width 30 -font $L(font_primary) -borderwidth 1 -bg $L(entry_bg) \
             -foreground $L(text_hi) -relief flat
 
+        # v0.25.0 (Pass 31): the link row moved here from Detail, into
+        # the empty band right of the name entry (keyboard-safe top
+        # zone). "Linked to: <value>" on the Name label's line, buttons
+        # on the entry's line, right-aligned with Detail's old v0.23.0
+        # geometry (3 x btn_w_std, md gaps: starts 1204 virtual; the
+        # 30-char entry ends near 910). Unlinked: [Link profile] [Link
+        # Descale] [Link Clean]; linked: [Unlink]. Draft until Save.
+        set lk_y0 $entry_y
+        set lk_y1 [expr {$lk_y0 + $L(btn_h)}]
+        set lkcl_x0 [expr {$rx - $L(btn_w_std)}]
+        set lkds_x1 [expr {$lkcl_x0 - $L(md)}]
+        set lkds_x0 [expr {$lkds_x1 - $L(btn_w_std)}]
+        set lk_x1 [expr {$lkds_x0 - $L(md)}]
+        set lk_x0 [expr {$lk_x1 - $L(btn_w_std)}]
+        # ONE text item, "Linked to: <value>": a label + value pair placed
+        # with `font measure` collided on the tablet (it returns PHYSICAL
+        # px, canvas coords are virtual 2560 -- 1.91x short; v0.25.0
+        # verify run 1).
+        dui add dtext $page $lk_x0 $name_label_y -tags link_value -text "" \
+            -font $L(font_body) -width [expr {$rx - $lk_x0}] -fill $L(text_body) \
+            -anchor nw -justify left
+        dui add dbutton $page $lk_x0 $lk_y0 $lk_x1 $lk_y1 \
+            -tags mt_elink -label [translate "Link profile"] \
+            -command ::dui::pages::MaintenanceTracker_edit::link_click \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
+        dui add dbutton $page $lkds_x0 $lk_y0 $lkds_x1 $lk_y1 \
+            -tags mt_elinkds -label [translate "Link Descale"] \
+            -command [list ::dui::pages::MaintenanceTracker_edit::link_kind_click descale] \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
+        dui add dbutton $page $lkcl_x0 $lk_y0 $rx $lk_y1 \
+            -tags mt_elinkcl -label [translate "Link Clean"] \
+            -command [list ::dui::pages::MaintenanceTracker_edit::link_kind_click clean] \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
+        dui add dbutton $page $lkcl_x0 $lk_y0 $rx $lk_y1 \
+            -tags mt_eunlink -label [translate "Unlink"] \
+            -command ::dui::pages::MaintenanceTracker_edit::unlink_click \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
+
         # Threshold steppers (burr/Add pattern): label line, then
         # [-][-] value [+][+], deltas relabeled per the tracker's unit.
         set thr_label_y [expr {int(round(265 * $L(scale)))}]
@@ -4813,6 +5588,21 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
             set auto_txt [translate "off (linked profile records)"]
         }
         catch { dui item config $page auto_value -text $auto_txt }
+        # v0.25.0: link draft row.
+        set elink $::plugins::MaintenanceTracker::edit_link
+        catch { dui item config $page link_value \
+            -text "[translate {Linked to:}] [::plugins::MaintenanceTracker::_link_text $elink]" }
+        if {$elink eq ""} {
+            catch { dui item hide $page mt_eunlink* -initial 1 }
+            foreach t {mt_elink* mt_elinkds* mt_elinkcl*} {
+                catch { dui item show $page $t -initial 1 }
+            }
+        } else {
+            foreach t {mt_elink* mt_elinkds* mt_elinkcl*} {
+                catch { dui item hide $page $t -initial 1 }
+            }
+            catch { dui item show $page mt_eunlink* -initial 1 }
+        }
         # v0.15.0: delete lives here now (customs only), two-step. While
         # armed, Save hides, the button carries the explicit "Yes, ..."
         # label and the message line says exactly what the second tap
@@ -4858,6 +5648,27 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
         }
     }
 
+    # v0.25.0: link row taps -- draft only. In-page actions hide the
+    # keyboard themselves (CLAUDE.md: only page loads do it for free).
+    proc _after_link_tap {} {
+        catch { dui platform hide_android_keyboard }
+        if {[catch { refresh } err]} {
+            catch { msg "MaintenanceTracker: edit refresh failed: $err" }
+        }
+    }
+    proc link_click {} {
+        ::plugins::MaintenanceTracker::edit_link_profile
+        _after_link_tap
+    }
+    proc link_kind_click {kind} {
+        ::plugins::MaintenanceTracker::edit_link_kind $kind
+        _after_link_tap
+    }
+    proc unlink_click {} {
+        ::plugins::MaintenanceTracker::edit_unlink
+        _after_link_tap
+    }
+
     # v0.15.0: two-step delete dispatcher (customs only -- re-checked
     # here, belt-and-braces). First tap arms, second deletes and
     # returns to the card list two dialog levels up.
@@ -4897,6 +5708,471 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
         if {[catch { refresh } err]} {
             catch { msg "MaintenanceTracker: edit refresh failed: $err" }
         }
+    }
+}
+
+# ===========================================================================
+#  Steps page -- Pass 32 (v0.26.0). The tracker's instructions, numbered,
+#  and ONE coloured action under them: the link's own (Load profile /
+#  Open Descale / Start Clean, two-tap) or Mark done. Mark done (and a
+#  linked tracker's secondary Mark done) is the list's confirm flow,
+#  returning to Detail. Nothing here writes anything new.
+# ===========================================================================
+
+namespace eval ::dui::pages::MaintenanceTracker_steps {
+
+    proc setup {} {
+        set page [namespace tail [namespace current]]
+        upvar #0 ::plugins::MaintenanceTracker::L L
+        ::plugins::MaintenanceTracker::_page_bg $page
+        set lx $L(left_x)
+        set rx $L(right_x)
+        set cx [expr {($lx + $rx) / 2}]
+
+        # Title width stops short of the header's right corner (Detail's
+        # rule) -- v0.28.0's Edit steps button sits there.
+        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text "" \
+            -font $L(font_title) -width [expr {$L(content_w) - 2 * ($L(btn_w_std) + $L(lg))}] \
+            -fill $L(text_hi) -anchor center -justify center
+        dui add dbutton $page [expr {$rx - $L(btn_w_std)}] [expr {int(round(22 * $L(scale)))}] \
+            $rx [expr {int(round(22 * $L(scale))) + $L(btn_h)}] \
+            -tags mt_sedit -label [translate "Edit steps"] \
+            -command ::dui::pages::MaintenanceTracker_steps::edit_click \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
+        set sub_y [expr {int(round(96 * $L(scale)))}]
+        dui add dtext $page $cx $sub_y -tags steps_sub -text "" \
+            -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) \
+            -anchor center -justify center
+
+        # Up to steps_max rows, 58 ref apart from 140: a number column and
+        # the text (body, may wrap to two lines = 46 ref < pitch). The last
+        # row starts 546 and ends by 592; the message slot is 624..672.
+        set num_w [expr {int(round(44 * $L(scale)))}]
+        set pitch [expr {int(round(58 * $L(scale)))}]
+        set y0 [expr {int(round(140 * $L(scale)))}]
+        for {set i 0} {$i < $::plugins::MaintenanceTracker::steps_max} {incr i} {
+            set y [expr {$y0 + $i * $pitch}]
+            dui add dtext $page $lx $y -tags stepn$i -text "" \
+                -font $L(font_primary) -fill $L(col_ok) -anchor nw -justify left
+            dui add dtext $page [expr {$lx + $num_w}] $y -tags stept$i -text "" \
+                -font $L(font_body) -width [expr {$L(content_w) - $num_w}] \
+                -fill $L(text_hi) -anchor nw -justify left
+        }
+
+        set msg_y [expr {int(round(648 * $L(scale)))}]
+        dui add dtext $page $cx $msg_y -tags steps_msg -text "" \
+            -font $L(font_primary) -width $L(content_w) -fill $L(text_hi) \
+            -anchor center -justify center
+        # v0.27.0: while a profile run is armed, the message slot becomes
+        # a hint row: the group head's cup glyph + what to do and when
+        # the espresso profile comes back. Both born hidden.
+        set ghc_w [expr {int(round(64 * $L(scale)))}]
+        dui add dtext $page [expr {$lx + $ghc_w / 2}] $msg_y -tags steps_ghc \
+            -text [::plugins::MaintenanceTracker::_glyph_for mug-hot] \
+            -font $L(font_icon_plate) -fill $L(col_ok) -anchor center -justify center \
+            -initial_state hidden
+        dui add dtext $page [expr {$lx + $ghc_w + $L(md)}] $msg_y -tags steps_hint -text "" \
+            -font $L(font_primary) -width [expr {$L(content_w) - $ghc_w - $L(md)}] \
+            -fill $L(text_hi) -anchor w -justify left -initial_state hidden
+
+        # Bottom bar: [Back] ... [Mark done] [<action>]. The action is the
+        # page's one primary (green, xwide, right); Mark done (normal)
+        # shows only when the action is something else.
+        set go_x0 [expr {$rx - $L(btn_w_xwide)}]
+        set done_x1 [expr {$go_x0 - $L(lg)}]
+        dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
+            -tags mt_sback -label [translate "Back"] \
+            -command ::dui::pages::MaintenanceTracker_steps::back_click \
+            -label_font $L(font_button) -style mt_btn
+        dui add dbutton $page [expr {$done_x1 - $L(btn_w_wide)}] $L(bar_y0) $done_x1 $L(bar_y1) \
+            -tags mt_sdone -label [translate "Mark done"] \
+            -command ::dui::pages::MaintenanceTracker_steps::done_click \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
+        dui add dbutton $page $go_x0 $L(bar_y0) $rx $L(bar_y1) \
+            -tags mt_sgo -label [translate "Mark done"] \
+            -command ::dui::pages::MaintenanceTracker_steps::go_click \
+            -label_font $L(font_button) -style mt_btn_primary -initial_state hidden
+    }
+
+    proc refresh {} {
+        set page [namespace tail [namespace current]]
+        upvar #0 ::plugins::MaintenanceTracker::L L
+        set id $::plugins::MaintenanceTracker::steps_item
+        set n_max $::plugins::MaintenanceTracker::steps_max
+        if {$id eq "" || ![info exists ::plugins::MaintenanceTracker::settings(item_$id)]} {
+            catch { dui item config $page page_title -text [translate "Nothing selected"] }
+            catch { dui item config $page steps_sub -text "" }
+            for {set i 0} {$i < $n_max} {incr i} {
+                catch { dui item config $page stepn$i -text "" }
+                catch { dui item config $page stept$i -text "" }
+            }
+            catch { dui item config $page steps_msg -text "" }
+            catch { dui item hide $page mt_sdone* -initial 1 }
+            catch { dui item hide $page mt_sgo* -initial 1 }
+            catch { dui item hide $page mt_sedit* -initial 1 }
+            return
+        }
+        catch { dui item show $page mt_sedit* -initial 1 }
+        catch { dui item config $page page_title \
+            -text [::plugins::MaintenanceTracker::_item_label $id] }
+        set link [::plugins::MaintenanceTracker::_item_link $id]
+        set kind [lindex $link 0]
+        if {$kind eq ""} {
+            set sub [translate "Not linked to a machine action -- tap Mark done when you have finished."]
+        } else {
+            set sub "[translate {Linked to:}] [::plugins::MaintenanceTracker::_link_text $link]"
+        }
+        catch { dui item config $page steps_sub -text $sub }
+        set steps [::plugins::MaintenanceTracker::_item_steps $id]
+        for {set i 0} {$i < $n_max} {incr i} {
+            if {$i < [llength $steps]} {
+                catch { dui item config $page stepn$i -text "[expr {$i + 1}]." }
+                catch { dui item config $page stept$i -text [lindex $steps $i] }
+            } else {
+                catch { dui item config $page stepn$i -text "" }
+                catch { dui item config $page stept$i -text "" }
+            }
+        }
+        set armed [expr {$kind eq "clean" && $::plugins::MaintenanceTracker::clean_armed}]
+        # v0.27.0: a pending profile run for THIS tracker owns the slot.
+        set run [expr {$kind eq "profile" && [::plugins::MaintenanceTracker::_run_pending_for $id]}]
+        if {$run} {
+            set rr [::plugins::MaintenanceTracker::_run_pending]
+            set back_at [clock format [expr {[dict get $rr ts] + $::plugins::MaintenanceTracker::run_timeout_s}] -format %H:%M]
+            if {$::plugins::MaintenanceTracker::run_started} {
+                set hint "[translate {Running. Your profile}] [dict get $rr prev_title] [translate {comes back when it finishes.}]"
+            } else {
+                set hint "[translate {Now press the espresso button on the group head.}] [dict get $rr prev_title] [translate {comes back after the run, or at}] $back_at."
+            }
+            catch { dui item config $page steps_hint -text $hint }
+            catch { dui item config $page steps_msg -text "" }
+            catch { dui item show $page steps_ghc -initial 1 }
+            catch { dui item show $page steps_hint -initial 1 }
+        } else {
+            catch { dui item hide $page steps_ghc -initial 1 }
+            catch { dui item hide $page steps_hint -initial 1 }
+        }
+        if {$run} {
+            # handled above
+        } elseif {$armed} {
+            catch { dui item config $page steps_msg \
+                -text [translate "Blind basket and cleaning tablet in the group head? Tap again to start the clean cycle."] \
+                -fill $L(col_red) }
+        } elseif {$::plugins::MaintenanceTracker::prof_note ne ""} {
+            catch { dui item config $page steps_msg \
+                -text $::plugins::MaintenanceTracker::prof_note -fill $L(text_hi) }
+        } else {
+            catch { dui item config $page steps_msg -text "" }
+        }
+        # Relabel through the BARE dbutton tag (the wildcard form
+        # silently fails on-device).
+        catch { dui item config $page mt_sgo -label [::plugins::MaintenanceTracker::_steps_action_label $id] }
+        # v0.27.0: "Switch back now" is a way out, not the go-ahead: normal
+        # face while a run is pending, green otherwise (bare-tag recolor).
+        set face [expr {$run ? $L(btn_fill) : $L(col_ok)}]
+        catch { dui item config $page mt_sgo-btn -fill $face -outline $face }
+        catch { dui item show $page mt_sgo* -initial 1 }
+        if {$kind eq "" || $run} {
+            catch { dui item hide $page mt_sdone* -initial 1 }
+        } else {
+            catch { dui item show $page mt_sdone* -initial 1 }
+        }
+    }
+
+    proc back_click {} {
+        ::plugins::MaintenanceTracker::_disarm_clean
+        ::plugins::MaintenanceTracker::_return_to_page MaintenanceTracker_detail
+    }
+
+    # v0.28.0: the step editor for this tracker.
+    proc edit_click {} {
+        set id $::plugins::MaintenanceTracker::steps_item
+        if {$id eq ""} { return }
+        ::plugins::MaintenanceTracker::_disarm_clean
+        ::plugins::MaintenanceTracker::open_step_editor $id
+    }
+
+    proc done_click {} {
+        set id $::plugins::MaintenanceTracker::steps_item
+        if {$id eq ""} { return }
+        ::plugins::MaintenanceTracker::_disarm_clean
+        ::plugins::MaintenanceTracker::request_record $id MaintenanceTracker_detail
+    }
+
+    # The coloured action. A page the tap has left (Descale opened, Clean
+    # started, Record's confirm) is not repainted.
+    proc go_click {} {
+        set id $::plugins::MaintenanceTracker::steps_item
+        if {$id eq ""} { return }
+        switch -- [lindex [::plugins::MaintenanceTracker::_item_link $id] 0] {
+            profile {
+                # v0.27.0: Start (remember, switch, switch back later) or,
+                # while that run is pending, Switch back now.
+                if {[::plugins::MaintenanceTracker::_run_pending_for $id]} {
+                    ::plugins::MaintenanceTracker::cancel_profile_run
+                } else {
+                    ::plugins::MaintenanceTracker::start_profile_run $id
+                }
+            }
+            descale {
+                if {[::plugins::MaintenanceTracker::open_linked_descale $id]} { return }
+            }
+            clean {
+                if {[::plugins::MaintenanceTracker::clean_tap $id] eq "started"} { return }
+            }
+            default {
+                done_click
+                return
+            }
+        }
+        if {[catch { refresh } err]} {
+            catch { msg "MaintenanceTracker: steps refresh failed: $err" }
+        }
+    }
+
+    proc show {page_to_hide page_to_show} {
+        # Stuck-flag rule: no armed Clean survives a page switch.
+        ::plugins::MaintenanceTracker::_disarm_clean
+        if {![::plugins::MaintenanceTracker::_page_is_current MaintenanceTracker_steps]} { return }
+        if {[catch { refresh } err]} {
+            catch { msg "MaintenanceTracker: steps refresh failed: $err" }
+        }
+    }
+}
+
+# ===========================================================================
+#  Step editor page -- Pass 34 (v0.28.0). List mode: up to 8 numbered
+#  rows, each with Up / Down / Remove; tap a row's text to edit it. Bar:
+#  Cancel, Reset to default, Add step, Save (green). Form mode: one entry
+#  in the keyboard-safe top zone with Cancel / Save step right under it;
+#  the rows and the bar step aside. Everything edits the draft; only Save
+#  writes (::plugins::MaintenanceTracker::se_save).
+# ===========================================================================
+
+namespace eval ::dui::pages::MaintenanceTracker_stepedit {
+
+    proc setup {} {
+        set page [namespace tail [namespace current]]
+        upvar #0 ::plugins::MaintenanceTracker::L L
+        ::plugins::MaintenanceTracker::_page_bg $page
+        set lx $L(left_x)
+        set rx $L(right_x)
+        set cx [expr {($lx + $rx) / 2}]
+        set n_max $::plugins::MaintenanceTracker::steps_max
+
+        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title \
+            -text [translate "Edit steps"] \
+            -font $L(font_title) -width $L(content_w) -fill $L(text_hi) \
+            -anchor center -justify center
+        set sub_y [expr {int(round(96 * $L(scale)))}]
+        dui add dtext $page $cx $sub_y -tags se_sub -text "" \
+            -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) \
+            -anchor center -justify center
+
+        # List rows: 66 ref apart from 128, buttons 56 tall (the card
+        # action size); row 8 ends at 646, the bar starts at 716. Right
+        # to left: Remove (130), Down (100), Up (100), md apart; the
+        # text stops xl short of Up.
+        set pitch [expr {int(round(66 * $L(scale)))}]
+        set y0 [expr {int(round(128 * $L(scale)))}]
+        set bh [expr {int(round(56 * $L(scale)))}]
+        set num_w [expr {int(round(44 * $L(scale)))}]
+        set rm_w [expr {int(round(130 * $L(scale)))}]
+        set ud_w [expr {int(round(100 * $L(scale)))}]
+        set rm_x0 [expr {$rx - $rm_w}]
+        set dn_x1 [expr {$rm_x0 - $L(md)}] ; set dn_x0 [expr {$dn_x1 - $ud_w}]
+        set up_x1 [expr {$dn_x0 - $L(md)}] ; set up_x0 [expr {$up_x1 - $ud_w}]
+        set txt_x [expr {$lx + $num_w}]
+        set txt_w [expr {$up_x0 - $L(xl) - $txt_x}]
+        for {set i 0} {$i < $n_max} {incr i} {
+            set y [expr {$y0 + $i * $pitch}]
+            set ym [expr {$y + $bh / 2}]
+            dui add dtext $page $lx $ym -tags se_n$i -text "" \
+                -font $L(font_primary) -fill $L(col_ok) -anchor w -justify left
+            dui add dtext $page $txt_x $ym -tags se_t$i -text "" \
+                -font $L(font_body) -width $txt_w -fill $L(text_hi) -anchor w -justify left
+            # Invisible tap zone over number + text (the card-open rect
+            # pattern: no style, so no pressfill that could stick).
+            dui add dbutton $page $lx $y [expr {$up_x0 - $L(xl)}] [expr {$y + $bh}] \
+                -tags mt_serow$i \
+                -command [list ::dui::pages::MaintenanceTracker_stepedit::row_click $i] \
+                -initial_state hidden
+            dui add dbutton $page $up_x0 $y $up_x1 [expr {$y + $bh}] \
+                -tags mt_seup$i -label [translate "Up"] \
+                -command [list ::dui::pages::MaintenanceTracker_stepedit::move_click $i -1] \
+                -label_font $L(font_button) -style mt_btn -initial_state hidden
+            dui add dbutton $page $dn_x0 $y $dn_x1 [expr {$y + $bh}] \
+                -tags mt_sedn$i -label [translate "Down"] \
+                -command [list ::dui::pages::MaintenanceTracker_stepedit::move_click $i 1] \
+                -label_font $L(font_button) -style mt_btn -initial_state hidden
+            dui add dbutton $page $rm_x0 $y $rx [expr {$y + $bh}] \
+                -tags mt_serm$i -label [translate "Remove"] \
+                -command [list ::dui::pages::MaintenanceTracker_stepedit::remove_click $i] \
+                -label_font $L(font_button) -style mt_btn -initial_state hidden
+        }
+
+        # Form mode (top zone, y < 400 ref): caption, entry, hint, then
+        # Cancel / Save step. Born hidden.
+        set fcap_y [expr {int(round(132 * $L(scale)))}]
+        set fent_y [expr {int(round(164 * $L(scale)))}]
+        set fhint_y [expr {int(round(214 * $L(scale)))}]
+        set fbtn_y [expr {int(round(250 * $L(scale)))}]
+        dui add dtext $page $lx $fcap_y -tags se_fcap -text "" \
+            -font $L(font_primary) -fill $L(text_hi) -anchor nw -justify left \
+            -initial_state hidden
+        dui add entry $page $lx $fent_y -tags se_entry \
+            -textvariable ::plugins::MaintenanceTracker::se_text \
+            -width 90 -font $L(font_body) -borderwidth 1 -bg $L(entry_bg) \
+            -foreground $L(text_hi) -relief flat -initial_state hidden
+        dui add dtext $page $lx $fhint_y -tags se_fhint \
+            -text [translate "One line, up to 120 characters."] \
+            -font $L(font_caption) -fill $L(text_mut) -anchor nw -justify left \
+            -initial_state hidden
+        dui add dbutton $page $lx $fbtn_y [expr {$lx + $L(btn_w_std)}] [expr {$fbtn_y + $L(btn_h)}] \
+            -tags mt_sefcancel -label [translate "Cancel"] \
+            -command ::dui::pages::MaintenanceTracker_stepedit::form_cancel_click \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
+        dui add dbutton $page [expr {$rx - $L(btn_w_wide)}] $fbtn_y $rx [expr {$fbtn_y + $L(btn_h)}] \
+            -tags mt_sefsave -label [translate "Save step"] \
+            -command ::dui::pages::MaintenanceTracker_stepedit::form_save_click \
+            -label_font $L(font_button) -style mt_btn_primary -initial_state hidden
+
+        # Bottom bar (list mode): [Cancel] [Reset to default] [Add step]
+        # [Save] -- Detail's four-slot geometry; Save is the primary.
+        set bar_gap [expr {($L(content_w) - 2 * $L(btn_w_std) - 2 * $L(btn_w_xwide)) / 3}]
+        set rs_x0 [expr {$lx + $L(btn_w_std) + $bar_gap}]
+        set sv_x0 [expr {$rx - $L(btn_w_std)}]
+        set ad_x1 [expr {$sv_x0 - $bar_gap}]
+        dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
+            -tags mt_secancel -label [translate "Cancel"] \
+            -command ::dui::pages::MaintenanceTracker_stepedit::cancel_click \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
+        dui add dbutton $page $rs_x0 $L(bar_y0) [expr {$rs_x0 + $L(btn_w_xwide)}] $L(bar_y1) \
+            -tags mt_sereset -label [translate "Reset to default"] \
+            -command ::dui::pages::MaintenanceTracker_stepedit::reset_click \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
+        dui add dbutton $page [expr {$ad_x1 - $L(btn_w_xwide)}] $L(bar_y0) $ad_x1 $L(bar_y1) \
+            -tags mt_seadd -label [translate "Add step"] \
+            -command ::dui::pages::MaintenanceTracker_stepedit::add_click \
+            -label_font $L(font_button) -style mt_btn -initial_state hidden
+        dui add dbutton $page $sv_x0 $L(bar_y0) $rx $L(bar_y1) \
+            -tags mt_sesave -label [translate "Save"] \
+            -command ::dui::pages::MaintenanceTracker_stepedit::save_click \
+            -label_font $L(font_button) -style mt_btn_primary -initial_state hidden
+    }
+
+    proc _set_list_vis {page on} {
+        set n_max $::plugins::MaintenanceTracker::steps_max
+        set n [llength $::plugins::MaintenanceTracker::se_draft]
+        for {set i 0} {$i < $n_max} {incr i} {
+            set row [expr {$on && $i < $n}]
+            foreach t [list mt_serow$i mt_seup$i mt_sedn$i mt_serm$i] {
+                set show $row
+                if {$t eq "mt_seup$i" && $i == 0} { set show 0 }
+                if {$t eq "mt_sedn$i" && $i == $n - 1} { set show 0 }
+                catch { dui item [expr {$show ? "show" : "hide"}] $page $t* -initial 1 }
+            }
+            if {!$row} {
+                catch { dui item config $page se_n$i -text "" }
+                catch { dui item config $page se_t$i -text "" }
+            }
+        }
+        foreach t {mt_secancel mt_sereset mt_seadd mt_sesave} {
+            catch { dui item [expr {$on ? "show" : "hide"}] $page $t* -initial 1 }
+        }
+    }
+
+    proc _set_form_vis {page on} {
+        foreach t {se_fcap se_entry se_fhint} {
+            catch { dui item [expr {$on ? "show" : "hide"}] $page $t -initial 1 }
+        }
+        foreach t {mt_sefcancel mt_sefsave} {
+            catch { dui item [expr {$on ? "show" : "hide"}] $page $t* -initial 1 }
+        }
+    }
+
+    proc refresh {} {
+        set page [namespace tail [namespace current]]
+        upvar #0 ::plugins::MaintenanceTracker::L L
+        set id $::plugins::MaintenanceTracker::se_item
+        set err $::plugins::MaintenanceTracker::se_error
+        if {$id eq "" || ![info exists ::plugins::MaintenanceTracker::settings(item_$id)]} {
+            catch { dui item config $page se_sub -text [translate "Nothing selected"] -fill $L(text_mut) }
+            set ::plugins::MaintenanceTracker::se_draft {}
+            _set_form_vis $page 0
+            _set_list_vis $page 0
+            return
+        }
+        if {$err ne ""} {
+            catch { dui item config $page se_sub -text $err -fill $L(col_red) }
+        } else {
+            catch { dui item config $page se_sub \
+                -text [::plugins::MaintenanceTracker::_item_label $id] -fill $L(text_mut) }
+        }
+        if {$::plugins::MaintenanceTracker::se_mode eq "form"} {
+            _set_list_vis $page 0
+            set fi $::plugins::MaintenanceTracker::se_form_idx
+            set cap [expr {$fi < 0 ? [translate "New step"] : "[translate {Edit step}] [expr {$fi + 1}]"}]
+            catch { dui item config $page se_fcap -text $cap }
+            _set_form_vis $page 1
+            return
+        }
+        _set_form_vis $page 0
+        set draft $::plugins::MaintenanceTracker::se_draft
+        for {set i 0} {$i < [llength $draft]} {incr i} {
+            catch { dui item config $page se_n$i -text "[expr {$i + 1}]." }
+            catch { dui item config $page se_t$i \
+                -text [::plugins::MaintenanceTracker::_short_text \
+                    [::plugins::MaintenanceTracker::_se_display [lindex $draft $i]] 90] }
+        }
+        _set_list_vis $page 1
+        if {[llength $draft] >= $::plugins::MaintenanceTracker::steps_max} {
+            catch { dui item hide $page mt_seadd* -initial 1 }
+        }
+    }
+
+    proc _after {} {
+        if {[catch { refresh } err]} {
+            catch { msg "MaintenanceTracker: step editor refresh failed: $err" }
+        }
+    }
+    proc _hide_kb {} { catch { dui platform hide_android_keyboard } }
+
+    proc row_click {i}          { ::plugins::MaintenanceTracker::se_edit $i ; _after }
+    proc move_click {i delta}   { ::plugins::MaintenanceTracker::se_move $i $delta ; _after }
+    proc remove_click {i}       { ::plugins::MaintenanceTracker::se_remove $i ; _after }
+    proc add_click {}           { ::plugins::MaintenanceTracker::se_edit -1 ; _after }
+    proc reset_click {}         { ::plugins::MaintenanceTracker::se_reset ; _after }
+    proc form_save_click {} {
+        _hide_kb
+        ::plugins::MaintenanceTracker::se_form_save
+        _after
+    }
+    proc form_cancel_click {} {
+        _hide_kb
+        ::plugins::MaintenanceTracker::se_form_cancel
+        _after
+    }
+    proc cancel_click {} {
+        _hide_kb
+        set ::plugins::MaintenanceTracker::se_error ""
+        ::plugins::MaintenanceTracker::_return_to_page MaintenanceTracker_steps
+    }
+    proc save_click {} {
+        _hide_kb
+        if {[::plugins::MaintenanceTracker::se_save]} {
+            ::plugins::MaintenanceTracker::_return_to_page MaintenanceTracker_steps
+            return
+        }
+        _after
+    }
+
+    proc show {page_to_hide page_to_show} {
+        # Stuck-flag rule: a (re)shown editor starts in list mode; the
+        # draft itself survives (a flow interruption must not wipe it).
+        ::plugins::MaintenanceTracker::se_form_cancel
+        if {![::plugins::MaintenanceTracker::_page_is_current MaintenanceTracker_stepedit]} { return }
+        _after
     }
 }
 

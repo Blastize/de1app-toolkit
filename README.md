@@ -2,12 +2,12 @@
 
 **Five plugins and a skin for the classic Decent DE1 app, in one download. Drop two folders into the app, tick a few boxes, done.**
 
-| Lumen skin 0.57.5 | Grind Advisor 3.16.4 |
+| Lumen skin 0.58.0 | Grind Advisor 3.16.4 |
 |---|---|
 | ![Lumen home screen](docs/lumen.png) | ![Grind Advisor popup](docs/grindadvisor.png) |
 | A glass dashboard home screen: next grind, last shot, live graph, next-shot beans, favorite profile slots, your own colours. | After every espresso: your next grind setting and why. Nothing to type. |
 
-| Drink Menu 1.17.0 | Maintenance Tracker 0.24.1 |
+| Drink Menu 1.17.0 | Maintenance Tracker 0.28.0 |
 |---|---|
 | ![Drink Menu](docs/drinkmenu.png) | ![Maintenance Tracker](docs/maintenancetracker.png) |
 | 45 drinks drawn as cups with their layers; favorites, custom drinks, one tap to load a linked profile. | Backflush, descale, gaskets, burrs, filter, bottle level, counted from your shots. Alerts can load the cleaning profile. |
@@ -32,7 +32,7 @@ Every plugin works on any skin, but they are designed around Lumen. On Lumen eac
 ![Lumen's taskbar icons: the cup for Drink Menu, the wrench for Maintenance Tracker with its amber "due soon" dot, Lumen's gear and the app's settings](docs/lumen_taskbar_icons.png)
 
 - **Grind Advisor:** the **Recommended Grind** tile keeps your next setting, its change, method and confidence on screen between shots. **Shot analysis** and **Curve** open its cards; a tap on the tile opens its settings. Its popups float on glass in your theme's colours.
-- **Maintenance Tracker:** the **wrench** on the taskbar wears an amber dot when something is due soon and a red one when it is overdue, so you see it without opening anything. One tap opens the trackers.
+- **Maintenance Tracker:** the **wrench** on the taskbar wears an amber dot when something is due soon and a red one when it is overdue, so you see it without opening anything. One tap opens the trackers. While a cleaning profile is loaded, a red banner across the graph card says so, and when Maintenance Tracker loaded it, one tap on the banner puts your espresso profile back.
 - **Drink Menu:** the **cup** on the taskbar opens the menu.
 - **Shot History Editor:** the **Last Shot** card shows your last real espresso as its shot file records it, so your corrections show up there; its **Shot history** link opens the shot list.
 - **Bean Scanner:** **Scan bag** on the Next Shot strip opens the camera, and the accepted bag appears on the strip at once.
@@ -59,7 +59,7 @@ Then the skin: **Settings > App > Skin**, pick **Lumen** from the list, and rest
 
 - **Grind Advisor:** open its settings, set your **target shot time** and your grinder's **minimum and maximum**. It starts recommending after the first espresso of a bag and gets sharper with every shot.
 - **Bean Scanner:** it needs an API key of your own (Anthropic or OpenAI, pay as you go; one scan costs a fraction of a cent). Either type it in its settings, or put a file named `api_key_anthropic.txt` or `api_key_openai.txt` containing the key into `de1plus/plugins/BeanScanner/`.
-- **Maintenance Tracker:** tap **Record** on each tracker the next time you actually do that task; counters run from there. Backflush and descale record themselves after a real clean or descale cycle, and a tracker linked to a cleaning profile records itself when that profile runs. On a tracker's page you can link a profile, or the app's own Descale or Clean, so the next one is a tap away.
+- **Maintenance Tracker:** tap **Record** on each tracker the next time you actually do that task; counters run from there. Backflush and descale record themselves after a real clean or descale cycle, and a tracker linked to a cleaning profile records itself when that profile runs. On a tracker's page, **Start** shows step-by-step instructions (edit them with Edit steps) and one green button for the job. For a tracker linked to a cleaning profile, Start loads that profile, asks you to press the espresso button on the group head, and switches back to your espresso profile when the run is done. Links to a profile, or the app's own Descale or Clean, are set on the tracker's Edit page.
 - **Lumen:** the gear on Lumen's taskbar opens its settings; the THEME row's **Change** button opens the colour picker with Lumen dark, Lumen light, four more presets, your own backdrop and accent colours, and an **Auto** base that puts your colours on light glass by day and dark glass by night. The moon at the far left of the taskbar is Sleep, and the three names across the middle are favorite profiles: tap one to load it, and the loaded one glows.
 - **Drink Menu** and **Shot History Editor** need nothing.
 
@@ -75,10 +75,10 @@ Download the zip again and copy the two folders over the old ones. Your settings
 
 | Folder | Version |
 |---|---|
-| `skins/Lumen` | 0.57.5 |
+| `skins/Lumen` | 0.58.0 |
 | `plugins/GrindAdvisor` | 3.16.4 |
 | `plugins/DrinkMenu` | 1.17.0 |
-| `plugins/MaintenanceTracker` | 0.24.1 |
+| `plugins/MaintenanceTracker` | 0.28.0 |
 | `plugins/ShotHistoryEditor` | 0.13.0 |
 | `plugins/BeanScanner` | 0.9.13 |
 

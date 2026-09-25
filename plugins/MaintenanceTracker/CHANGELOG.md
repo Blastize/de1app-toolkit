@@ -4,6 +4,93 @@ Entries follow the CLAUDE.md doc cap (~15 lines each; entries that added or
 changed a write capability keep their full write-path description). The long
 pre-trim entries survive in the Desktop archive snapshot of each version.
 
+## v0.28.0 - 2026-09-25 - Pass 34: step editor - verify.sh PASS 2026-09-25 on run 1 (six page dumps incl. the editor + logcat clean); live: move + Cancel (nothing saved), edit with the keyboard up + Save ("3 own steps"), Reset to default + Save ("template", key removed)
+
+Base: v0.27.0. Owner: edit the instructions, add steps, "kind of like Drink Menu".
+
+- Steps page: **Edit steps** (header, top right) opens `MaintenanceTracker_stepedit`.
+- List mode: up to 8 numbered rows with Up / Down / Remove, tap a row to edit it; bar Cancel /
+  Reset to default / Add step / Save (green). Form mode: one entry + Cancel / Save step in the
+  keyboard-safe top zone; rows and bar step aside. Form buttons, Save and Cancel hide the keyboard.
+- Every control edits a draft (`se_draft`). Text is cleaned (whitespace runs -> one space,
+  trimmed, max 120 chars, max 8 steps). An untouched start line keeps the `{start}` token.
+
+Write path (NEW, the only one this pass adds): `se_save` -> the tracker's item dict in MT's own
+settings.tdb, `dict set d steps <list>`, or `dict unset d steps` when the draft equals the
+built-in template (the tracker then follows the template again), then ONE `save_settings`,
+logged "steps saved for '<id>' (...)". Refused with 0 steps or while the form is open.
+Nothing else is written; Cancel / Back write nothing.
+
+- pass_34_offline.tcl (345 checks) FAILS on v0.27.0, PASSES here.
+
+**Safety status: one new write -- the tracker's `steps` list in MT's own settings.tdb, only on
+the editor's Save. No machine, profile, history or database writes.**
+
+## v0.27.0 - 2026-09-25 - Pass 33: Start loads the cleaning profile and switches back - verify.sh PASS 2026-09-25 on run 1 (five page dumps + logcat clean); live on the tablet: Start armed (x5 loaded, 'Gentle and sweet' remembered), Switch back now restored it, run_restore cleared; a real group-head run is the owner's to close
+
+Base: v0.26.0. Owner: MT should switch to the linked profile, run it, then switch back to the
+espresso profile -- fewer decisions, no accidental espresso on the cleaning profile. The
+tablet cannot start espresso on a GHC machine (core machine.tcl:936, vars.tcl:3476), so
+the page asks for the group head's espresso button (cup glyph + hint).
+
+- Start (profile link, Steps page): refuses when busy, when the cleaning file is missing,
+  when the current profile has unsaved edits (`profile_has_changed`), is the cleaning profile
+  with nothing pending, or has no file. Otherwise it saves `settings(run_restore)` =
+  {prev_fn prev_title clean_fn clean_title item ts} FIRST, then switches (below). A Start
+  over a pending one keeps the pending espresso profile as the way back.
+- Switch-back triggers: 5 s after the run's after_flow_complete (the core saves the shot file
+  and MT auto-records in that event, so the cleaning profile must still be loaded then); 20 s
+  after Espresso ends if the run never reached the pour; Switch back now; 10 min after Start
+  if no Espresso began; 20 s after app start if one was left pending. Busy -> retry every 5 s
+  (give up after 10 min, logged). Dropped without switching if the loaded profile is no
+  longer the cleaning one, or an espresso starts with another profile.
+- One switch path, `_switch_profile`: file check, the core's `::select_profile`, then after
+  1 s the core's `save_settings` + `save_settings_to_de1` (v0.22.0 Load's calls, unchanged).
+- pass_33_offline.tcl (289 checks, GFC-style select_profile stub) FAILS on v0.26.0.
+
+**Safety status: NEW AUTOMATIC WRITE. The switch-back changes the app's loaded profile
+without a tap -- only back to the profile loaded at Start, only while the cleaning profile
+is still loaded and the machine is idle. Writes: the app's settings via the core's
+save_settings, the profile to the machine via save_settings_to_de1, and MT's own settings.tdb
+(`run_restore`). Never starts a flow; profile files are only read.**
+
+## v0.26.0 - 2026-09-25 - Pass 32: Steps page (instructions + one green action) - verify.sh PASS 2026-09-25 on run 1 (five page dumps incl. Steps + logcat clean; tablet screenshots: Detail Start, linked + unlinked Steps, Back chain)
+
+Base: v0.25.0. Owner: like Open Descale, a page to read the instructions, then run it.
+
+- New `MaintenanceTracker_steps` page: title, "Linked to" line, up to 8 numbered steps, one
+  green action (Load profile / Open Descale / Start Clean two-tap / Mark done) and, when
+  linked, a secondary Mark done. Mark done is the Record confirm flow, back to Detail.
+- Steps: the item's own `steps` list if present (nothing writes it yet; Pass 34), else a
+  built-in template chosen by keyword rules on the name (15 templates, owner's wording for
+  Cafetto Evo and Rinza); "{start}" becomes the link-aware start line.
+- Detail: the link row's button is now a green **Start** (opens Steps); Record back to the
+  normal style; the Clean arm and its warning moved to Steps. Armed Undo hides "Linked to:".
+- pass_32_offline.tcl (245 checks) FAILS on v0.25.0, PASSES here.
+
+**Safety status: no new write path and no new machine action. The page reuses the
+existing Load profile / Open Descale / Start Clean procs and the Record confirm flow.**
+
+## v0.25.0 - 2026-09-25 - Pass 31: list + Detail fixes, Link / Unlink on the Edit page - verify.sh PASS 2026-09-25 on run 2 (four page dumps incl. Edit + logcat clean; tablet screenshots checked: sort, Detail, armed Undo, Edit draft Unlink + Cancel)
+
+Base: v0.24.1. Owner: Unlink sat beside Load profile, same size, easy to hit by mistake.
+Tablet captures also showed a cut-off profile name, no Record on Detail, Undo as the page's
+big red main button, and "worst first" sorting by status only (Drip tray 71% under Cafiza 5%).
+
+- List: rank, then value / threshold (highest first), then original order (`_worst_first_ids`).
+- Detail: link shown in full with its one action; green Record (new `mt_btn_primary`) returns
+  to Detail; Undo is a normal button beside Back, red only while armed; header moved up.
+- Edit: Link profile / Link Descale / Link Clean / Unlink beside the name entry, as a draft
+  (`edit_link`) written by Save in its one save_settings; Cancel drops it. Link profile keeps
+  v0.24.1's file check. Link taps hide the keyboard.
+- pass_31_offline.tcl (201 checks) FAILS on v0.24.1, PASSES here; caught an undeclared
+  `edit_link` in open_edit before the tablet.
+- verify.sh run 1 FAILED (Edit: "Linked to:" overlapped "none": `font measure` returns physical px,
+  canvas coords are virtual, 1.91x short). Fixed as one "Linked to: <value>" text item + a GEOM guard.
+
+**Safety status: no new write path. Link keys now change only on Edit > Save (same
+settings.tdb save as every Edit field); Record is the existing confirm flow.**
+
 ## v0.24.1 - 2026-09-25 - Pass 30: Load / Link profile refuse a missing profile file - verify.sh PASS 2026-09-25 on run 1 (three page dumps + logcat clean; owner checklist open)
 
 Base: v0.24.0. Owner, 2026-09-25 16:26: Load profile on "Backflush - Water" (linked

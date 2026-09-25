@@ -4,6 +4,25 @@ Entries follow a documentation cap (about 15 lines each; longer only where a
 version added or changed a write capability). The original long-form entries
 survive unchanged in the archive snapshot of each version.
 
+## 0.58.0 - cleaning-profile banner on the home page (2026-09-25) - verify.sh PASS on run 1; live: MT Start -> banner on home, tap -> switched back, banner gone
+
+Base: 0.57.5. Owner: after Maintenance Tracker loads a cleaning profile, the home page must
+say so obviously, so an espresso is never pulled on it by accident.
+
+- A red banner over the graph card's legend band (the graph is a Tk window below it) while
+  the loaded profile's beverage_type is cleaning, however it was loaded: "CLEANING PROFILE
+  LOADED" + its name; right side: "<espresso profile> comes back at HH:MM - Tap to switch
+  back now" while Maintenance Tracker 0.27.0+ holds a switch-back for it ("comes back after
+  the run" once it runs), else "Pick your espresso profile before brewing".
+- Fav-halo pattern: items never hidden; the 200 ms accessor paints / blanks the face only on
+  a state or theme-colour change. White text (named colour, never retheme-tagged).
+- The tap (style none, 0.57.3 precedent) calls MT's public `cancel_profile_run` only while
+  MT holds a switch-back for the loaded profile; MT's `run_restore` is read, never written.
+- check_skin.tcl: 0.58.0 section (states, texts, tap gate, repaint, band geometry).
+
+**Safety status: read-only skin change; no new write path. The one call out is MT's own
+public switch-back (MT 0.27.0 documents its writes).**
+
 ## 0.57.5 - LAST SHOT shows the grind the shot was pulled at (2026-09-24)
 
 Base: 0.57.4. Same owner screenshots: right after a shot the LAST SHOT card
