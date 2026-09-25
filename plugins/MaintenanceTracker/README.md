@@ -1,7 +1,7 @@
 # Maintenance Tracker
 
 **Backflush, descale, gaskets, burrs, water filter, bottle level. Counted from your shots, recorded with one tap.**
-Version 0.28.0 · a plugin for the Decent DE1app · by Blastize
+Version 0.29.0 · a plugin for the Decent DE1app · by Blastize
 
 ![The tracker list: every item with its counter and a green, amber or red bar](docs/trackers.png)
 
@@ -50,7 +50,7 @@ measured from the machine's own dispense reports) — plus your own
 **custom trackers** (a second grinder, a water tank clean, anything)
 with their own name, unit and threshold.
 
-Author: **Blastize** · Current version: **0.28.0** (Pass 34)
+Author: **Blastize** · Current version: **0.29.0** (Pass 35)
 
 ## What it will do (target design)
 
@@ -64,8 +64,12 @@ Author: **Blastize** · Current version: **0.28.0** (Pass 34)
 - A small public API (`status_summary`, `open_page`) lets the Lumen skin
   show a notification dot near a maintenance icon.
 
-## What it does right now (v0.28.0 — Pass 34)
+## What it does right now (v0.29.0 — Pass 35)
 
+- **Remove any record** (v0.29.0): tap a line in a tracker's history; it
+  turns red and the bottom button reads **Yes, Remove This Record** (tap
+  another line to change your mind, Cancel to leave it). Removing an older
+  record leaves the counter as it is; the newest is the usual Undo.
 - **Your own steps** (v0.28.0): **Edit steps** (top right of a tracker's
   Steps page) lists its steps with **Up**, **Down** and **Remove**; tap a
   step to rewrite it, **Add step** for a new one (up to eight, one line

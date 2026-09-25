@@ -1389,6 +1389,7 @@ namespace eval ::plugins::MaintenanceTracker {
             MaintenanceTracker_detail detail_counter text_hi
             MaintenanceTracker_detail detail_last text_body
             MaintenanceTracker_detail hist_title text_hi
+            MaintenanceTracker_detail hist_hint text_mut
             MaintenanceTracker_detail prof_label text_body
             MaintenanceTracker_add page_title text_hi
             MaintenanceTracker_add name_label text_body
@@ -1738,10 +1739,14 @@ namespace eval ::plugins::MaintenanceTracker {
 
     variable detail_item ""
     variable detail_mode view
+    # v0.29.0 (Pass 35): the events-list index the confirm mode targets
+    # (-1 = the newest, i.e. the classic Undo). Reset with the mode.
+    variable detail_target -1
 
     proc open_detail {id} {
         variable detail_item
         variable detail_mode
+        variable detail_target
         variable settings
         if {![info exists settings(item_$id)]} {
             catch { msg "MaintenanceTracker: unknown item for detail: $id" }
@@ -1749,6 +1754,7 @@ namespace eval ::plugins::MaintenanceTracker {
         }
         set detail_item $id
         set detail_mode view
+        set detail_target -1
         open_page MaintenanceTracker_detail
     }
 
@@ -1981,6 +1987,48 @@ namespace eval ::plugins::MaintenanceTracker {
         set n [llength [dict get $vector_defs $name]]
         set tags {}
         for {set i 0} {$i < $n} {incr i} { lappend tags ${basetag}_s$i }
+        _set_vis $page $tags $show
+    }
+
+    # v0.28.1: the DE1 group head's espresso-button icon (owner photo of
+    # the GHC), for the Steps page's "press this button" hint: a SOLID
+    # bowl-shaped cup with a horizontal slot under the rim, a round ring
+    # handle, a thick saucer bar. Box 0..100, centred on (cx, cy), `box`
+    # virtual px. Parts (tags <base>_body/_slot/_ring/_saucer) are born
+    # hidden; the slot is filled with the page background by the caller
+    # (it is a cut-out, so it follows the theme).
+    variable ghc_cup_parts {body slot ring saucer}
+    proc _add_ghc_cup {page base cx cy box color} {
+        set s [expr {double($box) / 100.0}]
+        set P [list]
+        # Doubled points keep the rim corners sharp under -smooth 1.
+        foreach {x y} {12 22 12 22 72 22 72 22 72 36 69 48 62 57 52 60 32 60 22 57 15 48 12 36} {
+            lappend P [expr {int(round($cx + ($x - 50) * $s))}] [expr {int(round($cy + ($y - 47) * $s))}]
+        }
+        dui add canvas_item polygon $page {*}$P -smooth 1 -fill $color -outline $color \
+            -width 1 -tags ${base}_body -initial_state hidden
+        dui add canvas_item rect $page \
+            [expr {int(round($cx + (19 - 50) * $s))}] [expr {int(round($cy + (29 - 47) * $s))}] \
+            [expr {int(round($cx + (65 - 50) * $s))}] [expr {int(round($cy + (39 - 47) * $s))}] \
+            -fill $color -outline "" -width 0 -tags ${base}_slot -initial_state hidden
+        set rw [expr {max(3, int(round(4.5 * $s)))}]
+        dui add canvas_item oval $page \
+            [expr {int(round($cx + (80 - 6.5 - 50) * $s))}] [expr {int(round($cy + (30 - 6.5 - 47) * $s))}] \
+            [expr {int(round($cx + (80 + 6.5 - 50) * $s))}] [expr {int(round($cy + (30 + 6.5 - 47) * $s))}] \
+            -outline $color -width $rw -tags ${base}_ring -initial_state hidden
+        dui add canvas_item line $page \
+            [expr {int(round($cx + (14 - 50) * $s))}] [expr {int(round($cy + (70 - 47) * $s))}] \
+            [expr {int(round($cx + (70 - 50) * $s))}] [expr {int(round($cy + (70 - 47) * $s))}] \
+            -fill $color -width [expr {max(4, int(round(6 * $s)))}] -capstyle round \
+            -tags ${base}_saucer -initial_state hidden
+    }
+
+    proc _show_ghc_cup {page base show} {
+        variable ghc_cup_parts
+        variable L
+        set tags {}
+        foreach part $ghc_cup_parts { lappend tags ${base}_$part }
+        if {$show} { _cfg $page ${base}_slot -fill $L(page_bg) }
         _set_vis $page $tags $show
     }
 
@@ -2466,6 +2514,35 @@ namespace eval ::plugins::MaintenanceTracker {
         set settings(item_$id) $d
         save_settings
         catch { msg "MaintenanceTracker: undid last record of '$id'" }
+        _invalidate_status_cache
+        return 1
+    }
+
+    # v0.29.0 (Pass 35): remove ONE chosen record (owner: a stray entry
+    # from before the v0.24.0 fix sat in the middle of a history, where
+    # Undo cannot reach). The second destructive capability of this
+    # plugin, reached only through Detail's two-tap confirm. The removed
+    # event is escrowed in settings(last_removed_event) (newest only, the
+    # last_deleted_custom pattern) and logged; last_done is re-derived.
+    # Removing the newest is exactly undo_last_event, so that path keeps
+    # its own proc and wording; this one refuses the newest index.
+    proc remove_event {id idx} {
+        variable settings
+        if {$id eq "" || ![info exists settings(item_$id)]} { return 0 }
+        set d $settings(item_$id)
+        set events {}
+        catch { set events [dict get $d events] }
+        set n [llength $events]
+        if {![string is integer -strict $idx] || $idx < 0 || $idx >= $n - 1} { return 0 }
+        set ev [lindex $events $idx]
+        set settings(last_removed_event) [dict create id $id index $idx event $ev removed [clock seconds]]
+        dict set d events [lreplace $events $idx $idx]
+        set d [_sync_last_done $d]
+        set settings(item_$id) $d
+        save_settings
+        set when "?"
+        catch { set when [clock format [dict get $ev ts] -format {%Y-%m-%d %H:%M}] }
+        catch { msg "MaintenanceTracker: removed the $when record of '$id' ([expr {$idx + 1}] of $n)" }
         _invalidate_status_cache
         return 1
     }
@@ -4736,11 +4813,27 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             -text [translate "History (newest first)"] \
             -font $L(font_primary) -width $L(content_w) -fill $L(text_hi) \
             -anchor nw -justify left
+        # v0.29.0: rows 34 -> 40 ref apart and each a tap zone (the whole
+        # row, 40 ref tall, contiguous): tapping one arms its removal in
+        # the confirm mode. A caption on the title line says so.
+        set ev_pitch [expr {int(round(40 * $L(scale)))}]
+        set ev_lead [expr {int(round(8 * $L(scale)))}]
+        dui add dtext $page $rx $hist_y -tags hist_hint \
+            -text [translate "Tap a record to remove it"] \
+            -font $L(font_caption) -fill $L(text_mut) -anchor ne -justify right \
+            -initial_state hidden
         for {set i 0} {$i < $event_rows} {incr i} {
-            set y [expr {$hist_y + $L(xxl) + $i * $L(diag_row_h)}]
+            set y [expr {$hist_y + $L(xxl) + $i * $ev_pitch}]
             dui add dtext $page $lx $y -tags ev$i -text "" \
                 -font $L(font_body) -width $L(content_w) -fill $L(text_body) \
                 -anchor nw -justify left
+        }
+        for {set i 0} {$i < $event_rows} {incr i} {
+            set y [expr {$hist_y + $L(xxl) + $i * $ev_pitch - $ev_lead}]
+            dui add dbutton $page $lx $y $rx [expr {$y + $ev_pitch}] \
+                -tags mt_ev$i \
+                -command [list ::dui::pages::MaintenanceTracker_detail::event_click $i] \
+                -initial_state hidden
         }
 
         # v0.22.0: linked-profile row between the history and the
@@ -4757,7 +4850,9 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         # mistake). The value gets the room the Unlink button had, so a
         # profile title shows in full. Row 520 -> 476 ref with the
         # history; the last event line ends ~444.
-        set prof_y0 [expr {int(round(476 * $L(scale)))}]
+        # v0.29.0: 476 -> 500 ref, below the taller history rows (the last
+        # row's tap zone ends at 480).
+        set prof_y0 [expr {int(round(500 * $L(scale)))}]
         set prof_y1 [expr {$prof_y0 + $L(btn_h)}]
         set prof_mid [expr {($prof_y0 + $prof_y1) / 2}]
         set load_x0 [expr {$rx - $L(btn_w_wide)}]
@@ -4835,7 +4930,9 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             }
             for {set i 0} {$i < $event_rows} {incr i} {
                 catch { dui item config $page ev$i -text "" }
+                catch { dui item hide $page mt_ev$i* -initial 1 }
             }
+            catch { dui item hide $page hist_hint -initial 1 }
             catch { dui item hide $page bar_undo* -initial 1 }
             catch { dui item hide $page mt_hide* -initial 1 }
             catch { dui item hide $page btn_edit* -initial 1 }
@@ -4843,7 +4940,11 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             catch { dui item hide $page mt_record* -initial 1 }
             catch { dui item config $page prof_value -text "" }
             catch { dui item config $page bar_left -label [translate "Back"] }
-            catch { dui item hide $page det_plate* -initial 1 }
+            # v0.28.1: plain canvas items by their EXACT tags -- `det_plate*`
+            # is a literal compound-widget tag and matched nothing, leaving
+            # the grey plate and state dot on screen (two squares).
+            catch { dui item hide $page det_plate -initial 1 }
+            catch { dui item hide $page detail_dot -initial 1 }
             catch { dui item hide $page det_icon -initial 1 }
             foreach {vtag vname} {vsw steam-wand vgf gasket-flat} {
                 ::plugins::MaintenanceTracker::_show_vector_icon $page det_$vtag $vname 0
@@ -4908,54 +5009,81 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         # exactly like the tracker's card.
         set tint $L(tint_unknown)
         catch { set tint $L(tint_$state) }
-        catch { dui item show $page det_plate* -initial 1 }
+        catch { dui item show $page det_plate -initial 1 }
+        catch { dui item show $page detail_dot -initial 1 }
         catch { dui item config $page det_plate -fill $tint -outline $tint }
         ::plugins::MaintenanceTracker::_apply_item_icon $page det_icon det $id $color
 
-        # Event list, newest first.
+        # Event list, newest first. v0.29.0: row i shows events index
+        # n-1-i and is a tap zone; in the confirm mode the targeted row
+        # turns red.
         set events {}
         catch { set events [dict get $::plugins::MaintenanceTracker::settings(item_$id) events] }
         set n [llength $events]
+        set target $::plugins::MaintenanceTracker::detail_target
+        # -1 (the classic Undo) or a stale index -> the newest record.
+        if {![string is integer -strict $target] || $target < 0 || $target >= $n} {
+            set target [expr {$n - 1}]
+            set ::plugins::MaintenanceTracker::detail_target -1
+        }
         if {$n == 0} {
-            catch { dui item config $page ev0 -text [translate "Never recorded."] }
+            catch { dui item config $page ev0 -text [translate "Never recorded."] -fill $L(text_body) }
+            catch { dui item hide $page mt_ev0* -initial 1 }
             for {set i 1} {$i < $event_rows} {incr i} {
                 catch { dui item config $page ev$i -text "" }
+                catch { dui item hide $page mt_ev$i* -initial 1 }
             }
         } else {
             set shown 0
             for {set j [expr {$n - 1}]} {$j >= 0 && $shown < $event_rows} {incr j -1} {
+                set fill [expr {$mode eq "confirm" && $j == $target ? $L(col_red) : $L(text_body)}]
                 catch { dui item config $page ev$shown \
-                    -text [::plugins::MaintenanceTracker::_event_line [lindex $events $j]] }
+                    -text [::plugins::MaintenanceTracker::_event_line [lindex $events $j]] -fill $fill }
+                catch { dui item show $page mt_ev$shown* -initial 1 }
                 incr shown
             }
             for {set i $shown} {$i < $event_rows} {incr i} {
                 catch { dui item config $page ev$i -text "" }
+                catch { dui item hide $page mt_ev$i* -initial 1 }
             }
+        }
+        if {$mode ne "confirm" && $n > 0} {
+            catch { dui item show $page hist_hint -initial 1 }
+        } else {
+            catch { dui item hide $page hist_hint -initial 1 }
         }
 
         # Mode-dependent parts. v0.15.0: only two modes remain (view and
         # the armed undo confirm) -- delete lives on the Edit page now,
         # and Edit/Hide apply to every tracker uniformly.
         if {$mode eq "confirm" && $n > 0} {
-            set newest [lindex $events end]
-            set when ""
-            catch { set when [clock format [dict get $newest ts] -format {%Y-%m-%d %H:%M}] }
-            if {$n >= 2} {
-                set prev ""
-                catch { set prev [clock format [dict get [lindex $events end-1] ts] -format {%Y-%m-%d %H:%M}] }
-                set falls "[translate {The counter returns to}] $prev."
+            if {$target == $n - 1} {
+                set newest [lindex $events end]
+                set when ""
+                catch { set when [clock format [dict get $newest ts] -format {%Y-%m-%d %H:%M}] }
+                if {$n >= 2} {
+                    set prev ""
+                    catch { set prev [clock format [dict get [lindex $events end-1] ts] -format {%Y-%m-%d %H:%M}] }
+                    set falls "[translate {The counter returns to}] $prev."
+                } else {
+                    set falls "[translate {The counter returns to: never recorded.}]"
+                }
+                set ctext "[translate {Undo the record from}] $when?  $falls"
+                set clabel [translate "Yes, Delete Last Record"]
             } else {
-                set falls "[translate {The counter returns to: never recorded.}]"
+                # v0.29.0: an older record -- the counter keeps the newest.
+                set when ""
+                catch { set when [clock format [dict get [lindex $events $target] ts] -format {%Y-%m-%d %H:%M}] }
+                set ctext "[translate {Remove the record from}] $when?  [translate {The counter stays as it is.}]"
+                set clabel [translate "Yes, Remove This Record"]
             }
-            catch { dui item config $page confirm_msg \
-                -text "[translate {Undo the record from}] $when?  $falls" \
-                -fill $L(col_red) }
+            catch { dui item config $page confirm_msg -text $ctext -fill $L(col_red) }
             catch { dui item config $page bar_left -label [translate "Cancel"] }
             # v0.6.1 (owner request): the confirm-state label spells out
             # exactly what the second tap does -- the eye is already
             # locked on this button, so the button itself carries the
             # warning, not just the message text above it.
-            catch { dui item config $page bar_undo -label [translate "Yes, Delete Last Record"] }
+            catch { dui item config $page bar_undo -label $clabel }
             catch { dui item show $page bar_undo* -initial 1 }
             # v0.25.0: red only while armed (the bare-tag face recolor,
             # the same mechanism as the theme walk).
@@ -5042,8 +5170,27 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         ::plugins::MaintenanceTracker::open_edit $id
     }
 
+    # v0.29.0: tap a history row -> the confirm mode targets that record
+    # (row i = events index n-1-i). A tap on another row re-targets.
+    proc event_click {i} {
+        set id $::plugins::MaintenanceTracker::detail_item
+        if {$id eq ""} { return }
+        set events {}
+        catch { set events [dict get $::plugins::MaintenanceTracker::settings(item_$id) events] }
+        set n [llength $events]
+        set idx [expr {$n - 1 - $i}]
+        if {$i < 0 || $idx < 0} { return }
+        ::plugins::MaintenanceTracker::_disarm_clean
+        set ::plugins::MaintenanceTracker::detail_target $idx
+        set ::plugins::MaintenanceTracker::detail_mode confirm
+        if {[catch { refresh } err]} {
+            catch { msg "MaintenanceTracker: detail refresh failed: $err" }
+        }
+    }
+
     proc left_click {} {
         # Cancel out of EITHER confirm mode back to view; leave from view.
+        set ::plugins::MaintenanceTracker::detail_target -1
         if {$::plugins::MaintenanceTracker::detail_mode ne "view"} {
             set ::plugins::MaintenanceTracker::detail_mode view
             if {[catch { refresh } err]} {
@@ -5061,10 +5208,18 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             set events {}
             catch { set events [dict get $::plugins::MaintenanceTracker::settings(item_$id) events] }
             if {[llength $events] == 0} { return }
+            set ::plugins::MaintenanceTracker::detail_target -1
             set ::plugins::MaintenanceTracker::detail_mode confirm
         } else {
             set ::plugins::MaintenanceTracker::detail_mode view
-            if {[::plugins::MaintenanceTracker::undo_last_event $id]} {
+            set events {}
+            catch { set events [dict get $::plugins::MaintenanceTracker::settings(item_$id) events] }
+            set t $::plugins::MaintenanceTracker::detail_target
+            set ::plugins::MaintenanceTracker::detail_target -1
+            if {[string is integer -strict $t] && $t >= 0 && $t < [llength $events] - 1} {
+                # v0.29.0: an older record; stay on Detail to see the result.
+                ::plugins::MaintenanceTracker::remove_event $id $t
+            } elseif {[::plugins::MaintenanceTracker::undo_last_event $id]} {
                 ::plugins::MaintenanceTracker::_return_to_page MaintenanceTracker_settings
                 return
             }
@@ -5090,6 +5245,7 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         # Stuck-flag rule: every show starts in view mode, and (v0.23.0)
         # with the Clean action disarmed.
         set ::plugins::MaintenanceTracker::detail_mode view
+        set ::plugins::MaintenanceTracker::detail_target -1
         ::plugins::MaintenanceTracker::_disarm_clean
         # v0.23.1: a show hook queued before the page was left (dui runs
         # them after idle) must not repaint over the page now on screen.
@@ -5766,11 +5922,13 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
         # v0.27.0: while a profile run is armed, the message slot becomes
         # a hint row: the group head's cup glyph + what to do and when
         # the espresso profile comes back. Both born hidden.
-        set ghc_w [expr {int(round(64 * $L(scale)))}]
-        dui add dtext $page [expr {$lx + $ghc_w / 2}] $msg_y -tags steps_ghc \
-            -text [::plugins::MaintenanceTracker::_glyph_for mug-hot] \
-            -font $L(font_icon_plate) -fill $L(col_ok) -anchor center -justify center \
-            -initial_state hidden
+        # v0.28.1: the cup is the group head's own espresso icon (owner
+        # photo of the DE1 GHC: solid bowl with a slot, ring handle,
+        # saucer bar), drawn 72 ref wide -- the font glyph was a
+        # different, smaller cup.
+        set ghc_w [expr {int(round(76 * $L(scale)))}]
+        ::plugins::MaintenanceTracker::_add_ghc_cup $page steps_ghc \
+            [expr {$lx + $ghc_w / 2}] $msg_y [expr {int(round(72 * $L(scale)))}] $L(col_ok)
         dui add dtext $page [expr {$lx + $ghc_w + $L(md)}] $msg_y -tags steps_hint -text "" \
             -font $L(font_primary) -width [expr {$L(content_w) - $ghc_w - $L(md)}] \
             -fill $L(text_hi) -anchor w -justify left -initial_state hidden
@@ -5842,14 +6000,14 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
             if {$::plugins::MaintenanceTracker::run_started} {
                 set hint "[translate {Running. Your profile}] [dict get $rr prev_title] [translate {comes back when it finishes.}]"
             } else {
-                set hint "[translate {Now press the espresso button on the group head.}] [dict get $rr prev_title] [translate {comes back after the run, or at}] $back_at."
+                set hint "[translate {Press this button on the group head to start.}] [dict get $rr prev_title] [translate {comes back after the run, or at}] $back_at."
             }
             catch { dui item config $page steps_hint -text $hint }
             catch { dui item config $page steps_msg -text "" }
-            catch { dui item show $page steps_ghc -initial 1 }
+            ::plugins::MaintenanceTracker::_show_ghc_cup $page steps_ghc 1
             catch { dui item show $page steps_hint -initial 1 }
         } else {
-            catch { dui item hide $page steps_ghc -initial 1 }
+            ::plugins::MaintenanceTracker::_show_ghc_cup $page steps_ghc 0
             catch { dui item hide $page steps_hint -initial 1 }
         }
         if {$run} {
