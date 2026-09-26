@@ -900,8 +900,10 @@ namespace eval ::plugins::GrindAdvisor {
     }
 
     # True while the machine runs any flow (espresso, steam, water, rinse,
-    # clean, descale). Read defensively: state may be a number that maps to a
-    # name via ::de1_num_state, or already a name.
+    # clean, descale) or waits for a refill (v3.16.5: the core loads its
+    # tank-empty page on Refill, gui.tcl:63; the popup must not stay over
+    # it). Read defensively: state may be a number that maps to a name via
+    # ::de1_num_state, or already a name.
     proc _flow_active {} {
         set name ""
         catch {
@@ -915,7 +917,16 @@ namespace eval ::plugins::GrindAdvisor {
             }
         }
         if {$name eq ""} { return 0 }
-        return [regexp -nocase {espresso|steam|water|rinse|clean|descale|purge} $name]
+        return [regexp -nocase {espresso|steam|water|rinse|clean|descale|purge|refill} $name]
+    }
+
+    # v3.16.5: the app's tank-empty pages (core "tankempty"; Lumen also
+    # declares "refill").
+    proc _on_refill_page {} {
+        set ctx ""
+        catch { set ctx $::de1(current_context) }
+        if {$ctx eq ""} { catch { set ctx [dui page current] } }
+        return [expr {$ctx in {tankempty refill}}]
     }
 
     proc _on_settings_page {} {
@@ -957,6 +968,10 @@ namespace eval ::plugins::GrindAdvisor {
 
     proc _nav_page_change {args} {
         variable popup_active
+        # v3.16.5: a popup still up when the tank-empty page loads (it
+        # opened before the state trace could see Refill, or by hand) is
+        # closed -- it would sit over the page and hold the grab.
+        if {[_overlay_exists] && [_on_refill_page]} { _close_dialog }
         # Any page navigation resets a stuck guard flag so it can never
         # permanently block the popup or buttons.
         if {$popup_active && ![_overlay_exists]} { set popup_active 0 }

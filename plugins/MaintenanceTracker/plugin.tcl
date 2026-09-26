@@ -1,6 +1,9 @@
 #
 # Maintenance Tracker -- DE1app plugin manifest
 #
+# v0.29.1 polish: section cards behind Detail (status, History, Linked
+# profile), Steps, Edit steps and New Tracker. Layout only.
+#
 # Pass 35 (v0.29.0): remove one chosen history record. Tap a row of the
 # Detail page's history; the two-tap confirm names it ("Yes, Remove This
 # Record"); the removed record is escrowed and logged. Undo (newest)
@@ -248,7 +251,7 @@ namespace eval ::plugins::MaintenanceTracker {
     variable contact     "n/a"
     # Bare number, no "v" prefix (ShotHistoryEditor v0.6.4 lesson: the
     # startup log message prepends one).
-    variable version     "0.29.0"
+    variable version     "0.29.1"
     variable name        "Maintenance Tracker"
     variable description "Tracks machine maintenance (backflush, descale, gasket, burrs, water filter, water bottle level, plus your own custom trackers) from user-recorded events and the machine's own dispense reports. Read-only by design; writes only its own settings file."
 

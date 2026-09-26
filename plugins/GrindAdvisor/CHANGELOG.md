@@ -4,6 +4,22 @@ Entries follow the CLAUDE.md doc cap (about 15 lines each; entries that added or
 capability keep their full write-path description). The long pre-trim entries survive in the
 Desktop archive snapshot of each version ("GrindAdvisor Archive/GrindAdvisor vX.Y.Z").
 
+## v3.16.5 (popup closes for the tank-empty page) - 2026-09-26
+
+Base: v3.16.4. Owner bug, tablet screenshot 2026-09-26 12:52: the Shot Saved popup stayed
+over the app's fill-water-tank page (glass card over the Lumen refill page, its Exit App / Ok
+around it; the popup's grab holds the taps).
+
+- `_flow_active` now also matches Refill (core state 17, which loads "tankempty",
+  gui.tcl:63). The existing `::de1(state)` trace therefore closes the popup and cancels a
+  pending auto-popup on Refill, and `run` opens no auto-popup while the tank is empty.
+- `_nav_page_change` (leave trace on page_display_change) closes a popup still up when the
+  page that loaded is `tankempty` or Lumen's `refill` (new `_on_refill_page`).
+- passes/GrindAdvisor/pass_3.16.5_offline.tcl: 18 checks, 8 fail on v3.16.4.
+
+**Safety status: read-only, unchanged. No write behavior exists in this version beyond the
+v3.9.0 Recalculate button (SDB's own resync). Popup close path only.**
+
 ## v3.16.4 (only espresso counts: beverage-type whitelist) - 2026-09-25
 
 Base: v3.16.3.

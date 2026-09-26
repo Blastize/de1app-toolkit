@@ -1,17 +1,17 @@
 # Maintenance Tracker
 
 **Backflush, descale, gaskets, burrs, water filter, bottle level. Counted from your shots, recorded with one tap.**
-Version 0.29.0 · a plugin for the Decent DE1app · by Blastize
+Version 0.29.1 · a plugin for the Decent DE1app · by Blastize
 
 ![The tracker list: every item with its counter and a green, amber or red bar](docs/trackers.png)
 
 **Everything on one page.** Each tracker shows shots or days since it was last done and a bar that goes amber, then red. Backflush and descale record themselves when the machine runs a real clean or descale cycle.
 
-![Tracker detail: the record history, a linked cleaning profile and a green Start button](docs/detail.png)
+![Tracker detail: a status card with the wear bar, the record history beside the linked cleaning profile and a green Start button](docs/detail.png)
 
-**Tracker detail.** The history of records, Record and undo for the last one, and the tracker's link: a profile, or the app's own Descale or Clean action (links are set on the Edit page). The green Start button opens the steps.
+**Tracker detail.** A status card with the same bar as the list, the history of records (tap one to remove it; Undo takes back the last), and the tracker's link: a profile, or the app's own Descale or Clean action, with what records it automatically. The green Start button opens the steps.
 
-![Steps: numbered instructions for a water backflush, with Mark done and a green Start button](docs/steps.png)
+![Steps: six numbered instructions for a Cafiza backflush, with Mark done and a green Start button](docs/steps.png)
 
 **Steps.** Numbered instructions for the job and one green button to do it. Edit steps (top right) lets you reword, add, remove and reorder them. For a cleaning profile, Start loads it, tells you to press the espresso button on the group head, and puts your espresso profile back when the run is done. Descale and Clean links open the app's own actions; anything else is marked done.
 
@@ -20,6 +20,10 @@ Version 0.29.0 · a plugin for the Decent DE1app · by Blastize
 ![New Tracker: name, count by days, shots or ml, threshold and icon](docs/new_tracker.png)
 
 **Your own trackers.** A second grinder, a water tank clean, anything: name it, count by days, shots or millilitres, set the threshold, pick an icon.
+
+![Edit Tracker: name and link, due-after threshold and auto-record, icon](docs/edit_tracker.png)
+
+**Edit any tracker.** Rename it, link it to a profile or the app's Descale or Clean, change the threshold, auto-record or icon. Nothing changes until Save.
 
 ## Recommended: the Lumen skin
 
@@ -50,7 +54,7 @@ measured from the machine's own dispense reports) — plus your own
 **custom trackers** (a second grinder, a water tank clean, anything)
 with their own name, unit and threshold.
 
-Author: **Blastize** · Current version: **0.29.0** (Pass 35)
+Author: **Blastize** · Current version: **0.29.1** (section cards)
 
 ## What it will do (target design)
 
@@ -64,8 +68,12 @@ Author: **Blastize** · Current version: **0.29.0** (Pass 35)
 - A small public API (`status_summary`, `open_page`) lets the Lumen skin
   show a notification dot near a maintenance icon.
 
-## What it does right now (v0.29.0 — Pass 35)
+## What it does right now (v0.29.1 — section cards)
 
+- **Easier to read** (v0.29.1): every section sits on its own card. A
+  tracker's page shows its status card (the same bar as the list), the
+  history beside the linked profile, the steps with green numbers, and the
+  New Tracker and Edit Tracker pages in three cards each.
 - **Remove any record** (v0.29.0): tap a line in a tracker's history; it
   turns red and the bottom button reads **Yes, Remove This Record** (tap
   another line to change your mind, Cancel to leave it). Removing an older

@@ -1387,10 +1387,13 @@ namespace eval ::plugins::MaintenanceTracker {
             MaintenanceTracker_confirm_bottle confirm_note text_mut
             MaintenanceTracker_detail page_title text_hi
             MaintenanceTracker_detail detail_counter text_hi
-            MaintenanceTracker_detail detail_last text_body
-            MaintenanceTracker_detail hist_title text_hi
+            MaintenanceTracker_detail detail_last text_mut
+            MaintenanceTracker_detail hist_card_title text_hi
             MaintenanceTracker_detail hist_hint text_mut
-            MaintenanceTracker_detail prof_label text_body
+            MaintenanceTracker_detail link_card_title text_hi
+            MaintenanceTracker_detail auto_cap text_mut
+            MaintenanceTracker_detail auto_txt0 text_body
+            MaintenanceTracker_detail auto_txt1 text_body
             MaintenanceTracker_add page_title text_hi
             MaintenanceTracker_add name_label text_body
             MaintenanceTracker_add unit_label text_body
@@ -1398,14 +1401,14 @@ namespace eval ::plugins::MaintenanceTracker {
             MaintenanceTracker_add unit_hint text_mut
             MaintenanceTracker_add thr_label text_body
             MaintenanceTracker_add thr_value text_hi
-            MaintenanceTracker_add icon_label text_body
-            MaintenanceTracker_add hidden_title text_mut
+            MaintenanceTracker_add icon_label text_hi
+            MaintenanceTracker_add hidden_title text_hi
             MaintenanceTracker_edit page_title text_hi
             MaintenanceTracker_edit edit_current text_mut
             MaintenanceTracker_edit name_label text_body
             MaintenanceTracker_edit thr_label text_body
             MaintenanceTracker_edit thr_value text_hi
-            MaintenanceTracker_edit icon_label text_body
+            MaintenanceTracker_edit icon_label text_hi
             MaintenanceTracker_edit auto_label text_body
             MaintenanceTracker_edit auto_value text_hi
             MaintenanceTracker_edit link_value text_body
@@ -1421,8 +1424,44 @@ namespace eval ::plugins::MaintenanceTracker {
         }
         # Detail event rows.
         for {set i 0} {$i < 5} {incr i} {
-            catch { dui item config MaintenanceTracker_detail ev$i -fill $L(text_body) }
+            catch { dui item config MaintenanceTracker_detail ev$i -fill $L(text_hi) }
+            catch { dui item config MaintenanceTracker_detail evs$i -fill $L(text_body) }
+            catch { dui item config MaintenanceTracker_detail ev${i}_chev -fill $L(text_mut) }
+            catch { dui item config MaintenanceTracker_detail ev${i}_div -fill $L(card_outline) }
         }
+        # v0.29.1 section cards: backdrops + header dividers (Steps and
+        # editor row dividers are walked below; the per-count Steps /
+        # editor backdrops share one tag per page).
+        foreach {p tag} {
+            MaintenanceTracker_detail det_card
+            MaintenanceTracker_detail hist_card
+            MaintenanceTracker_detail link_card
+            MaintenanceTracker_steps steps_card
+            MaintenanceTracker_stepedit se_card
+            MaintenanceTracker_stepedit se_fcard
+            MaintenanceTracker_add add_c1
+            MaintenanceTracker_add add_c2
+            MaintenanceTracker_add add_c3
+            MaintenanceTracker_edit ed_c1
+            MaintenanceTracker_edit ed_c2
+            MaintenanceTracker_edit ed_c3
+        } {
+            catch { dui item config $p $tag -fill $L(card_bg) -outline $L(card_outline) }
+            catch { dui item config $p ${tag}_div -fill $L(card_outline) }
+            catch { dui item config $p ${tag}_title -fill $L(text_hi) }
+        }
+        for {set i 0} {$i < 8} {incr i} {
+            catch { dui item config MaintenanceTracker_steps stepd$i -fill $L(card_outline) }
+            catch { dui item config MaintenanceTracker_stepedit se_d$i -fill $L(card_outline) }
+        }
+        catch { dui item config MaintenanceTracker_add add_c1_vdiv -fill $L(card_outline) }
+        catch { dui item config MaintenanceTracker_add thr_box -fill $L(entry_bg) -outline $L(entry_bg) }
+        catch { dui item config MaintenanceTracker_edit thr_box -fill $L(entry_bg) -outline $L(entry_bg) }
+        catch { dui item config MaintenanceTracker_edit ed_c1_vdiv -fill $L(card_outline) }
+        for {set j 0} {$j < 20} {incr j} {
+            catch { dui item config MaintenanceTracker_detail det_seg$j -fill $L(bar_track) -outline $L(bar_track) }
+        }
+        catch { dui item config MaintenanceTracker_detail det_tick -fill $L(bar_tick) -outline $L(bar_tick) }
         # Diagnostics label/value rows.
         for {set i 0} {$i < 16} {incr i} {
             catch { dui item config MaintenanceTracker_diagnostics row${i}_label -fill $L(text_hi) }
@@ -1590,6 +1629,54 @@ namespace eval ::plugins::MaintenanceTracker {
         set L(bar_y0) [expr {int(round(716 * $scale))}]
         set L(bar_y1) [expr {int(round(776 * $scale))}]
 
+        # v0.29.1: section cards behind Detail, Steps, Edit steps and New
+        # Tracker (the list card's backdrop, full content width or split).
+        # A card = rounded backdrop + optional header band (title centred
+        # sec_head_h/2 down) closed by a one-row divider RECT (a canvas
+        # line anti-aliases into two half rows). Inner x = card edge +
+        # card_pad_x. Rows inside a card are fixed-pitch.
+        set L(sec_head_h) [expr {int(round(48 * $scale))}]
+        set L(sec_pad_y)  [expr {int(round(8 * $scale))}]
+        set L(div_h) 2
+        set L(badge) [expr {int(round(30 * $scale))}]
+        # Detail: status card (the list card's anatomy, no plate/button),
+        # then History (left, 66% of the width) beside Linked profile.
+        set L(det_top)     [expr {int(round(104 * $scale))}]
+        set L(det_low_y0)  [expr {int(round(216 * $scale))}]
+        set L(det_low_y1)  [expr {int(round(600 * $scale))}]
+        set L(det_hist_x1) [expr {$L(left_x) + int($L(content_w) * 0.66)}]
+        set L(det_row_h)   [expr {int(round(64 * $scale))}]
+        set L(det_msg_y)   [expr {int(round(658 * $scale))}]
+        # Steps: one card whose height follows the step count (one
+        # pre-built backdrop per count), the message callout fixed above
+        # the bar.
+        set L(steps_y0)    [expr {int(round(122 * $scale))}]
+        set L(steps_row_h) [expr {int(round(54 * $scale))}]
+        set L(call_y0)     [expr {int(round(626 * $scale))}]
+        set L(call_y1)     [expr {int(round(700 * $scale))}]
+        # Edit steps: same card, taller rows (Up/Down/Remove inside).
+        set L(se_row_h)    [expr {int(round(64 * $scale))}]
+        set L(se_btn_h)    [expr {int(round(56 * $scale))}]
+        # New Tracker: three cards -- name + counting + due-after, icon
+        # picker, hidden trackers.
+        set L(add_c1_y0)   [expr {int(round(104 * $scale))}]
+        set L(add_c1_y1)   [expr {int(round(328 * $scale))}]
+        set L(add_c2_y0)   [expr {int(round(344 * $scale))}]
+        set L(add_c2_y1)   [expr {int(round(534 * $scale))}]
+        set L(add_c3_y0)   [expr {int(round(550 * $scale))}]
+        set L(add_c3_y1)   [expr {int(round(674 * $scale))}]
+        set L(add_col_x)   [expr {$L(left_x) + int($L(content_w) * 0.47)}]
+        # Edit Tracker: subtitle, then name | link, due-after + auto-
+        # record + note, icon; the message line above the bar.
+        set L(ed_sub_y)    [expr {int(round(92 * $scale))}]
+        set L(ed_c1_y0)    [expr {int(round(120 * $scale))}]
+        set L(ed_c1_y1)    [expr {int(round(230 * $scale))}]
+        set L(ed_c2_y0)    [expr {int(round(246 * $scale))}]
+        set L(ed_c2_y1)    [expr {int(round(440 * $scale))}]
+        set L(ed_c3_y0)    [expr {int(round(456 * $scale))}]
+        set L(ed_c3_y1)    [expr {int(round(646 * $scale))}]
+        set L(ed_msg_y)    [expr {int(round(681 * $scale))}]
+
         # Self-contained colors (BeanScanner v0.1.2 pattern): the plugin
         # paints its own background and explicit button fills, so nothing
         # depends on which dui theme or skin palette is current.
@@ -1709,6 +1796,56 @@ namespace eval ::plugins::MaintenanceTracker {
         return [uplevel #0 [list dui add canvas_item polygon $page {*}$pts -smooth 1 {*}$args]]
     }
 
+    # v0.29.1: a section card -- the list card's backdrop (tag <tag>) and,
+    # with a title, a header band: title dtext <tag>_title (primary, left)
+    # and the divider rect <tag>_div under it. Extra args go to the
+    # backdrop (e.g. -initial_state hidden). Returns the y where the
+    # card's rows start.
+    proc _sec_card {page tag x1 y1 x2 y2 title args} {
+        variable L
+        rounded_rect $page $x1 $y1 $x2 $y2 $L(btn_radius) \
+            -fill $L(card_bg) -outline $L(card_outline) -width 2 -tags $tag {*}$args
+        if {$title eq ""} { return [expr {$y1 + $L(sec_pad_y)}] }
+        set hy [expr {$y1 + $L(sec_head_h)}]
+        dui add dtext $page [expr {$x1 + $L(card_pad_x)}] [expr {$y1 + $L(sec_head_h) / 2}] \
+            -tags ${tag}_title -text $title -font $L(font_primary) \
+            -width [expr {$x2 - $x1 - 2 * $L(card_pad_x)}] \
+            -fill $L(text_hi) -anchor w -justify left {*}$args
+        _sec_divider $page ${tag}_div $x1 $hy $x2 {*}$args
+        return $hy
+    }
+
+    # One-row divider (a rect, not a line: lines anti-alias into two
+    # half-alpha rows on AndroWish).
+    proc _sec_divider {page tag x1 y x2 args} {
+        variable L
+        dui add canvas_item rect $page $x1 $y $x2 [expr {$y + $L(div_h)}] \
+            -fill $L(card_outline) -outline "" -width 0 -tags $tag {*}$args
+    }
+
+    # Numbered badge: a state-green disc with the white number. Tags
+    # <tag> (disc) and <tag>_n (number).
+    proc _sec_badge {page tag cx cy args} {
+        variable L
+        set r [expr {$L(badge) / 2}]
+        dui add canvas_item oval $page [expr {$cx - $r}] [expr {$cy - $r}] \
+            [expr {$cx + $r}] [expr {$cy + $r}] \
+            -fill $L(col_ok) -outline $L(col_ok) -width 1 -tags $tag {*}$args
+        dui add dtext $page $cx $cy -tags ${tag}_n -text "0" -font $L(font_caption_b) \
+            -fill white -anchor center -justify center {*}$args
+    }
+
+    # Row chevron (">", two round-capped strokes) -- says "tap me".
+    proc _sec_chevron {page tag cx cy args} {
+        variable L
+        set w [expr {int(round(5 * $L(scale)))}]
+        set h [expr {int(round(9 * $L(scale)))}]
+        dui add canvas_item line $page [expr {$cx - $w}] [expr {$cy - $h}] \
+            [expr {$cx + $w}] $cy [expr {$cx - $w}] [expr {$cy + $h}] \
+            -fill $L(text_mut) -width [expr {int(round(2.5 * $L(scale)))}] \
+            -capstyle round -joinstyle round -tags $tag {*}$args
+    }
+
     # ------------------------------------------------------------------
     #  Page registration (called from the manifest's preload)
     # ------------------------------------------------------------------
@@ -1760,17 +1897,21 @@ namespace eval ::plugins::MaintenanceTracker {
 
     # One line of event history: date/time + how it was recorded.
     # `auto` is reserved for a future pass; tolerate and display it now.
-    proc _event_line {ev} {
+    # v0.29.1: one history row as two texts for the card's two columns:
+    # {"<date time>  (<ago>)" "recorded automatically|manually"}.
+    proc _event_parts {ev} {
         set ts 0
         catch { set ts [dict get $ev ts] }
-        if {![string is wide -strict $ts] || $ts <= 0} { return "" }
+        if {![string is wide -strict $ts] || $ts <= 0} { return [list "" ""] }
         set when [clock format $ts -format {%Y-%m-%d %H:%M}]
+        set ago [_fmt_ago $ts]
+        if {$ago ne ""} { append when "  ($ago)" }
         set src manual
         catch { set src [dict get $ev source] }
         if {$src eq "auto"} {
-            return "$when  --  [translate {recorded automatically}]"
+            return [list $when [translate {recorded automatically}]]
         }
-        return "$when  --  [translate {recorded manually}]"
+        return [list $when [translate {recorded manually}]]
     }
 
     # ------------------------------------------------------------------
@@ -2023,12 +2164,15 @@ namespace eval ::plugins::MaintenanceTracker {
             -tags ${base}_saucer -initial_state hidden
     }
 
-    proc _show_ghc_cup {page base show} {
+    # v0.29.1: `under` = the colour the cup sits on (the slot is a
+    # cut-out); default the page background.
+    proc _show_ghc_cup {page base show {under ""}} {
         variable ghc_cup_parts
         variable L
         set tags {}
         foreach part $ghc_cup_parts { lappend tags ${base}_$part }
-        if {$show} { _cfg $page ${base}_slot -fill $L(page_bg) }
+        if {$under eq ""} { set under $L(page_bg) }
+        if {$show} { _cfg $page ${base}_slot -fill $under }
         _set_vis $page $tags $show
     }
 
@@ -2271,6 +2415,59 @@ namespace eval ::plugins::MaintenanceTracker {
             return $line
         }
         return "$value [translate {of}] $threshold [translate {shots since last done}]"
+    }
+
+    # The card's counter, caption and filled wear-bar segment count for
+    # one tracker: {cnt cap nfill}. Moved out of the list refresh in
+    # v0.29.1 unchanged, so the Detail status card shows exactly the
+    # list card's numbers.
+    proc _card_numbers {id entry} {
+        variable L
+        set state [dict get $entry state]
+        set frac 0
+        set cnt ""
+        set cap ""
+        if {$state eq "unset"} {
+            # Unit-aware never-recorded text (the ml wording
+            # differs); _item_detail owns that phrasing.
+            set cap [_item_detail $id $entry]
+        } elseif {$state eq "unknown"} {
+            set cnt "?"
+            set cap [translate "Shot database unavailable -- see Diagnostics."]
+        } else {
+            set value [dict get $entry value]
+            set threshold [dict get $entry threshold]
+            set unit [dict get $entry unit]
+            if {$unit eq "ml"} {
+                # v0.13.0: litres read better at bottle scale, and
+                # the caption leads with what the owner actually
+                # wants to know -- how much is left.
+                if {$threshold >= 1000} {
+                    set cnt "[format %.1f [expr {$value / 1000.0}]] / [format %.1f [expr {$threshold / 1000.0}]] L"
+                } else {
+                    set cnt "$value / $threshold ml"
+                }
+                set cap [_ml_left_text $value $threshold]
+                set ld [_item_last_done_line $entry]
+                if {$cap eq ""} {
+                    set cap $ld
+                } elseif {$ld ne ""} {
+                    append cap "   ·   $ld"
+                }
+            } else {
+                set cnt "$value / $threshold [translate $unit]"
+                set cap [_item_last_done_line $entry]
+            }
+            if {[string is double -strict $value] && [string is double -strict $threshold] \
+                    && $threshold > 0} {
+                set frac [expr {double($value) / $threshold}]
+            }
+        }
+        set nfill [expr {int(round($frac * $L(bar_segs)))}]
+        if {$nfill > $L(bar_segs)} { set nfill $L(bar_segs) }
+        if {$nfill < 0} { set nfill 0 }
+        if {$frac > 0 && $nfill == 0} { set nfill 1 }
+        return [list $cnt $cap $nfill]
     }
 
     # v0.20.0: human relative time -- minutes up to 59, hours up to 23,
@@ -2700,7 +2897,9 @@ namespace eval ::plugins::MaintenanceTracker {
     #  dtext, invisible tap dbutton. Tags pick<k>_bg/_ic/_tap per page.
     # ------------------------------------------------------------------
 
-    proc _build_picker_row {page y1 select_cmd} {
+    # v0.29.1: `inset` narrows the grid on both sides (New Tracker's
+    # picker sits inside a card); 0 = the full content width (Edit).
+    proc _build_picker_row {page y1 select_cmd {inset 0}} {
         variable picker_icons
         variable picker_cols
         variable L
@@ -2710,14 +2909,15 @@ namespace eval ::plugins::MaintenanceTracker {
         set cell_h [expr {int(round(60 * $L(scale)))}]
         # Horizontal gap sized for a full row of picker_cols cells;
         # rows after the first sit L(xs) below the previous one.
-        set cell_gap [expr {($L(content_w) - $cols * $cell_w) / ($cols - 1)}]
+        set grid_x [expr {$L(left_x) + $inset}]
+        set cell_gap [expr {($L(content_w) - 2 * $inset - $cols * $cell_w) / ($cols - 1)}]
         set row_gap $L(xs)
         for {set k 0} {$k < $np} {incr k} {
             set row [expr {$k / $cols}]
             set col [expr {$k % $cols}]
             set ry1 [expr {$y1 + $row * ($cell_h + $row_gap)}]
             set ry2 [expr {$ry1 + $cell_h}]
-            set cx1 [expr {$L(left_x) + $col * ($cell_w + $cell_gap)}]
+            set cx1 [expr {$grid_x + $col * ($cell_w + $cell_gap)}]
             set cx2 [expr {$cx1 + $cell_w}]
             rounded_rect $page $cx1 $ry1 $cx2 $ry2 $L(btn_radius) \
                 -fill $L(card_bg) -outline $L(card_outline) -width 2 -tags pick${k}_bg
@@ -4398,54 +4598,13 @@ namespace eval ::dui::pages::MaintenanceTracker_settings {
                 ::plugins::MaintenanceTracker::_apply_item_icon $page \
                     row${i}_icon row${i} $id $color
 
-                # Counter + caption + wear-bar fraction per state.
-                set frac 0
-                set cnt ""
-                set cap ""
-                if {$state eq "unset"} {
-                    # Unit-aware never-recorded text (the ml wording
-                    # differs); _item_detail owns that phrasing.
-                    set cap [::plugins::MaintenanceTracker::_item_detail $id $entry]
-                } elseif {$state eq "unknown"} {
-                    set cnt "?"
-                    set cap [translate "Shot database unavailable -- see Diagnostics."]
-                } else {
-                    set value [dict get $entry value]
-                    set threshold [dict get $entry threshold]
-                    set unit [dict get $entry unit]
-                    if {$unit eq "ml"} {
-                        # v0.13.0: litres read better at bottle scale, and
-                        # the caption leads with what the owner actually
-                        # wants to know -- how much is left.
-                        if {$threshold >= 1000} {
-                            set cnt "[format %.1f [expr {$value / 1000.0}]] / [format %.1f [expr {$threshold / 1000.0}]] L"
-                        } else {
-                            set cnt "$value / $threshold ml"
-                        }
-                        set cap [::plugins::MaintenanceTracker::_ml_left_text $value $threshold]
-                        set ld [::plugins::MaintenanceTracker::_item_last_done_line $entry]
-                        if {$cap eq ""} {
-                            set cap $ld
-                        } elseif {$ld ne ""} {
-                            append cap "   ·   $ld"
-                        }
-                    } else {
-                        set cnt "$value / $threshold [translate $unit]"
-                        set cap [::plugins::MaintenanceTracker::_item_last_done_line $entry]
-                    }
-                    if {[string is double -strict $value] && [string is double -strict $threshold] \
-                            && $threshold > 0} {
-                        set frac [expr {double($value) / $threshold}]
-                    }
-                }
+                # Counter + caption + wear-bar fraction per state
+                # (v0.29.1: shared with the Detail status card).
+                lassign [::plugins::MaintenanceTracker::_card_numbers $id $entry] cnt cap nfill
                 ::plugins::MaintenanceTracker::_cfg $page row${i}_cnt -text $cnt \
                     -fill [expr {$state in {amber red} ? $color : $L(text_hi)}]
                 ::plugins::MaintenanceTracker::_cfg $page row${i}_line3 -text $cap
 
-                set nfill [expr {int(round($frac * $L(bar_segs)))}]
-                if {$nfill > $L(bar_segs)} { set nfill $L(bar_segs) }
-                if {$nfill < 0} { set nfill 0 }
-                if {$frac > 0 && $nfill == 0} { set nfill 1 }
                 for {set j 0} {$j < $L(bar_segs)} {incr j} {
                     set c [expr {$j < $nfill ? $color : $L(bar_track)}]
                     ::plugins::MaintenanceTracker::_cfg $page row${i}_seg${j} -fill $c -outline $c
@@ -4788,49 +4947,85 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             -command ::dui::pages::MaintenanceTracker_detail::edit_click \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
 
-        # State header: dot + counter line + last-done line, left-aligned.
-        # v0.25.0: 180 -> 150 ref (the band under the title was dead space).
-        set head_y [expr {int(round(150 * $L(scale)))}]
-        set dot_x1 $lx
-        set dot_x2 [expr {$dot_x1 + $L(dot_size)}]
-        set head_text_x [expr {$dot_x2 + $L(md)}]
-        set dot_y1 [expr {$head_y - $L(dot_size) / 2}]
-        ::plugins::MaintenanceTracker::rounded_rect $page $dot_x1 $dot_y1 \
-            $dot_x2 [expr {$dot_y1 + $L(dot_size)}] [expr {$L(dot_size) / 2}] \
-            -fill $L(col_unset) -outline $L(col_unset) -width 1 -tags detail_dot
-        dui add dtext $page $head_text_x $head_y -tags detail_counter -text "" \
-            -font $L(font_primary) -width [expr {$rx - $head_text_x}] -fill $L(text_hi) \
-            -anchor w -justify left
-        set last_y [expr {$head_y + $L(xl)}]
-        dui add dtext $page $lx $last_y -tags detail_last -text "" \
-            -font $L(font_body) -width $L(content_w) -fill $L(text_body) \
+        # v0.29.1: status card -- the list card's anatomy without plate
+        # and button: summary line + counter (right), state word + AUTO
+        # tag (right), segmented wear bar with the amber tick, caption.
+        # Replaces the loose dot + counter + last-done lines.
+        set sy0 $L(det_top)
+        set sy1 [expr {$sy0 + $L(card_h)}]
+        set ix1 [expr {$lx + $L(card_pad_x)}]
+        set ix2 [expr {$rx - $L(card_pad_x)}]
+        ::plugins::MaintenanceTracker::_sec_card $page det_card $lx $sy0 $rx $sy1 ""
+        # The counter's zone (260 ref) is kept free of the summary line.
+        dui add dtext $page $ix1 [expr {$sy0 + $L(card_name_dy)}] -tags detail_counter -text "" \
+            -font $L(font_primary) -width [expr {$ix2 - $ix1 - int(round(260 * $L(scale)))}] \
+            -fill $L(text_hi) -anchor w -justify left
+        dui add dtext $page $ix2 [expr {$sy0 + $L(card_name_dy)}] -tags det_cnt -text "" \
+            -font $L(font_primary) -fill $L(text_hi) -anchor e -justify right
+        dui add dtext $page $ix1 [expr {$sy0 + $L(card_state_dy)}] -tags det_state -text "" \
+            -font $L(font_caption_b) -fill $L(text_mut) -anchor w -justify left
+        dui add dtext $page $ix2 [expr {$sy0 + $L(card_state_dy)}] -tags det_auto \
+            -text [translate "AUTO"] -font $L(font_caption_b) -fill $L(icon_sel) \
+            -anchor e -justify right -initial_state hidden
+        set bar_w [expr {$ix2 - $ix1}]
+        set seg_stride [expr {($bar_w + $L(bar_seg_gap)) / $L(bar_segs)}]
+        set seg_w [expr {$seg_stride - $L(bar_seg_gap)}]
+        set bar_yc [expr {$sy0 + $L(card_bar_dy)}]
+        set bar_y1 [expr {$bar_yc - $L(bar_h) / 2}]
+        set bar_y2 [expr {$bar_yc + $L(bar_h) / 2}]
+        for {set j 0} {$j < $L(bar_segs)} {incr j} {
+            set sx1 [expr {$ix1 + $j * $seg_stride}]
+            dui add canvas_item rect $page $sx1 $bar_y1 [expr {$sx1 + $seg_w}] $bar_y2 \
+                -fill $L(bar_track) -outline $L(bar_track) -tags det_seg$j
+        }
+        set amber_frac 0.8
+        catch {
+            if {[string is double -strict $::plugins::MaintenanceTracker::settings(amber_fraction)]} {
+                set amber_frac $::plugins::MaintenanceTracker::settings(amber_fraction)
+            }
+        }
+        set tick_x [expr {$ix1 + int(round($bar_w * $amber_frac))}]
+        dui add canvas_item rect $page [expr {$tick_x - 2}] [expr {$bar_y1 - $L(xs)}] \
+            [expr {$tick_x + 2}] [expr {$bar_y2 + $L(xs)}] \
+            -fill $L(bar_tick) -outline $L(bar_tick) -tags det_tick
+        dui add dtext $page $ix1 [expr {$sy0 + $L(card_cap_dy)}] -tags detail_last -text "" \
+            -font $L(font_caption) -width $bar_w -fill $L(text_mut) \
             -anchor w -justify left
 
-        # Event history: section label + up to 5 one-line events.
-        # v0.25.0: 290 -> 240 ref, following the header up.
-        set hist_y [expr {int(round(240 * $L(scale)))}]
-        dui add dtext $page $lx $hist_y -tags hist_title \
-            -text [translate "History (newest first)"] \
-            -font $L(font_primary) -width $L(content_w) -fill $L(text_hi) \
-            -anchor nw -justify left
-        # v0.29.0: rows 34 -> 40 ref apart and each a tap zone (the whole
-        # row, 40 ref tall, contiguous): tapping one arms its removal in
-        # the confirm mode. A caption on the title line says so.
-        set ev_pitch [expr {int(round(40 * $L(scale)))}]
-        set ev_lead [expr {int(round(8 * $L(scale)))}]
-        dui add dtext $page $rx $hist_y -tags hist_hint \
-            -text [translate "Tap a record to remove it"] \
-            -font $L(font_caption) -fill $L(text_mut) -anchor ne -justify right \
+        # Event history: up to 5 events, newest first. v0.29.0: each row
+        # is a tap zone (the whole row, contiguous) that arms its removal
+        # in the confirm mode; a caption on the title line says so.
+        # v0.29.1: a History card (left 66%): per row the date + age
+        # (left), how it was recorded (right) and a chevron; one-row
+        # dividers between rows; rows 64 ref tall.
+        set hx2 $L(det_hist_x1)
+        set hy [::plugins::MaintenanceTracker::_sec_card $page hist_card \
+            $lx $L(det_low_y0) $hx2 $L(det_low_y1) [translate "History (newest first)"]]
+        dui add dtext $page [expr {$hx2 - $L(card_pad_x)}] [expr {$L(det_low_y0) + $L(sec_head_h) / 2}] \
+            -tags hist_hint -text [translate "Tap a record to remove it"] \
+            -font $L(font_caption) -fill $L(text_mut) -anchor e -justify right \
             -initial_state hidden
+        set chev_x [expr {$hx2 - $L(card_pad_x) - int(round(5 * $L(scale)))}]
+        set src_x [expr {$chev_x - int(round(5 * $L(scale))) - $L(md)}]
         for {set i 0} {$i < $event_rows} {incr i} {
-            set y [expr {$hist_y + $L(xxl) + $i * $ev_pitch}]
-            dui add dtext $page $lx $y -tags ev$i -text "" \
-                -font $L(font_body) -width $L(content_w) -fill $L(text_body) \
-                -anchor nw -justify left
+            set ry0 [expr {$hy + $i * $L(det_row_h)}]
+            set rcy [expr {$ry0 + $L(det_row_h) / 2}]
+            dui add dtext $page $ix1 $rcy -tags ev$i -text "" \
+                -font $L(font_body) -width [expr {int(($hx2 - $lx) * 0.55)}] \
+                -fill $L(text_hi) -anchor w -justify left
+            dui add dtext $page $src_x $rcy -tags evs$i -text "" \
+                -font $L(font_caption) -fill $L(text_body) -anchor e -justify right
+            ::plugins::MaintenanceTracker::_sec_chevron $page ev${i}_chev $chev_x $rcy \
+                -initial_state hidden
+            if {$i < $event_rows - 1} {
+                ::plugins::MaintenanceTracker::_sec_divider $page ev${i}_div \
+                    $ix1 [expr {$ry0 + $L(det_row_h)}] [expr {$hx2 - $L(card_pad_x)}] \
+                    -initial_state hidden
+            }
         }
         for {set i 0} {$i < $event_rows} {incr i} {
-            set y [expr {$hist_y + $L(xxl) + $i * $ev_pitch - $ev_lead}]
-            dui add dbutton $page $lx $y $rx [expr {$y + $ev_pitch}] \
+            set ry0 [expr {$hy + $i * $L(det_row_h)}]
+            dui add dbutton $page $lx $ry0 $hx2 [expr {$ry0 + $L(det_row_h)}] \
                 -tags mt_ev$i \
                 -command [list ::dui::pages::MaintenanceTracker_detail::event_click $i] \
                 -initial_state hidden
@@ -4852,30 +5047,50 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         # history; the last event line ends ~444.
         # v0.29.0: 476 -> 500 ref, below the taller history rows (the last
         # row's tap zone ends at 480).
-        set prof_y0 [expr {int(round(500 * $L(scale)))}]
-        set prof_y1 [expr {$prof_y0 + $L(btn_h)}]
-        set prof_mid [expr {($prof_y0 + $prof_y1) / 2}]
-        set load_x0 [expr {$rx - $L(btn_w_wide)}]
-        dui add dtext $page $lx $prof_mid -tags prof_label \
-            -text [translate "Linked to:"] \
-            -font $L(font_body) -width $L(label_col_w) -fill $L(text_body) \
-            -anchor w -justify left
-        dui add dtext $page $L(value_x) $prof_mid -tags prof_value -text "" \
-            -font $L(font_primary) -width [expr {$load_x0 - $L(lg) - $L(value_x)}] \
-            -fill $L(text_hi) -anchor w -justify left
-        # v0.26.0 (Pass 32): the row's button is always "Start" (primary,
+        # v0.29.1: a Linked profile card beside History: the link (up to
+        # two lines), what the tracker records / counts on by itself (a
+        # caption + up to two bulleted lines -- the "Auto-records on"
+        # text moved here from the last-done line), Start at the bottom,
+        # card-wide.
+        set kx1 [expr {$hx2 + $L(md)}]
+        set kix1 [expr {$kx1 + $L(card_pad_x)}]
+        set kiw [expr {$rx - $L(card_pad_x) - $kix1}]
+        set ky [::plugins::MaintenanceTracker::_sec_card $page link_card \
+            $kx1 $L(det_low_y0) $rx $L(det_low_y1) [translate "Linked profile"]]
+        dui add dtext $page $kix1 [expr {$ky + $L(md)}] -tags prof_value -text "" \
+            -font $L(font_primary) -width $kiw \
+            -fill $L(text_hi) -anchor nw -justify left
+        set acap_y [expr {$ky + int(round(86 * $L(scale)))}]
+        dui add dtext $page $kix1 $acap_y -tags auto_cap -text "-" \
+            -font $L(font_caption) -width $kiw -fill $L(text_mut) \
+            -anchor nw -justify left -initial_state hidden
+        set dot_r [expr {int(round(4 * $L(scale)))}]
+        set atx [expr {$kix1 + int(round(18 * $L(scale)))}]
+        for {set k 0} {$k < 2} {incr k} {
+            set ay [expr {$acap_y + int(round((36 + 28 * $k) * $L(scale)))}]
+            dui add canvas_item oval $page [expr {$kix1 + $dot_r}] [expr {$ay - $dot_r}] \
+                [expr {$kix1 + 3 * $dot_r}] [expr {$ay + $dot_r}] \
+                -fill $L(col_ok) -outline $L(col_ok) -width 1 -tags auto_dot$k \
+                -initial_state hidden
+            dui add dtext $page $atx $ay -tags auto_txt$k -text "-" \
+                -font $L(font_caption) -width [expr {$kix1 + $kiw - $atx}] \
+                -fill $L(text_body) -anchor w -justify left -initial_state hidden
+        }
+        # v0.26.0 (Pass 32): the button is always "Start" (primary,
         # green): it opens the tracker's Steps page, where the link's own
         # action (Load profile / Open Descale / Start Clean / Mark done)
         # sits under the instructions.
-        dui add dbutton $page $load_x0 $prof_y0 $rx $prof_y1 \
+        set prof_y1 [expr {$L(det_low_y1) - $L(card_pad_x)}]
+        set prof_y0 [expr {$prof_y1 - $L(btn_h)}]
+        dui add dbutton $page $kix1 $prof_y0 [expr {$kix1 + $kiw}] $prof_y1 \
             -tags mt_start -label [translate "Start"] \
             -command ::dui::pages::MaintenanceTracker_detail::start_click \
             -label_font $L(font_button) -style mt_btn_primary -initial_state hidden
 
-        # Confirm-mode message (empty in view mode), above the bottom bar.
-        # v0.22.0: also the linked-profile outcome note for 4 s.
-        set confirm_y [expr {int(round(624 * $L(scale)))}]
-        dui add dtext $page $cx $confirm_y -tags confirm_msg -text "" \
+        # Confirm-mode message (empty in view mode), between the cards
+        # and the bottom bar. v0.22.0: also the linked-profile outcome
+        # note for 4 s.
+        dui add dtext $page $cx $L(det_msg_y) -tags confirm_msg -text "" \
             -font $L(font_primary) -width $L(content_w) -fill $L(col_red) \
             -anchor center -justify center
 
@@ -4925,13 +5140,17 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
 
         if {$id eq "" || ![info exists ::plugins::MaintenanceTracker::settings(item_$id)]} {
             catch { dui item config $page page_title -text [translate "Nothing selected"] }
-            foreach t {detail_counter detail_last confirm_msg} {
+            foreach t {detail_counter detail_last confirm_msg det_cnt det_state} {
                 catch { dui item config $page $t -text "" }
             }
+            _show_status_card $page "" 0
+            _show_auto_rows $page "" {}
             for {set i 0} {$i < $event_rows} {incr i} {
                 catch { dui item config $page ev$i -text "" }
+                catch { dui item config $page evs$i -text "" }
                 catch { dui item hide $page mt_ev$i* -initial 1 }
             }
+            _show_row_marks $page 0
             catch { dui item hide $page hist_hint -initial 1 }
             catch { dui item hide $page bar_undo* -initial 1 }
             catch { dui item hide $page mt_hide* -initial 1 }
@@ -4942,9 +5161,9 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             catch { dui item config $page bar_left -label [translate "Back"] }
             # v0.28.1: plain canvas items by their EXACT tags -- `det_plate*`
             # is a literal compound-widget tag and matched nothing, leaving
-            # the grey plate and state dot on screen (two squares).
+            # the grey plate on screen. (v0.29.1: the state dot is gone --
+            # the status card carries the state.)
             catch { dui item hide $page det_plate -initial 1 }
-            catch { dui item hide $page detail_dot -initial 1 }
             catch { dui item hide $page det_icon -initial 1 }
             foreach {vtag vname} {vsw steam-wand vgf gasket-flat} {
                 ::plugins::MaintenanceTracker::_show_vector_icon $page det_$vtag $vname 0
@@ -4962,61 +5181,81 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         set state [dict get $entry state]
         catch { dui item config $page page_title \
             -text [::plugins::MaintenanceTracker::_item_label $id] }
-        catch { dui item config $page detail_counter \
-            -text "([::plugins::MaintenanceTracker::_state_word $state])  [::plugins::MaintenanceTracker::_item_detail $id $entry]" }
-        # v0.20.0: the last-done line also says whether (and from what)
-        # this tracker auto-records; v0.21.0: auto-COUNTING trackers
-        # (shots/ml, no auto_src) get their own wording -- the exact
-        # thing the card's AUTO-RECORD / AUTO-COUNT tag points at.
-        set last_txt [::plugins::MaintenanceTracker::_item_last_done_line $entry]
-        set auto_txt ""
+        # v0.29.1 status card: the list card's numbers (_card_numbers),
+        # the summary sentence on line 1 (ml: without the "-- left" tail,
+        # the caption already says it), the state word in its colour.
+        set color [::plugins::MaintenanceTracker::_state_color $state]
+        lassign [::plugins::MaintenanceTracker::_card_numbers $id $entry] cnt cap nfill
+        set line1 [::plugins::MaintenanceTracker::_item_detail $id $entry]
+        if {$state in {unset unknown}} {
+            # line 1 already says it; the caption would repeat it.
+            set cap ""
+        } else {
+            set cut [string first " -- " $line1]
+            if {$cut > 0} { set line1 [string range $line1 0 [expr {$cut - 1}]] }
+        }
+        catch { dui item config $page detail_counter -text $line1 }
+        catch { dui item config $page det_cnt -text $cnt \
+            -fill [expr {$state in {amber red} ? $color : $L(text_hi)}] }
+        catch { dui item config $page det_state \
+            -text [string toupper [::plugins::MaintenanceTracker::_state_word $state]] -fill $color }
+        catch { dui item config $page detail_last -text $cap }
+        _show_status_card $page $color $nfill
+
+        # v0.20.0: say whether (and from what) this tracker auto-records;
+        # v0.21.0: auto-COUNTING trackers (shots/ml, no auto_src) get
+        # their own wording -- the exact thing the card's AUTO-RECORD /
+        # AUTO-COUNT tag points at. v0.29.1: a caption + one line per
+        # source in the Linked profile card (was a tail on the last-done
+        # line).
+        set auto_cap ""
+        set auto_lines {}
+        set auto_tag ""
         switch -- [::plugins::MaintenanceTracker::_item_auto_kind $id] {
             record {
+                set auto_tag [translate "AUTO-RECORD"]
+                set auto_cap [translate "Auto-records on"]
                 # v0.24.0: name the linked cleaning profile too.
-                set srcs {}
                 set asrc [::plugins::MaintenanceTracker::_item_auto_src $id]
                 if {$asrc ne ""} {
-                    lappend srcs [::plugins::MaintenanceTracker::_auto_src_label $asrc]
+                    lappend auto_lines [::plugins::MaintenanceTracker::_auto_src_label $asrc]
                 }
                 set cprof [::plugins::MaintenanceTracker::_item_cleaning_profile $id]
                 if {$cprof ne ""} {
-                    lappend srcs [::plugins::MaintenanceTracker::_short_text [lindex $cprof 1] 36]
+                    lappend auto_lines [::plugins::MaintenanceTracker::_short_text [lindex $cprof 1] 36]
                 }
-                set auto_txt "[translate {Auto-records on:}] [join $srcs {, }]"
             }
             count {
+                set auto_tag [translate "AUTO-COUNT"]
+                set auto_cap [translate "Counts automatically"]
                 set u ""
                 catch { set u [dict get $::plugins::MaintenanceTracker::settings(item_$id) unit] }
                 if {$u eq "ml"} {
-                    set auto_txt "[translate {Counts automatically:}] [translate {all water dispensed}]"
+                    lappend auto_lines [translate "all water dispensed"]
                 } else {
-                    set auto_txt "[translate {Counts automatically:}] [translate {every espresso shot}]"
+                    lappend auto_lines [translate "every espresso shot"]
                 }
             }
         }
-        if {$auto_txt ne ""} {
-            if {$last_txt eq ""} {
-                set last_txt $auto_txt
-            } else {
-                append last_txt "   ·   $auto_txt"
-            }
+        if {$auto_tag ne ""} {
+            catch { dui item config $page det_auto -text $auto_tag }
+            catch { dui item show $page det_auto -initial 1 }
+        } else {
+            catch { dui item hide $page det_auto -initial 1 }
         }
-        catch { dui item config $page detail_last -text $last_txt }
-        set color [::plugins::MaintenanceTracker::_state_color $state]
-        catch { dui item config $page detail_dot -fill $color -outline $color }
+        _show_auto_rows $page $auto_cap $auto_lines
 
         # v0.18.0: header icon plate, tinted and colored by state
         # exactly like the tracker's card.
         set tint $L(tint_unknown)
         catch { set tint $L(tint_$state) }
         catch { dui item show $page det_plate -initial 1 }
-        catch { dui item show $page detail_dot -initial 1 }
         catch { dui item config $page det_plate -fill $tint -outline $tint }
         ::plugins::MaintenanceTracker::_apply_item_icon $page det_icon det $id $color
 
         # Event list, newest first. v0.29.0: row i shows events index
         # n-1-i and is a tap zone; in the confirm mode the targeted row
-        # turns red.
+        # turns red (v0.29.1: all three of its parts).
         set events {}
         catch { set events [dict get $::plugins::MaintenanceTracker::settings(item_$id) events] }
         set n [llength $events]
@@ -5028,24 +5267,34 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         }
         if {$n == 0} {
             catch { dui item config $page ev0 -text [translate "Never recorded."] -fill $L(text_body) }
+            catch { dui item config $page evs0 -text "" }
             catch { dui item hide $page mt_ev0* -initial 1 }
             for {set i 1} {$i < $event_rows} {incr i} {
                 catch { dui item config $page ev$i -text "" }
+                catch { dui item config $page evs$i -text "" }
                 catch { dui item hide $page mt_ev$i* -initial 1 }
             }
+            _show_row_marks $page 0
         } else {
             set shown 0
             for {set j [expr {$n - 1}]} {$j >= 0 && $shown < $event_rows} {incr j -1} {
-                set fill [expr {$mode eq "confirm" && $j == $target ? $L(col_red) : $L(text_body)}]
-                catch { dui item config $page ev$shown \
-                    -text [::plugins::MaintenanceTracker::_event_line [lindex $events $j]] -fill $fill }
+                set armed [expr {$mode eq "confirm" && $j == $target}]
+                lassign [::plugins::MaintenanceTracker::_event_parts [lindex $events $j]] when src
+                catch { dui item config $page ev$shown -text $when \
+                    -fill [expr {$armed ? $L(col_red) : $L(text_hi)}] }
+                catch { dui item config $page evs$shown -text $src \
+                    -fill [expr {$armed ? $L(col_red) : $L(text_body)}] }
+                catch { dui item config $page ev${shown}_chev \
+                    -fill [expr {$armed ? $L(col_red) : $L(text_mut)}] }
                 catch { dui item show $page mt_ev$shown* -initial 1 }
                 incr shown
             }
             for {set i $shown} {$i < $event_rows} {incr i} {
                 catch { dui item config $page ev$i -text "" }
+                catch { dui item config $page evs$i -text "" }
                 catch { dui item hide $page mt_ev$i* -initial 1 }
             }
+            _show_row_marks $page $shown
         }
         if {$mode ne "confirm" && $n > 0} {
             catch { dui item show $page hist_hint -initial 1 }
@@ -5095,8 +5344,6 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             # v0.23.0: and a mode switch disarms an armed Clean.
             ::plugins::MaintenanceTracker::_disarm_clean
             catch { dui item hide $page mt_start* -initial 1 }
-            catch { dui item hide $page prof_label -initial 1 }
-            catch { dui item config $page prof_value -text "" }
         } else {
             catch { dui item config $page bar_left -label [translate "Back"] }
             catch { dui item config $page bar_undo -label [translate "Undo Last Record"] }
@@ -5117,8 +5364,6 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             set hide_capped [expr {$hidden_n >= $::plugins::MaintenanceTracker::hide_max \
                     && $id ni $::plugins::MaintenanceTracker::settings(hidden_ids)}]
             catch { dui item config $page mt_hide* -state [expr {$hide_capped ? "disabled" : "normal"}] }
-            set link [::plugins::MaintenanceTracker::_item_link $id]
-            set kind [lindex $link 0]
             # v0.26.0: the Clean arm lives on the Steps page now.
             if {$hide_capped} {
                 catch { dui item config $page confirm_msg \
@@ -5132,18 +5377,66 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             } else {
                 catch { dui item config $page confirm_msg -text "" }
             }
-            # v0.22.0 linked profile row; v0.23.0 any of three kinds.
-            # v0.25.0: display only; Link / Unlink live on the Edit page.
             # v0.26.0: Start (every tracker) opens the Steps page.
-            catch { dui item show $page prof_label -initial 1 }
-            if {$kind eq ""} {
-                catch { dui item config $page prof_value \
-                    -text [translate "none -- link one on the Edit page"] -fill $L(text_mut) }
-            } else {
-                catch { dui item config $page prof_value \
-                    -text [::plugins::MaintenanceTracker::_link_text $link] -fill $L(text_hi) }
-            }
             catch { dui item show $page mt_start* -initial 1 }
+        }
+        # v0.22.0 linked profile; v0.23.0 any of three kinds. v0.25.0:
+        # display only; Link / Unlink live on the Edit page. v0.29.1: the
+        # card keeps showing it in both modes.
+        set link [::plugins::MaintenanceTracker::_item_link $id]
+        if {[lindex $link 0] eq ""} {
+            catch { dui item config $page prof_value \
+                -text [translate "none -- link one on the Edit page"] -fill $L(text_mut) }
+        } else {
+            catch { dui item config $page prof_value \
+                -text [::plugins::MaintenanceTracker::_link_text $link] -fill $L(text_hi) }
+        }
+    }
+
+    # v0.29.1: the status card's wear bar (nfill segments in the state
+    # colour, the rest the track) and amber tick; color "" = empty card.
+    proc _show_status_card {page color nfill} {
+        upvar #0 ::plugins::MaintenanceTracker::L L
+        for {set j 0} {$j < $L(bar_segs)} {incr j} {
+            set c [expr {$color ne "" && $j < $nfill ? $color : $L(bar_track)}]
+            ::plugins::MaintenanceTracker::_cfg $page det_seg$j -fill $c -outline $c
+        }
+        if {$color eq ""} {
+            catch { dui item hide $page det_auto -initial 1 }
+        }
+    }
+
+    # v0.29.1: the Linked profile card's automation block -- caption plus
+    # one bulleted line per entry (max 2); an empty caption hides it all.
+    proc _show_auto_rows {page cap lines} {
+        if {$cap eq ""} {
+            catch { dui item hide $page auto_cap -initial 1 }
+        } else {
+            catch { dui item config $page auto_cap -text $cap }
+            catch { dui item show $page auto_cap -initial 1 }
+        }
+        for {set k 0} {$k < 2} {incr k} {
+            if {$cap ne "" && $k < [llength $lines]} {
+                catch { dui item config $page auto_txt$k -text [lindex $lines $k] }
+                catch { dui item show $page auto_dot$k -initial 1 }
+                catch { dui item show $page auto_txt$k -initial 1 }
+            } else {
+                catch { dui item hide $page auto_dot$k -initial 1 }
+                catch { dui item hide $page auto_txt$k -initial 1 }
+            }
+        }
+    }
+
+    # v0.29.1: chevrons on the first `shown` history rows, dividers
+    # between them (row i's divider sits under it, shown when row i+1
+    # is shown too).
+    proc _show_row_marks {page shown} {
+        variable event_rows
+        for {set i 0} {$i < $event_rows} {incr i} {
+            catch { dui item [expr {$i < $shown ? "show" : "hide"}] $page ev${i}_chev -initial 1 }
+            if {$i < $event_rows - 1} {
+                catch { dui item [expr {$i + 1 < $shown ? "show" : "hide"}] $page ev${i}_div -initial 1 }
+            }
         }
     }
 
@@ -5277,7 +5570,6 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
         set lx $L(left_x)
         set rx $L(right_x)
         set cx [expr {($lx + $rx) / 2}]
-        set vx $L(value_x)
 
         # v0.21.0: title width trimmed clear of the header's corners --
         # the auto toggle now lives in the top-right mode-button slot.
@@ -5303,51 +5595,73 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
             -command ::dui::pages::MaintenanceTracker_add::toggle_auto \
             -label_font $L(font_button) -style mt_btn
 
+        # v0.29.1: three cards. Card 1: name (left) | counting unit +
+        # Change (right), the unit's hint under both, a divider, then
+        # the due-after stepper row. Card 2: icon picker. Card 3: hidden
+        # trackers (shown only when there are any).
+        set ix1 [expr {$lx + $L(card_pad_x)}]
+        set ix2 [expr {$rx - $L(card_pad_x)}]
+        set c1y0 $L(add_c1_y0)
+        ::plugins::MaintenanceTracker::_sec_card $page add_c1 $lx $c1y0 $rx $L(add_c1_y1) ""
+
         # Name entry, top half of the screen (Android keyboard rule).
         # v0.9.0: the whole column moved up to make room for the icon
         # picker row above the error line.
-        set name_label_y [expr {int(round(118 * $L(scale)))}]
-        set entry_y [expr {int(round(152 * $L(scale)))}]
-        dui add dtext $page $lx $name_label_y -tags name_label \
+        set name_label_y [expr {$c1y0 + int(round(16 * $L(scale)))}]
+        set entry_y [expr {$c1y0 + int(round(42 * $L(scale)))}]
+        set col_x $L(add_col_x)
+        dui add dtext $page $ix1 $name_label_y -tags name_label \
             -text [translate "Tracker name (e.g. \"Grinder 2 burr clean\"):"] \
-            -font $L(font_body) -width $L(content_w) -fill $L(text_body) \
+            -font $L(font_caption) -width [expr {$col_x - $L(lg) - $ix1}] -fill $L(text_body) \
             -anchor nw -justify left
-        dui add entry $page $lx $entry_y -tags name_entry \
+        dui add entry $page $ix1 $entry_y -tags name_entry \
             -textvariable ::plugins::MaintenanceTracker::add_label \
             -width 30 -font $L(font_primary) -borderwidth 1 -bg $L(entry_bg) \
             -foreground $L(text_hi) -relief flat
 
-        # Unit row: label / current unit / Change button.
-        set unit_y [expr {int(round(215 * $L(scale)))}]
-        dui add dtext $page $lx $unit_y -tags unit_label \
+        # Unit column: label / current unit, Change button on the right.
+        dui add canvas_item rect $page $col_x $name_label_y [expr {$col_x + $L(div_h)}] \
+            [expr {$c1y0 + int(round(76 * $L(scale)))}] \
+            -fill $L(card_outline) -outline "" -width 0 -tags add_c1_vdiv
+        set ux [expr {$col_x + $L(lg)}]
+        set chg_x0 [expr {$ix2 - $L(btn_w_std)}]
+        dui add dtext $page $ux $name_label_y -tags unit_label \
             -text [translate "Counts:"] \
-            -font $L(font_body) -width $L(label_col_w) -fill $L(text_body) \
+            -font $L(font_caption) -width [expr {$chg_x0 - $L(lg) - $ux}] -fill $L(text_body) \
             -anchor nw -justify left
-        dui add dtext $page $vx $unit_y -tags unit_value -text "" \
-            -font $L(font_primary) -width [expr {$rx - $L(btn_w_wide) - $L(lg) - $vx}] \
+        dui add dtext $page $ux [expr {$c1y0 + int(round(38 * $L(scale)))}] -tags unit_value -text "" \
+            -font $L(font_primary) -width [expr {$chg_x0 - $L(lg) - $ux}] \
             -fill $L(text_hi) -anchor nw -justify left
-        dui add dbutton $page [expr {$rx - $L(btn_w_wide)}] [expr {$unit_y - $L(sm)}] \
-            $rx [expr {$unit_y - $L(sm) + $L(btn_h)}] \
+        dui add dbutton $page $chg_x0 [expr {$c1y0 + int(round(14 * $L(scale)))}] \
+            $ix2 [expr {$c1y0 + int(round(14 * $L(scale))) + $L(btn_h)}] \
             -tags unit_toggle -label [translate "Change"] \
             -command ::dui::pages::MaintenanceTracker_add::toggle_unit \
             -label_font $L(font_button) -style mt_btn
-        set hint_y [expr {int(round(266 * $L(scale)))}]
-        dui add dtext $page $lx $hint_y -tags unit_hint -text "" \
-            -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) \
+        # The hint spans the card (two caption lines at most, even for
+        # the long ml wording).
+        set hint_y [expr {$c1y0 + int(round(86 * $L(scale)))}]
+        dui add dtext $page $ix1 $hint_y -tags unit_hint -text "" \
+            -font $L(font_caption) -width [expr {$ix2 - $ix1}] -fill $L(text_mut) \
             -anchor nw -justify left
+        ::plugins::MaintenanceTracker::_sec_divider $page add_c1_div \
+            $lx [expr {$c1y0 + int(round(138 * $L(scale)))}] $rx
 
-        # Threshold: label line, then stepper row (burr pattern).
-        set thr_label_y [expr {int(round(320 * $L(scale)))}]
-        dui add dtext $page $cx $thr_label_y -tags thr_label \
-            -text [translate "Due after this many days / shots / ml:"] \
-            -font $L(font_body) -width $L(content_w) -fill $L(text_body) \
-            -anchor center -justify center
-        set step_y1 [expr {int(round(350 * $L(scale)))}]
+        # Threshold: label left, stepper row right-aligned in the card
+        # (burr pattern); the value sits on an entry-coloured plate.
+        set step_y1 [expr {$c1y0 + int(round(150 * $L(scale)))}]
         set step_y2 [expr {$step_y1 + $L(btn_h)}]
         set step_w [expr {int(round(120 * $L(scale)))}]
-        set value_w [expr {int(round(200 * $L(scale)))}]
+        set value_w [expr {int(round(120 * $L(scale)))}]
         set row_w [expr {4 * $step_w + $value_w + 4 * $L(md)}]
-        set x [expr {$cx - $row_w / 2}]
+        set x [expr {$ix2 - $row_w}]
+        dui add dtext $page $ix1 [expr {($step_y1 + $step_y2) / 2}] -tags thr_label \
+            -text [translate "Due after this many days / shots / ml:"] \
+            -font $L(font_body) -width [expr {$x - $L(lg) - $ix1}] -fill $L(text_body) \
+            -anchor w -justify left
+        set vb_x1 [expr {$x + 2 * ($step_w + $L(md))}]
+        ::plugins::MaintenanceTracker::rounded_rect $page $vb_x1 $step_y1 \
+            [expr {$vb_x1 + $value_w}] $step_y2 $L(btn_radius) \
+            -fill $L(entry_bg) -outline $L(entry_bg) -width 1 -tags thr_box
         # v0.7.1: the creation labels MUST be non-empty -- a dbutton
         # created with -label "" never gets a label sub-item at all
         # (de1app-core/dui.tcl:10227-10235 only adds the dtext when the
@@ -5378,10 +5692,14 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
         # shared builder wraps at picker_cols). Cells: white backdrop
         # whose outline marks the selection, glyph dtext, invisible tap
         # dbutton (the proven card-tap mechanism).
-        set icon_label_y [expr {int(round(420 * $L(scale)))}]
-        dui add dtext $page $lx $icon_label_y -tags icon_label \
+        # v0.29.1: Icon card -- "Icon:  <name>" is its header, the grid
+        # inset by the card padding.
+        set c2y0 $L(add_c2_y0)
+        ::plugins::MaintenanceTracker::_sec_card $page add_c2 $lx $c2y0 $rx $L(add_c2_y1) ""
+        set icon_label_y [expr {$c2y0 + $L(sec_head_h) / 2}]
+        dui add dtext $page $ix1 $icon_label_y -tags icon_label \
             -text [translate "Icon:"] \
-            -font $L(font_body) -width $L(label_col_w) -fill $L(text_body) \
+            -font $L(font_primary) -width $L(label_col_w) -fill $L(text_hi) \
             -anchor w -justify left
         # Validation message (red, empty until add_save rejects) shares
         # the Icon: label's line (v0.14.0 -- the second picker row took
@@ -5392,8 +5710,8 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
             -width [expr {$L(content_w) - 2 * int(round(160 * $L(scale)))}] \
             -fill $L(col_red) -anchor center -justify center
         ::plugins::MaintenanceTracker::_build_picker_row $page \
-            [expr {int(round(438 * $L(scale)))}] \
-            [list ::dui::pages::MaintenanceTracker_add::select_icon]
+            [expr {$c2y0 + $L(sec_head_h)}] \
+            [list ::dui::pages::MaintenanceTracker_add::select_icon] $L(card_pad_x)
 
         # v0.10.0: hidden built-in trackers -- caption plus one chip
         # button PER hidden tracker (max 6 built-ins, so 6 fixed slots
@@ -5402,17 +5720,21 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
         # Tapping a chip restores just that tracker.
         # v0.14.0: moved up (was 612/635) to keep >= md clearance under
         # the second picker row while the chips keep their bar_y0 gap.
-        set hid_title_y [expr {int(round(594 * $L(scale)))}]
-        dui add dtext $page $lx $hid_title_y -tags hidden_title \
+        # v0.29.1: in the Hidden trackers card (shown with the chips).
+        set c3y0 $L(add_c3_y0)
+        ::plugins::MaintenanceTracker::rounded_rect $page $lx $c3y0 $rx $L(add_c3_y1) $L(btn_radius) \
+            -fill $L(card_bg) -outline $L(card_outline) -width 2 -tags add_c3 -initial_state hidden
+        set hid_title_y [expr {$c3y0 + $L(sec_head_h) / 2}]
+        dui add dtext $page $ix1 $hid_title_y -tags hidden_title \
             -text [translate "Hidden trackers -- tap one to restore it:"] \
-            -font $L(font_caption) -width $L(content_w) \
-            -fill $L(text_mut) -anchor w -justify left -initial_state hidden
-        set chip_w [expr {int(round(186 * $L(scale)))}]
+            -font $L(font_body) -width [expr {$ix2 - $ix1}] \
+            -fill $L(text_hi) -anchor w -justify left -initial_state hidden
         set chip_gap [expr {int(round(12 * $L(scale)))}]
-        set chip_y1 [expr {int(round(618 * $L(scale)))}]
+        set chip_w [expr {min(int(round(186 * $L(scale))), ($ix2 - $ix1 - 5 * $chip_gap) / 6)}]
+        set chip_y1 [expr {$c3y0 + $L(sec_head_h)}]
         set chip_y2 [expr {$chip_y1 + $L(btn_h)}]
         for {set k 0} {$k < 6} {incr k} {
-            set cx1 [expr {$lx + $k * ($chip_w + $chip_gap)}]
+            set cx1 [expr {$ix1 + $k * ($chip_w + $chip_gap)}]
             dui add dbutton $page $cx1 $chip_y1 [expr {$cx1 + $chip_w}] $chip_y2 \
                 -tags hid$k -label "-" \
                 -command [list ::dui::pages::MaintenanceTracker_add::hid_click $k] \
@@ -5472,8 +5794,10 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
         catch { set hidden $::plugins::MaintenanceTracker::settings(hidden_ids) }
         set hidden_shown $hidden
         if {[llength $hidden] > 0} {
+            catch { dui item show $page add_c3 -initial 1 }
             catch { dui item show $page hidden_title -initial 1 }
         } else {
+            catch { dui item hide $page add_c3 -initial 1 }
             catch { dui item hide $page hidden_title -initial 1 }
         }
         for {set k 0} {$k < 6} {incr k} {
@@ -5563,18 +5887,24 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
             -font $L(font_title) -width $L(content_w) -fill $L(text_hi) \
             -anchor center -justify center
 
-        set cur_y [expr {int(round(112 * $L(scale)))}]
-        dui add dtext $page $lx $cur_y -tags edit_current -text "" \
+        # v0.29.1: "Tracker: <name>" is the header's subtitle; the page is
+        # three cards like New Tracker's -- name | link, due-after +
+        # auto-record (+ the note), icon.
+        dui add dtext $page $cx $L(ed_sub_y) -tags edit_current -text "" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) \
-            -anchor nw -justify left
+            -anchor center -justify center
+        set ix1 [expr {$lx + $L(card_pad_x)}]
+        set ix2 [expr {$rx - $L(card_pad_x)}]
+        set c1y0 $L(ed_c1_y0)
+        ::plugins::MaintenanceTracker::_sec_card $page ed_c1 $lx $c1y0 $rx $L(ed_c1_y1) ""
 
-        set name_label_y [expr {int(round(145 * $L(scale)))}]
-        set entry_y [expr {int(round(178 * $L(scale)))}]
-        dui add dtext $page $lx $name_label_y -tags name_label \
+        set name_label_y [expr {$c1y0 + int(round(14 * $L(scale)))}]
+        set entry_y [expr {$c1y0 + int(round(38 * $L(scale)))}]
+        dui add dtext $page $ix1 $name_label_y -tags name_label \
             -text [translate "Name:"] \
-            -font $L(font_body) -width $L(content_w) -fill $L(text_body) \
+            -font $L(font_caption) -width [expr {$L(content_w) / 2}] -fill $L(text_body) \
             -anchor nw -justify left
-        dui add entry $page $lx $entry_y -tags edit_entry \
+        dui add entry $page $ix1 $entry_y -tags edit_entry \
             -textvariable ::plugins::MaintenanceTracker::edit_label \
             -width 30 -font $L(font_primary) -borderwidth 1 -bg $L(entry_bg) \
             -foreground $L(text_hi) -relief flat
@@ -5582,13 +5912,13 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
         # v0.25.0 (Pass 31): the link row moved here from Detail, into
         # the empty band right of the name entry (keyboard-safe top
         # zone). "Linked to: <value>" on the Name label's line, buttons
-        # on the entry's line, right-aligned with Detail's old v0.23.0
-        # geometry (3 x btn_w_std, md gaps: starts 1204 virtual; the
-        # 30-char entry ends near 910). Unlinked: [Link profile] [Link
-        # Descale] [Link Clean]; linked: [Unlink]. Draft until Save.
-        set lk_y0 $entry_y
+        # on the entry's line, right-aligned (3 x btn_w_std, md gaps;
+        # the 30-char entry ends well left of them). Unlinked: [Link
+        # profile] [Link Descale] [Link Clean]; linked: [Unlink]. Draft
+        # until Save. v0.29.1: inside card 1, a divider between.
+        set lk_y0 [expr {$c1y0 + int(round(36 * $L(scale)))}]
         set lk_y1 [expr {$lk_y0 + $L(btn_h)}]
-        set lkcl_x0 [expr {$rx - $L(btn_w_std)}]
+        set lkcl_x0 [expr {$ix2 - $L(btn_w_std)}]
         set lkds_x1 [expr {$lkcl_x0 - $L(md)}]
         set lkds_x0 [expr {$lkds_x1 - $L(btn_w_std)}]
         set lk_x1 [expr {$lkds_x0 - $L(md)}]
@@ -5597,8 +5927,11 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
         # with `font measure` collided on the tablet (it returns PHYSICAL
         # px, canvas coords are virtual 2560 -- 1.91x short; v0.25.0
         # verify run 1).
+        dui add canvas_item rect $page [expr {$lk_x0 - $L(lg)}] $name_label_y \
+            [expr {$lk_x0 - $L(lg) + $L(div_h)}] $lk_y1 \
+            -fill $L(card_outline) -outline "" -width 0 -tags ed_c1_vdiv
         dui add dtext $page $lk_x0 $name_label_y -tags link_value -text "" \
-            -font $L(font_body) -width [expr {$rx - $lk_x0}] -fill $L(text_body) \
+            -font $L(font_caption) -width [expr {$ix2 - $lk_x0}] -fill $L(text_body) \
             -anchor nw -justify left
         dui add dbutton $page $lk_x0 $lk_y0 $lk_x1 $lk_y1 \
             -tags mt_elink -label [translate "Link profile"] \
@@ -5608,27 +5941,33 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
             -tags mt_elinkds -label [translate "Link Descale"] \
             -command [list ::dui::pages::MaintenanceTracker_edit::link_kind_click descale] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
-        dui add dbutton $page $lkcl_x0 $lk_y0 $rx $lk_y1 \
+        dui add dbutton $page $lkcl_x0 $lk_y0 $ix2 $lk_y1 \
             -tags mt_elinkcl -label [translate "Link Clean"] \
             -command [list ::dui::pages::MaintenanceTracker_edit::link_kind_click clean] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
-        dui add dbutton $page $lkcl_x0 $lk_y0 $rx $lk_y1 \
+        dui add dbutton $page $lkcl_x0 $lk_y0 $ix2 $lk_y1 \
             -tags mt_eunlink -label [translate "Unlink"] \
             -command ::dui::pages::MaintenanceTracker_edit::unlink_click \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
 
-        # Threshold steppers (burr/Add pattern): label line, then
-        # [-][-] value [+][+], deltas relabeled per the tracker's unit.
-        set thr_label_y [expr {int(round(265 * $L(scale)))}]
-        dui add dtext $page $cx $thr_label_y -tags thr_label -text "" \
-            -font $L(font_body) -width $L(content_w) -fill $L(text_body) \
-            -anchor center -justify center
-        set step_y1 [expr {int(round(300 * $L(scale)))}]
+        # Card 2. Threshold steppers (burr/Add pattern): label left,
+        # [-][-] value [+][+] right-aligned (New Tracker's row, value on
+        # an entry-coloured plate), deltas relabeled per the unit.
+        set c2y0 $L(ed_c2_y0)
+        ::plugins::MaintenanceTracker::_sec_card $page ed_c2 $lx $c2y0 $rx $L(ed_c2_y1) ""
+        set step_y1 [expr {$c2y0 + int(round(14 * $L(scale)))}]
         set step_y2 [expr {$step_y1 + $L(btn_h)}]
         set step_w [expr {int(round(120 * $L(scale)))}]
-        set value_w [expr {int(round(200 * $L(scale)))}]
+        set value_w [expr {int(round(120 * $L(scale)))}]
         set row_w [expr {4 * $step_w + $value_w + 4 * $L(md)}]
-        set x [expr {$cx - $row_w / 2}]
+        set x [expr {$ix2 - $row_w}]
+        dui add dtext $page $ix1 [expr {($step_y1 + $step_y2) / 2}] -tags thr_label -text "" \
+            -font $L(font_body) -width [expr {$x - $L(lg) - $ix1}] -fill $L(text_body) \
+            -anchor w -justify left
+        set vb_x1 [expr {$x + 2 * ($step_w + $L(md))}]
+        ::plugins::MaintenanceTracker::rounded_rect $page $vb_x1 $step_y1 \
+            [expr {$vb_x1 + $value_w}] $step_y2 $L(btn_radius) \
+            -fill $L(entry_bg) -outline $L(entry_bg) -width 1 -tags thr_box
         foreach i {0 1} lbl {-10 -1} {
             dui add dbutton $page $x $step_y1 [expr {$x + $step_w}] $step_y2 \
                 -tags step$i -label $lbl \
@@ -5648,46 +5987,47 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
             set x [expr {$x + $step_w + $L(md)}]
         }
 
-        # Icon picker (shared builder -- identical to the Add page's;
-        # two rows of 12 since v0.14.0).
-        set icon_label_y [expr {int(round(398 * $L(scale)))}]
-        dui add dtext $page $lx $icon_label_y -tags icon_label \
-            -text [translate "Icon:"] \
-            -font $L(font_body) -width $L(label_col_w) -fill $L(text_body) \
-            -anchor w -justify left
-        ::plugins::MaintenanceTracker::_build_picker_row $page \
-            [expr {int(round(424 * $L(scale)))}] \
-            [list ::dui::pages::MaintenanceTracker_edit::select_icon]
-
         # v0.20.0: auto-record row (the Add page's unit-row pattern:
         # label / current value / Change button). Cycles off -> Clean
         # cycle -> Descale cycle; refresh renders the current value.
-        # Sits under the second picker row (ends 550 ref); note and
-        # error moved down to 644/688 -- every zone gap stays >= md and
-        # the error line clears the bottom bar.
-        set auto_y [expr {int(round(576 * $L(scale)))}]
+        # v0.29.1: card 2, under a divider, then the note (history and
+        # unit stay) as the card's caption.
+        ::plugins::MaintenanceTracker::_sec_divider $page ed_c2_div \
+            $lx [expr {$step_y2 + int(round(12 * $L(scale)))}] $rx
+        set at_y1 [expr {$step_y2 + int(round(22 * $L(scale)))}]
+        set at_mid [expr {$at_y1 + $L(btn_h) / 2}]
         set vx $L(value_x)
-        dui add dtext $page $lx $auto_y -tags auto_label \
+        set chg_x0 [expr {$ix2 - $L(btn_w_wide)}]
+        dui add dtext $page $ix1 $at_mid -tags auto_label \
             -text [translate "Auto-record:"] \
-            -font $L(font_body) -width $L(label_col_w) -fill $L(text_body) \
-            -anchor nw -justify left
-        dui add dtext $page $vx $auto_y -tags auto_value -text "" \
-            -font $L(font_primary) -width [expr {$rx - $L(btn_w_wide) - $L(lg) - $vx}] \
-            -fill $L(text_hi) -anchor nw -justify left
-        dui add dbutton $page [expr {$rx - $L(btn_w_wide)}] [expr {$auto_y - $L(sm)}] \
-            $rx [expr {$auto_y - $L(sm) + $L(btn_h)}] \
+            -font $L(font_body) -width [expr {$vx - $L(lg) - $ix1}] -fill $L(text_body) \
+            -anchor w -justify left
+        dui add dtext $page $vx $at_mid -tags auto_value -text "" \
+            -font $L(font_primary) -width [expr {$chg_x0 - $L(lg) - $vx}] \
+            -fill $L(text_hi) -anchor w -justify left
+        dui add dbutton $page $chg_x0 $at_y1 $ix2 [expr {$at_y1 + $L(btn_h)}] \
             -tags auto_toggle -label [translate "Change"] \
             -command ::dui::pages::MaintenanceTracker_edit::toggle_auto \
             -label_font $L(font_button) -style mt_btn
-
-        set note_y [expr {int(round(644 * $L(scale)))}]
-        dui add dtext $page $lx $note_y -tags edit_note \
+        dui add dtext $page $ix1 [expr {$at_y1 + $L(btn_h) + $L(sm)}] -tags edit_note \
             -text [translate "The tracker's history and its counting unit (days, shots or ml) stay as they are."] \
-            -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) \
+            -font $L(font_caption) -width [expr {$ix2 - $ix1}] -fill $L(text_mut) \
             -anchor nw -justify left
 
-        set err_y [expr {int(round(688 * $L(scale)))}]
-        dui add dtext $page $cx $err_y -tags edit_error_text -text "" \
+        # Card 3: icon picker (shared builder, inset like New Tracker's;
+        # two rows of 12 since v0.14.0). "Icon:  <name>" is its header.
+        set c3y0 $L(ed_c3_y0)
+        ::plugins::MaintenanceTracker::_sec_card $page ed_c3 $lx $c3y0 $rx $L(ed_c3_y1) ""
+        dui add dtext $page $ix1 [expr {$c3y0 + $L(sec_head_h) / 2}] -tags icon_label \
+            -text [translate "Icon:"] \
+            -font $L(font_primary) -width $L(label_col_w) -fill $L(text_hi) \
+            -anchor w -justify left
+        ::plugins::MaintenanceTracker::_build_picker_row $page \
+            [expr {$c3y0 + $L(sec_head_h)}] \
+            [list ::dui::pages::MaintenanceTracker_edit::select_icon] $L(card_pad_x)
+
+        # Error / armed-delete message between the cards and the bar.
+        dui add dtext $page $cx $L(ed_msg_y) -tags edit_error_text -text "" \
             -font $L(font_primary) -width $L(content_w) -fill $L(col_red) \
             -anchor center -justify center
 
@@ -5900,24 +6240,53 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) \
             -anchor center -justify center
 
-        # Up to steps_max rows, 58 ref apart from 140: a number column and
-        # the text (body, may wrap to two lines = 46 ref < pitch). The last
-        # row starts 546 and ends by 592; the message slot is 624..672.
-        set num_w [expr {int(round(44 * $L(scale)))}]
-        set pitch [expr {int(round(58 * $L(scale)))}]
-        set y0 [expr {int(round(140 * $L(scale)))}]
-        for {set i 0} {$i < $::plugins::MaintenanceTracker::steps_max} {incr i} {
-            set y [expr {$y0 + $i * $pitch}]
-            dui add dtext $page $lx $y -tags stepn$i -text "" \
-                -font $L(font_primary) -fill $L(col_ok) -anchor nw -justify left
-            dui add dtext $page [expr {$lx + $num_w}] $y -tags stept$i -text "" \
-                -font $L(font_body) -width [expr {$L(content_w) - $num_w}] \
-                -fill $L(text_hi) -anchor nw -justify left
+        # v0.29.1: the steps sit in a Steps card. Up to steps_max rows,
+        # 54 ref apart under the card's header: a green numbered badge
+        # and the text (body, may wrap to two lines = 46 ref < pitch),
+        # one-row dividers between rows. The backdrop's height follows
+        # the step count: one backdrop per count 0..steps_max (tags
+        # steps_card<n> + the shared steps_card), refresh shows one.
+        set n_max $::plugins::MaintenanceTracker::steps_max
+        set ix1 [expr {$lx + $L(card_pad_x)}]
+        set ix2 [expr {$rx - $L(card_pad_x)}]
+        set y0 $L(steps_y0)
+        set hy [expr {$y0 + $L(sec_head_h)}]
+        for {set k 0} {$k <= $n_max} {incr k} {
+            ::plugins::MaintenanceTracker::rounded_rect $page $lx $y0 $rx \
+                [expr {$hy + $k * $L(steps_row_h) + $L(sec_pad_y)}] $L(btn_radius) \
+                -fill $L(card_bg) -outline $L(card_outline) -width 2 \
+                -tags [list steps_card$k steps_card] -initial_state hidden
+        }
+        dui add dtext $page $ix1 [expr {$y0 + $L(sec_head_h) / 2}] -tags steps_card_title \
+            -text [translate "Steps"] -font $L(font_primary) -fill $L(text_hi) \
+            -anchor w -justify left
+        dui add dtext $page $ix2 [expr {$y0 + $L(sec_head_h) / 2}] -tags steps_count -text "" \
+            -font $L(font_caption) -fill $L(text_mut) -anchor e -justify right
+        ::plugins::MaintenanceTracker::_sec_divider $page steps_card_div $lx $hy $rx
+        set txt_x [expr {$ix1 + $L(badge) + $L(md)}]
+        for {set i 0} {$i < $n_max} {incr i} {
+            set ry0 [expr {$hy + $i * $L(steps_row_h)}]
+            set rcy [expr {$ry0 + $L(steps_row_h) / 2}]
+            ::plugins::MaintenanceTracker::_sec_badge $page stepb$i \
+                [expr {$ix1 + $L(badge) / 2}] $rcy -initial_state hidden
+            dui add dtext $page $txt_x $rcy -tags stept$i -text "" \
+                -font $L(font_body) -width [expr {$ix2 - $txt_x}] \
+                -fill $L(text_hi) -anchor w -justify left
+            if {$i < $n_max - 1} {
+                ::plugins::MaintenanceTracker::_sec_divider $page stepd$i \
+                    $txt_x [expr {$ry0 + $L(steps_row_h)}] $ix2 -initial_state hidden
+            }
         }
 
-        set msg_y [expr {int(round(648 * $L(scale)))}]
+        # v0.29.1: the message slot is a callout card above the bar,
+        # shown only with a message: green tint for the run hint, red
+        # tint for the armed Clean, the plain card for a note.
+        ::plugins::MaintenanceTracker::rounded_rect $page $lx $L(call_y0) $rx $L(call_y1) \
+            $L(btn_radius) -fill $L(card_bg) -outline $L(card_outline) -width 2 \
+            -tags steps_call -initial_state hidden
+        set msg_y [expr {($L(call_y0) + $L(call_y1)) / 2}]
         dui add dtext $page $cx $msg_y -tags steps_msg -text "" \
-            -font $L(font_primary) -width $L(content_w) -fill $L(text_hi) \
+            -font $L(font_primary) -width [expr {$ix2 - $ix1}] -fill $L(text_hi) \
             -anchor center -justify center
         # v0.27.0: while a profile run is armed, the message slot becomes
         # a hint row: the group head's cup glyph + what to do and when
@@ -5928,9 +6297,9 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
         # different, smaller cup.
         set ghc_w [expr {int(round(76 * $L(scale)))}]
         ::plugins::MaintenanceTracker::_add_ghc_cup $page steps_ghc \
-            [expr {$lx + $ghc_w / 2}] $msg_y [expr {int(round(72 * $L(scale)))}] $L(col_ok)
-        dui add dtext $page [expr {$lx + $ghc_w + $L(md)}] $msg_y -tags steps_hint -text "" \
-            -font $L(font_primary) -width [expr {$L(content_w) - $ghc_w - $L(md)}] \
+            [expr {$ix1 + $ghc_w / 2}] $msg_y [expr {int(round(72 * $L(scale)))}] $L(col_ok)
+        dui add dtext $page [expr {$ix1 + $ghc_w + $L(md)}] $msg_y -tags steps_hint -text "" \
+            -font $L(font_primary) -width [expr {$ix2 - $ix1 - $ghc_w - $L(md)}] \
             -fill $L(text_hi) -anchor w -justify left -initial_state hidden
 
         # Bottom bar: [Back] ... [Mark done] [<action>]. The action is the
@@ -5960,11 +6329,11 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
         if {$id eq "" || ![info exists ::plugins::MaintenanceTracker::settings(item_$id)]} {
             catch { dui item config $page page_title -text [translate "Nothing selected"] }
             catch { dui item config $page steps_sub -text "" }
-            for {set i 0} {$i < $n_max} {incr i} {
-                catch { dui item config $page stepn$i -text "" }
-                catch { dui item config $page stept$i -text "" }
-            }
+            _show_rows $page {}
             catch { dui item config $page steps_msg -text "" }
+            ::plugins::MaintenanceTracker::_show_ghc_cup $page steps_ghc 0
+            catch { dui item hide $page steps_hint -initial 1 }
+            _show_callout $page ""
             catch { dui item hide $page mt_sdone* -initial 1 }
             catch { dui item hide $page mt_sgo* -initial 1 }
             catch { dui item hide $page mt_sedit* -initial 1 }
@@ -5981,16 +6350,7 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
             set sub "[translate {Linked to:}] [::plugins::MaintenanceTracker::_link_text $link]"
         }
         catch { dui item config $page steps_sub -text $sub }
-        set steps [::plugins::MaintenanceTracker::_item_steps $id]
-        for {set i 0} {$i < $n_max} {incr i} {
-            if {$i < [llength $steps]} {
-                catch { dui item config $page stepn$i -text "[expr {$i + 1}]." }
-                catch { dui item config $page stept$i -text [lindex $steps $i] }
-            } else {
-                catch { dui item config $page stepn$i -text "" }
-                catch { dui item config $page stept$i -text "" }
-            }
-        }
+        _show_rows $page [::plugins::MaintenanceTracker::_item_steps $id]
         set armed [expr {$kind eq "clean" && $::plugins::MaintenanceTracker::clean_armed}]
         # v0.27.0: a pending profile run for THIS tracker owns the slot.
         set run [expr {$kind eq "profile" && [::plugins::MaintenanceTracker::_run_pending_for $id]}]
@@ -6004,23 +6364,26 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
             }
             catch { dui item config $page steps_hint -text $hint }
             catch { dui item config $page steps_msg -text "" }
-            ::plugins::MaintenanceTracker::_show_ghc_cup $page steps_ghc 1
+            ::plugins::MaintenanceTracker::_show_ghc_cup $page steps_ghc 1 $L(tint_ok)
             catch { dui item show $page steps_hint -initial 1 }
         } else {
             ::plugins::MaintenanceTracker::_show_ghc_cup $page steps_ghc 0
             catch { dui item hide $page steps_hint -initial 1 }
         }
         if {$run} {
-            # handled above
+            _show_callout $page ok
         } elseif {$armed} {
             catch { dui item config $page steps_msg \
                 -text [translate "Blind basket and cleaning tablet in the group head? Tap again to start the clean cycle."] \
-                -fill $L(col_red) }
+                -fill $L(text_hi) }
+            _show_callout $page red
         } elseif {$::plugins::MaintenanceTracker::prof_note ne ""} {
             catch { dui item config $page steps_msg \
                 -text $::plugins::MaintenanceTracker::prof_note -fill $L(text_hi) }
+            _show_callout $page note
         } else {
             catch { dui item config $page steps_msg -text "" }
+            _show_callout $page ""
         }
         # Relabel through the BARE dbutton tag (the wildcard form
         # silently fails on-device).
@@ -6035,6 +6398,59 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
         } else {
             catch { dui item show $page mt_sdone* -initial 1 }
         }
+    }
+
+    # v0.29.1: the Steps card for a list of steps -- badge + text per
+    # row, dividers between rows, the backdrop sized to the count, the
+    # count on the header's right.
+    proc _show_rows {page steps} {
+        upvar #0 ::plugins::MaintenanceTracker::L L
+        set n_max $::plugins::MaintenanceTracker::steps_max
+        set n [llength $steps]
+        if {$n > $n_max} { set n $n_max }
+        for {set i 0} {$i < $n_max} {incr i} {
+            set on [expr {$i < $n}]
+            if {$on} {
+                catch { dui item config $page stepb${i}_n -text [expr {$i + 1}] }
+                catch { dui item config $page stept$i -text [lindex $steps $i] }
+            } else {
+                catch { dui item config $page stept$i -text "" }
+            }
+            foreach t [list stepb$i stepb${i}_n] {
+                catch { dui item [expr {$on ? "show" : "hide"}] $page $t -initial 1 }
+            }
+            if {$i < $n_max - 1} {
+                catch { dui item [expr {$i + 1 < $n ? "show" : "hide"}] $page stepd$i -initial 1 }
+            }
+        }
+        for {set k 0} {$k <= $n_max} {incr k} {
+            catch { dui item [expr {$k == $n ? "show" : "hide"}] $page steps_card$k -initial 1 }
+        }
+        if {$n == 0} {
+            set cnt ""
+        } elseif {$n == 1} {
+            set cnt [translate "1 step"]
+        } else {
+            set cnt "$n [translate {steps}]"
+        }
+        catch { dui item config $page steps_count -text $cnt }
+    }
+
+    # v0.29.1: the message callout -- ok (green tint, the run hint), red
+    # (red tint, the armed Clean), note (plain card) or "" (hidden).
+    proc _show_callout {page kind} {
+        upvar #0 ::plugins::MaintenanceTracker::L L
+        switch -- $kind {
+            ok   { set f $L(tint_ok) ;  set o $L(col_ok) }
+            red  { set f $L(tint_red) ; set o $L(col_red) }
+            note { set f $L(card_bg) ;  set o $L(card_outline) }
+            default {
+                catch { dui item hide $page steps_call -initial 1 }
+                return
+            }
+        }
+        catch { dui item config $page steps_call -fill $f -outline $o }
+        catch { dui item show $page steps_call -initial 1 }
     }
 
     proc back_click {} {
@@ -6127,29 +6543,52 @@ namespace eval ::dui::pages::MaintenanceTracker_stepedit {
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) \
             -anchor center -justify center
 
-        # List rows: 66 ref apart from 128, buttons 56 tall (the card
-        # action size); row 8 ends at 646, the bar starts at 716. Right
-        # to left: Remove (130), Down (100), Up (100), md apart; the
-        # text stops xl short of Up.
-        set pitch [expr {int(round(66 * $L(scale)))}]
-        set y0 [expr {int(round(128 * $L(scale)))}]
-        set bh [expr {int(round(56 * $L(scale)))}]
-        set num_w [expr {int(round(44 * $L(scale)))}]
+        # List rows inside a Steps card (v0.29.1): 64 ref apart under the
+        # card's header, buttons 56 tall (the card action size) centred
+        # in the row; row 8 ends at 682, the card at 690, the bar starts
+        # at 716. Right to left inside the card: Remove (130), Down
+        # (100), Up (100), md apart; the text stops xl short of Up. A
+        # green numbered badge leads each row; dividers between rows.
+        # Backdrop per count 0..steps_max (se_card<n> + shared se_card).
+        set y0 $L(steps_y0)
+        set hy [expr {$y0 + $L(sec_head_h)}]
+        set pitch $L(se_row_h)
+        set bh $L(se_btn_h)
+        set ix1 [expr {$lx + $L(card_pad_x)}]
+        set ix2 [expr {$rx - $L(card_pad_x)}]
         set rm_w [expr {int(round(130 * $L(scale)))}]
         set ud_w [expr {int(round(100 * $L(scale)))}]
-        set rm_x0 [expr {$rx - $rm_w}]
+        set rm_x0 [expr {$ix2 - $rm_w}]
         set dn_x1 [expr {$rm_x0 - $L(md)}] ; set dn_x0 [expr {$dn_x1 - $ud_w}]
         set up_x1 [expr {$dn_x0 - $L(md)}] ; set up_x0 [expr {$up_x1 - $ud_w}]
-        set txt_x [expr {$lx + $num_w}]
+        set txt_x [expr {$ix1 + $L(badge) + $L(md)}]
         set txt_w [expr {$up_x0 - $L(xl) - $txt_x}]
+        for {set k 0} {$k <= $n_max} {incr k} {
+            ::plugins::MaintenanceTracker::rounded_rect $page $lx $y0 $rx \
+                [expr {$hy + $k * $pitch + $L(sec_pad_y)}] $L(btn_radius) \
+                -fill $L(card_bg) -outline $L(card_outline) -width 2 \
+                -tags [list se_card$k se_card] -initial_state hidden
+        }
+        dui add dtext $page $ix1 [expr {$y0 + $L(sec_head_h) / 2}] -tags se_card_title \
+            -text [translate "Steps"] -font $L(font_primary) -fill $L(text_hi) \
+            -anchor w -justify left -initial_state hidden
+        dui add dtext $page $ix2 [expr {$y0 + $L(sec_head_h) / 2}] -tags se_count -text "-" \
+            -font $L(font_caption) -fill $L(text_mut) -anchor e -justify right \
+            -initial_state hidden
+        ::plugins::MaintenanceTracker::_sec_divider $page se_card_div $lx $hy $rx \
+            -initial_state hidden
         for {set i 0} {$i < $n_max} {incr i} {
-            set y [expr {$y0 + $i * $pitch}]
+            set y [expr {$hy + $i * $pitch + ($pitch - $bh) / 2}]
             set ym [expr {$y + $bh / 2}]
-            dui add dtext $page $lx $ym -tags se_n$i -text "" \
-                -font $L(font_primary) -fill $L(col_ok) -anchor w -justify left
+            ::plugins::MaintenanceTracker::_sec_badge $page se_b$i \
+                [expr {$ix1 + $L(badge) / 2}] $ym -initial_state hidden
             dui add dtext $page $txt_x $ym -tags se_t$i -text "" \
                 -font $L(font_body) -width $txt_w -fill $L(text_hi) -anchor w -justify left
-            # Invisible tap zone over number + text (the card-open rect
+            if {$i < $n_max - 1} {
+                ::plugins::MaintenanceTracker::_sec_divider $page se_d$i \
+                    $txt_x [expr {$hy + ($i + 1) * $pitch}] $ix2 -initial_state hidden
+            }
+            # Invisible tap zone over badge + text (the card-open rect
             # pattern: no style, so no pressfill that could stick).
             dui add dbutton $page $lx $y [expr {$up_x0 - $L(xl)}] [expr {$y + $bh}] \
                 -tags mt_serow$i \
@@ -6163,34 +6602,38 @@ namespace eval ::dui::pages::MaintenanceTracker_stepedit {
                 -tags mt_sedn$i -label [translate "Down"] \
                 -command [list ::dui::pages::MaintenanceTracker_stepedit::move_click $i 1] \
                 -label_font $L(font_button) -style mt_btn -initial_state hidden
-            dui add dbutton $page $rm_x0 $y $rx [expr {$y + $bh}] \
+            dui add dbutton $page $rm_x0 $y $ix2 [expr {$y + $bh}] \
                 -tags mt_serm$i -label [translate "Remove"] \
                 -command [list ::dui::pages::MaintenanceTracker_stepedit::remove_click $i] \
                 -label_font $L(font_button) -style mt_btn -initial_state hidden
         }
 
         # Form mode (top zone, y < 400 ref): caption, entry, hint, then
-        # Cancel / Save step. Born hidden.
-        set fcap_y [expr {int(round(132 * $L(scale)))}]
-        set fent_y [expr {int(round(164 * $L(scale)))}]
-        set fhint_y [expr {int(round(214 * $L(scale)))}]
-        set fbtn_y [expr {int(round(250 * $L(scale)))}]
-        dui add dtext $page $lx $fcap_y -tags se_fcap -text "" \
+        # Cancel / Save step, on a card (v0.29.1). Born hidden.
+        set fcap_y [expr {int(round(138 * $L(scale)))}]
+        set fent_y [expr {int(round(170 * $L(scale)))}]
+        set fhint_y [expr {int(round(220 * $L(scale)))}]
+        set fbtn_y [expr {int(round(254 * $L(scale)))}]
+        ::plugins::MaintenanceTracker::rounded_rect $page $lx $y0 $rx \
+            [expr {$fbtn_y + $L(btn_h) + $L(card_pad_x)}] $L(btn_radius) \
+            -fill $L(card_bg) -outline $L(card_outline) -width 2 \
+            -tags se_fcard -initial_state hidden
+        dui add dtext $page $ix1 $fcap_y -tags se_fcap -text "" \
             -font $L(font_primary) -fill $L(text_hi) -anchor nw -justify left \
             -initial_state hidden
-        dui add entry $page $lx $fent_y -tags se_entry \
+        dui add entry $page $ix1 $fent_y -tags se_entry \
             -textvariable ::plugins::MaintenanceTracker::se_text \
             -width 90 -font $L(font_body) -borderwidth 1 -bg $L(entry_bg) \
             -foreground $L(text_hi) -relief flat -initial_state hidden
-        dui add dtext $page $lx $fhint_y -tags se_fhint \
+        dui add dtext $page $ix1 $fhint_y -tags se_fhint \
             -text [translate "One line, up to 120 characters."] \
             -font $L(font_caption) -fill $L(text_mut) -anchor nw -justify left \
             -initial_state hidden
-        dui add dbutton $page $lx $fbtn_y [expr {$lx + $L(btn_w_std)}] [expr {$fbtn_y + $L(btn_h)}] \
+        dui add dbutton $page $ix1 $fbtn_y [expr {$ix1 + $L(btn_w_std)}] [expr {$fbtn_y + $L(btn_h)}] \
             -tags mt_sefcancel -label [translate "Cancel"] \
             -command ::dui::pages::MaintenanceTracker_stepedit::form_cancel_click \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
-        dui add dbutton $page [expr {$rx - $L(btn_w_wide)}] $fbtn_y $rx [expr {$fbtn_y + $L(btn_h)}] \
+        dui add dbutton $page [expr {$ix2 - $L(btn_w_wide)}] $fbtn_y $ix2 [expr {$fbtn_y + $L(btn_h)}] \
             -tags mt_sefsave -label [translate "Save step"] \
             -command ::dui::pages::MaintenanceTracker_stepedit::form_save_click \
             -label_font $L(font_button) -style mt_btn_primary -initial_state hidden
@@ -6230,10 +6673,23 @@ namespace eval ::dui::pages::MaintenanceTracker_stepedit {
                 if {$t eq "mt_sedn$i" && $i == $n - 1} { set show 0 }
                 catch { dui item [expr {$show ? "show" : "hide"}] $page $t* -initial 1 }
             }
+            # v0.29.1: badge + divider (plain canvas items: exact tags).
+            foreach t [list se_b$i se_b${i}_n] {
+                catch { dui item [expr {$row ? "show" : "hide"}] $page $t -initial 1 }
+            }
+            if {$i < $n_max - 1} {
+                catch { dui item [expr {$on && $i + 1 < $n ? "show" : "hide"}] $page se_d$i -initial 1 }
+            }
             if {!$row} {
-                catch { dui item config $page se_n$i -text "" }
                 catch { dui item config $page se_t$i -text "" }
             }
+        }
+        # v0.29.1: the card -- the backdrop for this count, its header.
+        for {set k 0} {$k <= $n_max} {incr k} {
+            catch { dui item [expr {$on && $k == $n ? "show" : "hide"}] $page se_card$k -initial 1 }
+        }
+        foreach t {se_card_title se_count se_card_div} {
+            catch { dui item [expr {$on ? "show" : "hide"}] $page $t -initial 1 }
         }
         foreach t {mt_secancel mt_sereset mt_seadd mt_sesave} {
             catch { dui item [expr {$on ? "show" : "hide"}] $page $t* -initial 1 }
@@ -6241,7 +6697,7 @@ namespace eval ::dui::pages::MaintenanceTracker_stepedit {
     }
 
     proc _set_form_vis {page on} {
-        foreach t {se_fcap se_entry se_fhint} {
+        foreach t {se_fcard se_fcap se_entry se_fhint} {
             catch { dui item [expr {$on ? "show" : "hide"}] $page $t -initial 1 }
         }
         foreach t {mt_sefcancel mt_sefsave} {
@@ -6277,8 +6733,11 @@ namespace eval ::dui::pages::MaintenanceTracker_stepedit {
         }
         _set_form_vis $page 0
         set draft $::plugins::MaintenanceTracker::se_draft
-        for {set i 0} {$i < [llength $draft]} {incr i} {
-            catch { dui item config $page se_n$i -text "[expr {$i + 1}]." }
+        set nd [llength $draft]
+        catch { dui item config $page se_count \
+            -text [expr {$nd == 1 ? [translate "1 step"] : "$nd [translate {steps}]"}] }
+        for {set i 0} {$i < $nd} {incr i} {
+            catch { dui item config $page se_b${i}_n -text [expr {$i + 1}] }
             catch { dui item config $page se_t$i \
                 -text [::plugins::MaintenanceTracker::_short_text \
                     [::plugins::MaintenanceTracker::_se_display [lindex $draft $i]] 90] }

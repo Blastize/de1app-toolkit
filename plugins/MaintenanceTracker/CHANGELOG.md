@@ -4,6 +4,25 @@ Entries follow the CLAUDE.md doc cap (~15 lines each; entries that added or
 changed a write capability keep their full write-path description). The long
 pre-trim entries survive in the Desktop archive snapshot of each version.
 
+## v0.29.1 - 2026-09-26 - polish batch: section cards (owner-approved mockup) - verify.sh PASS run 1; tablet screenshots of all four pages match the mockup
+
+- Detail: a status card with the list card's anatomy (summary + counter, state word + AUTO tag,
+  wear bar, last-done caption; the state dot is gone), then History (66%) beside Linked
+  profile. History rows 64 ref: date + age left, "recorded ..." right, a chevron; the armed
+  row turns red in all three. Linked profile: the link, "Auto-records on" / "Counts
+  automatically" with one bulleted line per source (moved off the last-done line), Start.
+- Steps: a Steps card (green numbered badges, dividers, height per step count, "N steps");
+  the message slot is a callout card (green + cup for the run hint, red for the armed Clean).
+- Edit steps: the same card, Up/Down/Remove inside each row; the edit form on its own card.
+- New Tracker: three cards (name | counting + Change, hint, due-after stepper on a value
+  plate; Icon; Hidden trackers, shown only when any).
+- Edit Tracker (owner, same batch): "Tracker: <name>" as the subtitle, then three cards --
+  name | link buttons, due-after stepper + Auto-record + the note, Icon; message above the bar.
+- `_card_numbers` (moved out of the list refresh, unchanged) feeds both cards.
+- polish_0291_offline.tcl: 458 checks incl. card geometry from the real setup calls.
+
+**Safety status: no write behavior changes; layout and display only.**
+
 ## v0.29.0 - 2026-09-26 - Pass 35: remove a chosen history record - verify.sh PASS 2026-09-26 on run 1; live: Water's 16:21 row armed (red, "Yes, Remove This Record"), Cancel left everything untouched
 
 Base: v0.28.1. Owner: "Backflush - Water" kept a stray 16:21 record from the Powder run

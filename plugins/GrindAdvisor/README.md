@@ -1,7 +1,7 @@
 # Grind Advisor
 
 **Your next grind setting, after every espresso. Read-only, nothing to type.**
-Version 3.16.4 · a plugin for the Decent DE1app · by Blastize
+Version 3.16.5 · a plugin for the Decent DE1app · by Blastize
 
 ![After the shot: the recommended next grind on a glass card over the Lumen home screen](docs/popup_glass.png)
 
@@ -44,7 +44,10 @@ Reads your shots from SDB and never writes to it. History files are never touche
 
 ## Reference
 
-Current plugin version: **v3.16.4** — only espresso counts. A shot whose
+Current plugin version: **v3.16.5** — the popup closes when the water tank
+runs low: the app's fill-the-tank page now shows on its own instead of under
+the after-shot card, and no card opens while the tank is empty. Previous
+(v3.16.4): only espresso counts. A shot whose
 beverage type is pour-over, tea or manual is no longer read as espresso, even
 with a grind, dose and yield filled in; shots with no beverage type (older
 ones) still count. Previous (v3.16.3): with the Visualizer upload plugin
