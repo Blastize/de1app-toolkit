@@ -1,7 +1,7 @@
 # Lumen
 
 **A glass dashboard home screen for the Decent DE1: grind recommendation, last shot, shot graph and next-shot beans, without opening Settings.**
-Version 0.58.0 · a skin for the Decent DE1app · by Blastize
+Version 0.59.0 · a skin for the Decent DE1app · by Blastize
 
 ![The Lumen home screen in a custom theme: grind tile, last shot, live graph, next-shot strip, and the taskbar with three favorite profile names, the loaded one glowing](docs/home_custom_theme.png)
 
@@ -56,7 +56,16 @@ shot — all reachable without going into Settings. It is built to work with
 GrindAdvisor, DYE, Bean Scanner, ShotHistoryEditor, MaintenanceTracker
 and SDB.
 
-**Version 0.57.0 — every page built, baked and running on the tablet.**
+**Version 0.59.0 — every page built, baked and running on the tablet.**
+
+New in 0.59.0: **Auto follows the sun.** With the Auto base, the glass
+turns light at today's sunrise and dark at today's sunset where your
+tablet is, so it moves with the seasons. The position comes from the
+tablet's time zone (Settings > General management > Date and time on
+Android), or from its location when the zone is not known; nothing about
+it is saved. The picker shows today's times ("Auto: Sunrise 06:09
+Sunset 18:10"); they are no longer tapped to set. If neither source is
+available, the fixed times (07:00 and 19:00 unless set earlier) stay.
 
 New in 0.57.0: **the taskbar, re-laid out.** Sleep (the moon) sits alone
 at the far left where a stray tap finds nothing else; the date sits under
@@ -431,8 +440,11 @@ The **THEME** row's Change button opens the picker (0.54.0; until 0.53.1
 the button cycled the three), and tapping Done there puts the change on
 screen before your finger lifts (0.47.0). The picker's **Auto** base
 (0.56.0) puts your custom colours on light or dark glass by time of day:
-`lumen_custom_base` = auto with `lumen_auto_light_from` and
-`lumen_auto_dark_from` (minutes past midnight); both halves are drawn
+`lumen_custom_base` = auto; since 0.59.0 light from sunrise to sunset
+(`::lumen::sun`: the time zone's reference point from `sun_zones.txt`,
+IANA zone.tab, else Android location held in memory; NOAA solar
+formulas), with `lumen_auto_light_from` / `lumen_auto_dark_from`
+(minutes past midnight) only as the fallback; both halves are drawn
 (`_custom` and `_customl` files) and a minute tick swaps them on the
 home or saver page while the machine is idle. Every item a Lumen helper
 draws carries a role tag naming the palette token it took its colour from

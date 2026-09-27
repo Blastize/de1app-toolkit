@@ -5,7 +5,7 @@ package require de1plus 1.0
 #  LUMEN  --  a glass dashboard skin for the Decent DE1
 #
 #  Author:  Blastize
-#  Version: 0.58.0  (cleaning-profile banner on home; see `variable version`)
+#  Version: 0.59.0  (Auto theme follows sunrise / sunset; see `variable version`)
 #
 #
 #
@@ -102,7 +102,7 @@ package require de1plus 1.0
 #############################################################################
 
 namespace eval ::lumen {
-    variable version "0.58.0"
+    variable version "0.59.0"
 
     variable C        ;# colour tokens
     array set C {}
@@ -2298,6 +2298,10 @@ proc ::lumen::time_format {} {
 #   lumen_auto_dark_from      minutes past midnight, 0..1439 (default 1140 = 19:00)
 # The schedule is in force only while the custom theme is on screen with
 # base auto. Every read is guarded and clamped: junk reads as the default.
+# 0.59.0 (owner): the boundaries are today's SUNRISE and SUNSET where the
+# tablet is (::lumen::sun below), so they follow the seasons; the two saved
+# times are only the fallback when no position can be found, and the
+# picker no longer edits them.
 proc ::lumen::auto_enabled {} {
     if { $::lumen::theme_mode ne "custom" } { return 0 }
     return [expr {[dict get [::lumen::custom::prefs] base] eq "auto"}]
@@ -2317,16 +2321,257 @@ proc ::lumen::auto_time_text { which } {
     return [format "%02d:%02d" [expr {$m / 60}] [expr {$m % 60}]]
 }
 
+# ---- 0.59.0 sunrise / sunset --------------------------------------------
+#
+# Position, found ONCE at startup (resolve, called by the boot block before
+# the first palette), in this order:
+#   1. the tablet's time zone (env TZ, else Android's persist.sys.timezone
+#      through getprop) -> that zone's reference point in sun_zones.txt
+#      (IANA zone.tab); an old alias ("Asia/Calcutta") goes through Tcl's
+#      own tzdata link file first. Within a few minutes for most zones.
+#   2. Android's location (borg location, AndroWish holds the permission),
+#      polled for up to 2 minutes and then stopped. Kept in memory only,
+#      rounded to 0.1 degree, never saved or logged: ::settings rides into
+#      every shot file and on to Visualizer.
+#   3. nothing: the saved fixed times stay in force, as before 0.59.0.
+# The times themselves come from NOAA's fractional-year solar formulas
+# (sunrise / sunset at 90.833 degrees, about a minute of error), once per
+# local day and cached, so the 200 ms picker line only formats a string.
+namespace eval ::lumen::sun {
+    variable pos ""        ;# {lat lon}, or "" while unknown
+    variable source ""     ;# the zone name, "location", or ""
+    variable day ""        ;# the local date the cached times belong to
+    variable times ""      ;# {rise set} minutes past local midnight | day | night
+    variable polls 0
+}
+
+# Time zone names to try, first to last. Only a well-formed IANA name
+# passes (it becomes a file path in alias_target).
+proc ::lumen::sun::zone_candidates {} {
+    set out {}
+    foreach {k v} [array get ::env TZ] { lappend out [string trimleft $v :] }
+    set gp /system/bin/getprop
+    if { [file executable $gp] } {
+        if { [catch { exec $gp persist.sys.timezone } z] } {
+            msg -NOTICE "Lumen: sun times: getprop failed: $z"
+        } else {
+            lappend out [string trim $z]
+        }
+    }
+    set ok {}
+    foreach z $out {
+        if { [regexp {^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$} $z] && $z ni $ok } { lappend ok $z }
+    }
+    return $ok
+}
+
+# The zone an alias links to, from Tcl's own tzdata file ("LoadTimeZoneFile
+# Asia/Kolkata"), or "".
+proc ::lumen::sun::alias_target { zone } {
+    set f [file join $::tcl_library tzdata {*}[split $zone /]]
+    if { ![file isfile $f] } { return "" }
+    set fh [open $f r]
+    set d [read $fh 4000]
+    close $fh
+    if { [regexp {LoadTimeZoneFile\s+([A-Za-z0-9_+/-]+)} $d -> t] } { return $t }
+    return ""
+}
+
+# ISO 6709 "+2518+05518" / "+404251-0740023" -> {lat lon} in degrees.
+proc ::lumen::sun::iso6709 { s } {
+    if { ![regexp {^([+-])(\d\d)(\d\d)(\d\d)?([+-])(\d\d\d)(\d\d)(\d\d)?$} $s \
+               -> s1 d1 m1 x1 s2 d2 m2 x2] } { return "" }
+    set out {}
+    foreach sg [list $s1 $s2] d [list $d1 $d2] m [list $m1 $m2] x [list $x1 $x2] {
+        if { $x eq "" } { set x 00 }
+        set v [expr {[scan $d %d] + [scan $m %d] / 60.0 + [scan $x %d] / 3600.0}]
+        lappend out [expr {$sg eq "-" ? -$v : $v}]
+    }
+    return $out
+}
+
+# {lat lon} of a zone (or of the zone its alias links to), or "".
+proc ::lumen::sun::zone_pos { zone } {
+    set f "[homedir]/skins/Lumen/sun_zones.txt"
+    if { ![file isfile $f] } {
+        msg -NOTICE "Lumen: sun times: $f is missing"
+        return ""
+    }
+    set fh [open $f r]
+    set d [read $fh]
+    close $fh
+    set tab [dict create]
+    foreach line [split $d \n] {
+        if { [string match "#*" $line] || [llength $line] != 2 } { continue }
+        dict set tab [lindex $line 0] [lindex $line 1]
+    }
+    if { ![dict exists $tab $zone] } {
+        set t [alias_target $zone]
+        if { $t eq "" || ![dict exists $tab $t] } { return "" }
+        set zone $t
+    }
+    return [iso6709 [dict get $tab $zone]]
+}
+
+proc ::lumen::sun::utc_offset_min { t } {
+    if { ![regexp {^([+-])(\d\d)(\d\d)} [clock format $t -format %z] -> sg h m] } { return 0 }
+    set v [expr {[scan $h %d] * 60 + [scan $m %d]}]
+    return [expr {$sg eq "-" ? -$v : $v}]
+}
+
+# NOAA's equation of time (minutes) and declination (radians) for the
+# local day containing t, at noon.
+proc ::lumen::sun::_eq_decl { t } {
+    set g [expr {2 * 3.14159265358979 / 365.0 * ([scan [clock format $t -format %j] %d] - 1)}]
+    set eq [expr {229.18 * (0.000075 + 0.001868 * cos($g) - 0.032077 * sin($g) \
+                             - 0.014615 * cos(2 * $g) - 0.040849 * sin(2 * $g))}]
+    set dec [expr {0.006918 - 0.399912 * cos($g) + 0.070257 * sin($g) - 0.006758 * cos(2 * $g) \
+                       + 0.000907 * sin(2 * $g) - 0.002697 * cos(3 * $g) + 0.00148 * sin(3 * $g)}]
+    return [list $eq $dec]
+}
+
+# Solar noon on the local clock, minutes past midnight.
+proc ::lumen::sun::solar_noon { lon t } {
+    lassign [_eq_decl $t] eq
+    return [expr {int(round(720 - 4 * $lon - $eq + [utc_offset_min $t])) % 1440}]
+}
+
+# {rise set} on the local clock for the local day containing t, or "day"
+# (the sun never sets) / "night" (it never rises) at polar latitudes.
+proc ::lumen::sun::times_for { lat lon t } {
+    set rad [expr {3.14159265358979 / 180.0}]
+    lassign [_eq_decl $t] eq dec
+    set c [expr {cos(90.833 * $rad) / (cos($lat * $rad) * cos($dec)) - tan($lat * $rad) * tan($dec)}]
+    if { $c > 1 } { return night }
+    if { $c < -1 } { return day }
+    set ha [expr {acos($c) / $rad}]
+    set noon [expr {720 - 4 * $lon - $eq + [utc_offset_min $t]}]
+    return [list [expr {int(round($noon - 4 * $ha)) % 1440}] [expr {int(round($noon + 4 * $ha)) % 1440}]]
+}
+
+# Today's {rise set} | day | night, or "" while the position is unknown.
+# Cheap after the first call of the day: one clock format.
+proc ::lumen::sun::today {} {
+    variable pos ; variable day ; variable times
+    if { $pos eq "" } { return "" }
+    set t [clock seconds]
+    set d [clock format $t -format %Y-%m-%d]
+    if { $d ne $day } {
+        set times [times_for {*}$pos $t]
+        set day $d
+    }
+    return $times
+}
+
+proc ::lumen::sun::resolve {} {
+    variable pos ; variable source ; variable day
+    set zs [zone_candidates]
+    foreach z $zs {
+        set p [zone_pos $z]
+        if { $p ne "" } {
+            set pos $p ; set source $z ; set day ""
+            msg -INFO "Lumen: sun times from the time zone $z: [::lumen::sun::describe]"
+            return
+        }
+    }
+    msg -NOTICE "Lumen: sun times: time zone '[join $zs ,]' not found; asking for the tablet's location"
+    location_start
+}
+
+proc ::lumen::sun::location_start {} {
+    variable polls
+    if { ![llength [info commands borg]] } {
+        msg -NOTICE "Lumen: sun times: no location service; the fixed Auto times stay in force"
+        return
+    }
+    if { [catch { borg location start 60000 1000 } err] } {
+        msg -NOTICE "Lumen: sun times: location start failed: $err; the fixed Auto times stay in force"
+        return
+    }
+    set polls 0
+    after 5000 ::lumen::sun::location_poll
+}
+
+proc ::lumen::sun::location_stop {} {
+    if { [catch { borg location stop } err] } {
+        msg -NOTICE "Lumen: sun times: location stop failed: $err"
+    }
+}
+
+# Every 5 s, up to 24 times. The first provider whose value leads with a
+# plausible latitude and longitude wins -- and only if its solar noon lands
+# between 10:00 and 15:30 on the tablet's clock, which a swapped or
+# misread field would not.
+proc ::lumen::sun::location_poll {} {
+    variable polls ; variable pos ; variable source ; variable day
+    incr polls
+    if { [catch { borg location get } data] } {
+        msg -NOTICE "Lumen: sun times: location read failed: $data"
+        set data {}
+    }
+    set p [location_pick $data [clock seconds]]
+    if { $p ne "" } {
+        location_stop
+        set pos $p ; set source location ; set day ""
+        msg -INFO "Lumen: sun times from the tablet's location: [::lumen::sun::describe]"
+        return
+    }
+    if { $polls >= 24 } {
+        location_stop
+        msg -NOTICE "Lumen: sun times: no location within 2 minutes; the fixed Auto times stay in force"
+        return
+    }
+    after 5000 ::lumen::sun::location_poll
+}
+
+proc ::lumen::sun::location_pick { data t } {
+    if { ![string is list $data] || [llength $data] % 2 } { return "" }
+    foreach {prov v} $data {
+        if { ![string is list $v] || [llength $v] < 2 } { continue }
+        lassign $v la lo
+        if { ![string is double -strict $la] || ![string is double -strict $lo] } { continue }
+        if { abs($la) > 90 || abs($lo) > 180 || ($la == 0 && $lo == 0) } { continue }
+        set noon [solar_noon $lo $t]
+        if { $noon < 600 || $noon > 930 } {
+            msg -NOTICE "Lumen: sun times: the $prov fix does not fit the clock (solar noon [hhmm $noon]); ignored"
+            continue
+        }
+        return [list [expr {round($la * 10) / 10.0}] [expr {round($lo * 10) / 10.0}]]
+    }
+    return ""
+}
+
+proc ::lumen::sun::hhmm { m } { return [format %02d:%02d [expr {$m / 60}] [expr {$m % 60}]] }
+
+# For the log: today's times, never the position.
+proc ::lumen::sun::describe {} {
+    set s [today]
+    if { $s in {day night ""} } { return "polar $s" }
+    return "sunrise [hhmm [lindex $s 0]], sunset [hhmm [lindex $s 1]]"
+}
+
+# {light_from dark_from} in force today: sunrise / sunset, else the saved
+# fixed times. Polar days come back as day / night.
+proc ::lumen::auto_bounds {} {
+    set s [::lumen::sun::today]
+    if { $s eq "" } { return [list [auto_minutes light] [auto_minutes dark]] }
+    return $s
+}
+
 # The theme the schedule wants at `now` (minutes past midnight; the clock
 # when omitted). Light runs from light_from up to dark_from, wrapping
 # past midnight when light_from is the later time; equal times mean Dark
 # all day. scan, not expr, on the clock fields: "08" is not octal.
+# 0.59.0: the two times come from auto_bounds (sunrise / sunset).
 proc ::lumen::auto_wanted { {now ""} } {
     if { $now eq "" } {
         set s [clock seconds]
         set now [expr {[scan [clock format $s -format %H] %d] * 60 + [scan [clock format $s -format %M] %d]}]
     }
-    set l [auto_minutes light] ; set d [auto_minutes dark]
+    set b [auto_bounds]
+    if { $b eq "day" } { return light }
+    if { $b eq "night" } { return dark }
+    lassign $b l d
     if { $l == $d } { return dark }
     if { $l < $d } { return [expr {$now >= $l && $now < $d ? "light" : "dark"}] }
     return [expr {$now >= $l || $now < $d ? "light" : "dark"}]
@@ -2362,23 +2607,21 @@ proc ::lumen::auto_check {} {
     return switched
 }
 
-# The schedule line on the picker reads the PENDING times while it is
-# open (seeded from the prefs by open_theme_picker, saved by Done).
-proc ::lumen::pend_minutes { which } {
-    variable ::lumen::custom::pend
-    set k [expr {$which eq "light" ? "lf" : "df"}]
-    if { [info exists pend($k)] && [string is integer -strict $pend($k)] && $pend($k) >= 0 && $pend($k) <= 1439 } {
-        return $pend($k)
-    }
-    return [auto_minutes $which]
-}
+# The schedule line on the picker: today's sunrise / sunset (0.59.0), or
+# the fixed fallback times while no position is known -- the words say
+# which. Display only; nothing on it is tappable any more.
 proc ::lumen::data::auto_light_text {} {
-    set m [::lumen::pend_minutes light]
-    return "[translate Light] [format %02d:%02d [expr {$m / 60}] [expr {$m % 60}]]"
+    set b [::lumen::auto_bounds]
+    if { $b eq "day" } { return [translate "Light all day"] }
+    if { $b eq "night" } { return [translate "Dark all day"] }
+    set w [expr {[::lumen::sun::today] eq "" ? "Light" : "Sunrise"}]
+    return "[translate $w] [::lumen::sun::hhmm [lindex $b 0]]"
 }
 proc ::lumen::data::auto_dark_text {} {
-    set m [::lumen::pend_minutes dark]
-    return "[translate Dark] [format %02d:%02d [expr {$m / 60}] [expr {$m % 60}]]"
+    set b [::lumen::auto_bounds]
+    if { $b in {day night} } { return "" }
+    set w [expr {[::lumen::sun::today] eq "" ? "Dark" : "Sunset"}]
+    return "[translate $w] [::lumen::sun::hhmm [lindex $b 1]]"
 }
 
 proc ::lumen::date_format {} {
@@ -3523,16 +3766,6 @@ proc ::lumen::act::_switch_theme { new } {
         msg -ERROR "Lumen: could not restore the theme preference: $err"
     }
     return 0
-}
-
-# 0.56.0: the schedule's times on the picker are PENDING like every other
-# picker choice -- +30 minutes a tap, wrapping at midnight, saved by Done,
-# dropped by Cancel. (The Auto pill itself is theme_pick base auto.)
-proc ::lumen::act::auto_step { which } {
-    variable ::lumen::custom::pend
-    set k [expr {$which eq "light" ? "lf" : "df"}]
-    set pend($k) [expr {([::lumen::pend_minutes $which] + 30) % 1440}]
-    ::lumen::refresh_preview
 }
 
 proc ::lumen::act::open_settings {} {
@@ -5610,6 +5843,11 @@ catch {
         set ::lumen::theme_mode $::settings(lumen_theme)
     }
 }
+# 0.59.0: the Auto schedule's sunrise / sunset position, before the first
+# palette picks a half. Logged, never fatal: the fixed times remain.
+if { [catch { ::lumen::sun::resolve } err] } {
+    msg -ERROR "Lumen: sun times: $err"
+}
 ::lumen::set_palette $::lumen::theme_mode
 ::lumen::_init_layout
 
@@ -6405,8 +6643,6 @@ proc ::lumen::act::open_theme_picker {} {
     # the current custom colours (or the Lumen-dark defaults).
     set pr [::lumen::custom::prefs]
     foreach k {base bh bs ah as} { set pend($k) [dict get $pr $k] }
-    # 0.56.0: the schedule's two times ride along.
-    set pend(lf) [::lumen::auto_minutes light] ; set pend(df) [::lumen::auto_minutes dark]
     if { [catch { dui page load lumen_theme } err] } {
         msg -ERROR "Lumen: could not open the theme picker: $err"
         return
@@ -6451,9 +6687,8 @@ proc ::lumen::act::theme_apply {} {
     if { [catch {
         set ::settings(lumen_custom_base) $pend(base)
         foreach k {bh bs ah as} { set ::settings(lumen_custom_$k) $pend($k) }
-        # 0.56.0: the schedule's times are picker state too.
-        set ::settings(lumen_auto_light_from) [::lumen::pend_minutes light]
-        set ::settings(lumen_auto_dark_from)  [::lumen::pend_minutes dark]
+        # 0.59.0: the schedule follows the sun; its fixed fallback times
+        # are no longer picker state and are left as saved.
         save_settings
     } err] } {
         msg -ERROR "Lumen: could not save the custom theme: $err"
@@ -6600,8 +6835,8 @@ proc ::lumen::build_theme_page {} {
     # Three pills right-aligned to the card's inner edge: Dark and Light
     # (the pending custom base, as before) and Auto (the schedule toggle,
     # persisted at once). The second line is the schedule itself: "Auto:"
-    # then the two times, each a 116 x 44 zone that steps it 30 min per
-    # tap; the zones end 6 short of the Dark pill's.
+    # then today's sunrise and sunset (0.59.0; display only -- the 0.56.0
+    # tap-to-step time zones are gone).
     set by $L(thp_base_y)
     glass $p $lx $by $lw $L(thp_base_h)
     txt $p $ix [expr {$by + 18}] [translate "BASE"] -font $L(font_label) -fill $C(ink_3)
@@ -6609,8 +6844,6 @@ proc ::lumen::build_theme_page {} {
     foreach which {light dark} dx {52 172} {
         var $p [expr {$ix + $dx}] [expr {$by + 44}] "\[::lumen::data::auto_[set which]_text\]" \
             -font $L(font_caption) -fill $C(ink_2)
-        tap $p [expr {$ix + $dx - 6}] [expr {$by + 30}] 116 44 \
-            "::lumen::act::auto_step $which" "Auto $which time" label
     }
     set pr [expr {$lx + $lw - $L(pad_x)}]
     foreach {b bx bw lbl} [list dark [expr {$pr - 304}] 96 "Dark" light [expr {$pr - 200}] 96 "Light" \

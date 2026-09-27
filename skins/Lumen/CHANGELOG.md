@@ -4,6 +4,27 @@ Entries follow a documentation cap (about 15 lines each; longer only where a
 version added or changed a write capability). The original long-form entries
 survive unchanged in the archive snapshot of each version.
 
+## 0.59.0 - Auto follows sunrise / sunset (pass 10, 2026-09-27) - verify.sh PASS on run 1 (boot log: "sun times from the time zone Asia/Dubai: sunrise 06:08, sunset 18:11"; picker 42 texts, 0 overlaps; owner checklist open: a real sunset / sunrise flip)
+
+Base: 0.58.0. Owner: Auto must not flip at fixed times but at sunrise / sunset for the
+tablet's region, which move with the seasons.
+
+- `::lumen::sun` finds a position once at boot: the time zone (env TZ, else getprop
+  `persist.sys.timezone`) -> its reference point in the NEW `sun_zones.txt` (IANA zone.tab,
+  aliases via Tcl's tzdata); else Android location (`borg location`, polled 2 min, then
+  stopped); else nothing, and the saved fixed times stay in force.
+- NOAA fractional-year solar formulas, cached per local day; polar day / night handled.
+  `auto_wanted` takes its bounds from `auto_bounds`; the minute tick is unchanged.
+- Picker: "Auto: Sunrise HH:MM  Sunset HH:MM" (fixed fallback keeps "Light / Dark"); the
+  0.56.0 +30 min time taps, `auto_step` and `pend_minutes` are removed.
+- check_skin.tcl: 0.59.0 section (maths vs an independent NOAA implementation, zone /
+  alias / hostile zone, schedule edges, polar, location pick).
+
+**Safety status: one write REMOVED (Done no longer saves `lumen_auto_light_from|dark_from`);
+no write added. The position is never saved or logged (`::settings` rides into every shot
+file); the location, if used, is kept in memory rounded to 0.1 degree. Reads: one
+`getprop`, `sun_zones.txt` and one Tcl tzdata file at boot.**
+
 ## 0.58.0 - cleaning-profile banner on the home page (2026-09-25) - verify.sh PASS on run 1; live: MT Start -> banner on home, tap -> switched back, banner gone
 
 Base: 0.57.5. Owner: after Maintenance Tracker loads a cleaning profile, the home page must
