@@ -1,15 +1,15 @@
 # Bean Scanner
 
 **Photograph the coffee bag. Claude or GPT reads the label and fills DYE's next shot after you confirm.**
-Version 0.9.13 · a plugin for the Decent DE1app · by Blastize
+Version 0.11.0 · a plugin for the Decent DE1app · by Blastize
 
 ![The camera page: shutter circle, flash, flip camera, trash and Send](docs/camera.jpg)
 
-**Scan the bag.** The screen becomes a camera. Tap the shutter for every printed side of the bag (the roast date is often on the back), then Send. Flash, camera flip and a trash circle to start over.
+**Scan the bag.** The screen becomes a camera. Tap the shutter (bottom left) for every printed side of the bag (the roast date is often on the back), then Send (bottom right). Flash, camera flip and a trash circle to start over. New in 0.10.0: the camera sets its exposure for what the screen shows, so a label no longer blows out until the bag fills the whole view.
 
 ![The settings page: scan buttons, AI provider and model, camera and capture size](docs/settings-page.png)
 
-**Settings.** Scan, reuse the latest photo or reopen the last result. Choose Claude or GPT and the model, set your API key, pick the camera and capture size. Light and dark palette.
+**Settings.** Scan, reuse the latest photo or reopen the last result. Choose Claude or GPT and the model, set your API key, pick the camera and capture size. Light and dark palette; every caption, label and value in both meets WCAG AA contrast. New in 0.11.0: text at its full design size, every button darkens the moment your finger lands, and the main action on a page (Scan Bean Bag, Accept) is green.
 
 ## Recommended: the Lumen skin
 
@@ -49,10 +49,10 @@ the skin publishes one.
 ## How it works
 
 1. **Scan Bean Bag** — the screen becomes a full-screen camera. Tap the
-   white **shutter circle** to take a picture; repeat for every side of the
-   bag that has printing on it — the roast date is often on the back — then
-   tap **Send** (up to 6 photos per scan; the trash circle starts the set
-   over, the ✕ cancels).
+   white **shutter circle** (bottom left) to take a picture; repeat for
+   every side of the bag that has printing on it — the roast date is often
+   on the back — then tap **Send** (bottom right; up to 6 photos per scan;
+   the trash circle next to it starts the set over, the ✕ cancels).
 2. All the photos go to Claude or GPT in one request; the model is told they
    show the same bag, to combine what is printed across them, and never to
    guess.
@@ -66,6 +66,15 @@ the preview shows exactly what will be captured; the front camera — which
 has no flash — turns the whole screen white at maximum brightness for the
 moment of capture, then restores both. The screen never flashes for the
 back camera, and a camera with no flash at all shows the icon dimmed.
+
+The **sun icon** left of the flash chooses how the camera judges
+brightness. Yellow (the default): only on what the screen shows. The
+full-screen preview crops the camera's view — on the Tab A9 almost half of
+the front camera's view is off screen — and a camera metering its whole
+view would brighten for the dark surroundings you can't see and blow out
+the label. White: the camera's own metering of its whole view, exactly as
+before 0.10.0. The choice persists and is meant for the photos as much as
+the preview: Camera1 exposure settings carry into the still capture.
 
 The **two-arrow loop icon** right of the shutter flips between the front
 and back camera without leaving the page. Photos already taken are kept,
@@ -143,6 +152,7 @@ Settings → App → Extensions.
 | Camera | Front / Back / Auto. Front is the default (the tablet faces you). |
 | Capture size | 640x480 up to 2048x1536. Bigger reads small print better but uploads slower. |
 | Flash (capture page) | Cycles off / on / auto and persists. Back camera: real flash (steady torch for "on", the camera's auto mode for "auto"). Front camera: the screen flashes white at maximum brightness while the picture is taken (no auto). The screen never flashes for the back camera. |
+| Exposure (capture page) | Sun icon, persists. Yellow (default): the camera meters only the part of its view the screen shows. White: the camera's factory metering of its whole view. |
 | Include bag notes | Whether origin / process / varietal / tasting notes are written to `bean_notes`. |
 | Overwrite existing | **On (default):** the scan replaces the whole bean identity — fields the bag doesn't state are **cleared**. **Off:** only currently-empty fields are filled in, and nothing is ever cleared. |
 

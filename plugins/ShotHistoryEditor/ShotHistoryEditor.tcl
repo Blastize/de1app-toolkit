@@ -22,6 +22,18 @@
 # - `file delete` is never called on a history file anywhere in this file.
 # - Raw chart and sensor arrays are never displayed for editing and never
 #   modified by either write path.
+# - v0.17.0 bag Save (write capability 7): perform_bag_save rewrites the
+#   changed bag settings (bean_brand, bean_type, bean_notes, roast_date,
+#   roast_level) in every history/<f>.shot of one bag after a typed file
+#   count -- verified backups first, binary-exact rewrite of only those
+#   entries, read-back checks, restore on failure, write-ahead edit_log.
+#   No file delete; SDB and history_v2 never written.
+# - v0.19.0 next-shot update (write capability 8): after a bag Save that
+#   wrote files, when DYE's next-shot plan names exactly the saved bag,
+#   _bag_next_apply applies the changed bag fields to it through DYE's own
+#   get_next + source_next_from (BeanScanner's call), logged BAGSAVE NEXT
+#   BEGIN / OK | FAILED | SKIPPED. SHE never writes ::settings or DYE's
+#   settings itself.
 #
 
 catch { package require sqlite3 }
@@ -57,8 +69,8 @@ namespace eval ::plugins::ShotHistoryEditor {
     variable purge_input ""
     variable purge_error ""
     variable purge_result_text ""
-    # v0.13.0: Advanced > Tidy result, shown in the Advanced note until the
-    # page is next shown.
+    # v0.13.0: the Tidy result line. v0.15.2: shown under the Trash page's
+    # status (Tidy moved there) until that page is next shown.
     variable tidy_note ""
     variable page_line_count 22
     variable editable_fields {grinder_setting grinder_dose_weight drink_weight bean_brand bean_type espresso_notes my_name drinker_name}
@@ -100,7 +112,19 @@ namespace eval ::plugins::ShotHistoryEditor {
     variable confirm_error ""
     variable delete_result_text ""
     variable trash_offset 0
-    variable trash_page_size 6
+    # v0.14.0 (F6): five cards per page, the house list (was six text rows).
+    variable trash_page_size 5
+    # v0.15.1 (F13): pages drawn by the shared builders -- _page_bg,
+    # _subpage_header (page -> title role), _add_back and _add_pager (page ->
+    # its two pager tags). _retheme_all walks all four, so a page built with
+    # them is repainted without editing any list (its own other items still
+    # need their entries).
+    variable bg_pages {}
+    variable header_roles
+    array set header_roles {}
+    variable back_pages {}
+    variable pager_tags
+    array set pager_tags {}
 
     # Pass 5.0 -- real metadata save state. Snapshot taken the moment "Save
     # Change" is pressed on Edit Preview, so the Confirm/Result flow stays
@@ -189,6 +213,20 @@ proc ::plugins::ShotHistoryEditor::msg {args} {
 #  tokens, chosen per settings(theme) (light | dark, default light, persisted
 #  in the plugin's own settings.tdb -- this plugin's first persisted setting).
 #  Called from _init_layout at startup and from toggle_theme at runtime.
+#
+#  v0.13.2 (contrast batch; the same values as GrindAdvisor,
+#  MaintenanceTracker and BeanScanner): WCAG 2.1 at the tablet's rendered
+#  sizes (fonts scale by 736/800 = 0.92: button 18 bold, body 17 and caption
+#  16 need 4.5:1; title, section and primary 3:1). Button labels are a
+#  palette token now; they were white in both themes, 1.70:1 on the light
+#  periwinkle. Ratios after the change (before):
+#    text_mut        dark  #9aa0ad  card 4.66 (3.93), page 5.82
+#                    light #595959  page 4.86 (3.98), card 6.78
+#    danger          dark  #ffb8b2  button label 4.54 (3.28), page 9.27
+#                    light #962219  caption 5.73 (3.77), button label 4.86 (3.19)
+#    value_blue      light #2753bb  page 4.79 (2.43), entry 6.65 (3.38)
+#    btn_label_fill  dark  #ffffff  7.48;  light #2b2b2b  8.32 (1.70)
+#  Disabled labels stay #999999 (exempt, quieter than the enabled label).
 # ---------------------------------------------------------------------------
 
 proc ::plugins::ShotHistoryEditor::_apply_palette {} {
@@ -202,29 +240,53 @@ proc ::plugins::ShotHistoryEditor::_apply_palette {} {
         set L(card_outline) "#464b58"
         set L(text_hi)      "#e8e9ee"
         set L(text_body)    "#c2c5cf"
-        set L(text_mut)     "#8d92a0"
-        set L(danger)       "#ff8a80"
+        set L(text_mut)     "#9aa0ad"
+        set L(danger)       "#ffb8b2"
         set L(warn)         "#e0a860"
         set L(value_blue)   "#8ab4ff"
         set L(entry_bg)     "#3a3e4a"
         set L(entry_danger_bg) "#4a3438"
         set L(btn_fill)     "#4a5473"
         set L(btn_disabled_fill) "#3a3e4a"
+        set L(btn_label_fill) "#ffffff"
+        set L(btn_label_disabled) "#999999"
+        # v0.15.0 (F12): a selected card -- blue-tinted with a value-blue
+        # outline; every card text keeps >= 4.99:1 on the tint.
+        set L(card_sel_bg)      "#26304a"
+        set L(card_sel_outline) "#8ab4ff"
+        # v0.18.1: the Shots | Bags box, a shade off the page (text_body on
+        # it 7.97:1).
+        set L(seg_bg)       "#2a2d37"
+        set L(seg_outline)  "#3d414d"
     } else {
         set L(page_bg)      "#d5d6e3"   ;# stock settings-page grey
         set L(card_bg)      "#fbfbfd"
         set L(card_outline) "#dcdcdc"
         set L(text_hi)      "#2b2b2b"
         set L(text_body)    "#444444"
-        set L(text_mut)     "#666666"
-        set L(danger)       "#c0392b"
+        set L(text_mut)     "#595959"
+        set L(danger)       "#962219"
         set L(warn)         "#7a4b00"
-        set L(value_blue)   "#4e85f4"
+        set L(value_blue)   "#2753bb"
         set L(entry_bg)     "#fbfaff"
         set L(entry_danger_bg) "#fff5f5"
         set L(btn_fill)     "#c0c5e3"   ;# stock dbutton periwinkle
         set L(btn_disabled_fill) "#dddddd"
+        set L(btn_label_fill) "#2b2b2b"
+        set L(btn_label_disabled) "#999999"
+        # v0.15.0 (F12): selected card tint (texts >= 5.87:1 on it).
+        set L(card_sel_bg)      "#e3ebff"
+        set L(card_sel_outline) "#2753bb"
+        # v0.18.1: the Shots | Bags box (text_body on it 7.91:1).
+        set L(seg_bg)       "#e6e7f0"
+        set L(seg_outline)  "#c3c6d6"
     }
+    # v0.15.0 (F12): the "Delete N" bar button in Select mode -- the danger
+    # face MaintenanceTracker uses, white label 6.54:1, both themes.
+    set L(btn_danger_fill)  "#b3261e"
+    set L(btn_danger_label) "#ffffff"
+    # v0.16.0: Bags view and cleaning-run tokens.
+    _apply_bag_palette $dark
 }
 
 proc ::plugins::ShotHistoryEditor::_glyph_for {name} {
@@ -266,22 +328,27 @@ proc ::plugins::ShotHistoryEditor::toggle_theme {} {
     catch { msg "ShotHistoryEditor: theme switched to $settings(theme)" }
 }
 
-# Repaint every palette-colored item by bare tag on all 13 pages. All
+# Repaint every palette-colored item by bare tag on all 17 pages. All
 # colors in this plugin are creation-time (no refresh reconfigures a
 # fill), so this walk IS the complete repaint. Buttons restyle through
-# their -btn shape tags (labels stay white in both themes, except the
-# three danger-labeled buttons, whose -lbl follows L(danger)).
+# their -btn shape tags and, v0.13.2, their -lbl label tags with
+# L(btn_label_fill) (labels used to stay white in both themes); the five
+# danger-labeled buttons then get L(danger) back in the last loop.
+# v0.13.2: the she_btn style follows the palette too, so a page whose
+# setup{} only runs after a toggle (dui sets a page up on its first load
+# when the plugin was enabled mid-session) draws its buttons in the
+# current theme instead of the one the plugin loaded in.
 proc ::plugins::ShotHistoryEditor::_retheme_all {} {
     variable L
-    foreach p {ShotHistoryEditor_settings ShotHistoryEditor_advanced
-               ShotHistoryEditor_delete_review ShotHistoryEditor_delete_confirm
-               ShotHistoryEditor_delete_result ShotHistoryEditor_trash
-               ShotHistoryEditor_recent ShotHistoryEditor_detail
-               ShotHistoryEditor_edit_preview ShotHistoryEditor_edit_confirm
-               ShotHistoryEditor_edit_result ShotHistoryEditor_diagnostics
-               ShotHistoryEditor_help ShotHistoryEditor_reconcile
-               ShotHistoryEditor_empty_preview ShotHistoryEditor_purge_confirm
-               ShotHistoryEditor_purge_result} {
+    catch {
+        dui aspect set -theme default -type dbutton -style she_btn [list \
+            fill $L(btn_fill) disabledfill $L(btn_disabled_fill)]
+        dui aspect set -theme default -type dbutton_label -style she_btn [list \
+            fill $L(btn_label_fill) disabledfill $L(btn_label_disabled)]
+    }
+    # v0.15.1: every page that drew its background with _page_bg (all 17).
+    variable bg_pages
+    foreach p $bg_pages {
         catch { dui item config $p page_bg -fill $L(page_bg) -outline $L(page_bg) }
     }
     # Text roles: {page tag role} triplets.
@@ -289,38 +356,26 @@ proc ::plugins::ShotHistoryEditor::_retheme_all {} {
         ShotHistoryEditor_settings page_title text_hi
         ShotHistoryEditor_settings subtitle text_mut
         ShotHistoryEditor_settings recent_status text_mut
-        ShotHistoryEditor_advanced page_title text_body
-        ShotHistoryEditor_advanced subtitle text_mut
         ShotHistoryEditor_advanced deleted_note warn
-        ShotHistoryEditor_delete_review page_title danger
         ShotHistoryEditor_delete_review review_count_text text_body
         ShotHistoryEditor_delete_review review_intro text_mut
         ShotHistoryEditor_delete_review review_page_status text_mut
         ShotHistoryEditor_delete_review review_text text_body
-        ShotHistoryEditor_delete_confirm page_title danger
         ShotHistoryEditor_delete_confirm confirm_instructions text_body
         ShotHistoryEditor_delete_confirm confirm_error_text danger
-        ShotHistoryEditor_delete_result page_title text_body
         ShotHistoryEditor_delete_result result_text text_body
-        ShotHistoryEditor_edit_confirm page_title danger
         ShotHistoryEditor_edit_confirm confirm_shot_text text_body
         ShotHistoryEditor_edit_confirm confirm_file_text text_mut
         ShotHistoryEditor_edit_confirm confirm_field_text text_body
         ShotHistoryEditor_edit_confirm confirm_before_text text_body
         ShotHistoryEditor_edit_confirm confirm_after_text danger
         ShotHistoryEditor_edit_confirm confirm_warning_text warn
-        ShotHistoryEditor_edit_result page_title text_body
         ShotHistoryEditor_edit_result edit_result_text text_body
-        ShotHistoryEditor_trash page_title text_body
         ShotHistoryEditor_trash trash_status text_mut
-        ShotHistoryEditor_trash header text_body
-        ShotHistoryEditor_recent page_title text_body
         ShotHistoryEditor_recent recent_status text_mut
         ShotHistoryEditor_recent header text_body
-        ShotHistoryEditor_detail page_title text_body
         ShotHistoryEditor_detail detail_page_status text_mut
         ShotHistoryEditor_detail detail_text text_body
-        ShotHistoryEditor_edit_preview page_title text_body
         ShotHistoryEditor_edit_preview selected_shot text_body
         ShotHistoryEditor_edit_preview editable_source text_mut
         ShotHistoryEditor_edit_preview fs_label text_body
@@ -329,34 +384,45 @@ proc ::plugins::ShotHistoryEditor::_retheme_all {} {
         ShotHistoryEditor_edit_preview current_value text_body
         ShotHistoryEditor_edit_preview preview_status warn
         ShotHistoryEditor_edit_preview preview_text text_body
-        ShotHistoryEditor_diagnostics page_title text_body
         ShotHistoryEditor_diagnostics diagnostics_page_status text_mut
         ShotHistoryEditor_diagnostics diagnostics_text text_body
-        ShotHistoryEditor_help page_title text_body
         ShotHistoryEditor_help help_page_status text_mut
         ShotHistoryEditor_help help_text text_body
-        ShotHistoryEditor_reconcile page_title text_body
         ShotHistoryEditor_reconcile reconcile_status text_mut
         ShotHistoryEditor_reconcile header text_body
-        ShotHistoryEditor_empty_preview page_title text_body
         ShotHistoryEditor_empty_preview empty_preview_page_status text_mut
         ShotHistoryEditor_empty_preview empty_preview_text text_body
-        ShotHistoryEditor_purge_confirm page_title danger
         ShotHistoryEditor_purge_confirm purge_instructions text_body
         ShotHistoryEditor_purge_confirm purge_error_text danger
-        ShotHistoryEditor_purge_result page_title text_body
         ShotHistoryEditor_purge_result purge_result_text text_body
     } {
         catch { dui item config $p $tag -fill $L($role) }
     }
-    # Card rows on the main page.
+    # v0.15.1 (F13): every sub-page header drawn by _subpage_header (its
+    # title in the role it registered, the subtitle muted).
+    variable header_roles
+    foreach p [array names header_roles] {
+        catch { dui item config $p page_title -fill $L($header_roles($p)) }
+        catch { dui item config $p subtitle -fill $L(text_mut) }
+    }
+    # v0.15.2 (F18): Advanced's two section cards.
+    foreach c {sec_recover sec_inspect} {
+        catch { dui item config ShotHistoryEditor_advanced ${c}_bg -fill $L(card_bg) -outline $L(card_outline) }
+        catch { dui item config ShotHistoryEditor_advanced ${c}_title -fill $L(text_hi) }
+    }
+    # Card rows on the main page, and (v0.14.0, F6) the Trash cards -- only
+    # the slots that exist (a missing tag is a DEBUG line per config).
+    variable trash_page_size
     for {set i 0} {$i < 12} {incr i} {
-        catch { dui item config ShotHistoryEditor_settings row${i}_bg \
-            -fill $L(card_bg) -outline $L(card_outline) }
-        catch { dui item config ShotHistoryEditor_settings row${i}_line1 -fill $L(text_hi) }
-        catch { dui item config ShotHistoryEditor_settings row${i}_line2 -fill $L(text_body) }
-        catch { dui item config ShotHistoryEditor_settings row${i}_line3 -fill $L(text_mut) }
-        catch { dui item config ShotHistoryEditor_trash row${i}_text -fill $L(text_body) }
+        set pages ShotHistoryEditor_settings
+        if {$i < $trash_page_size} { lappend pages ShotHistoryEditor_trash }
+        foreach p $pages {
+            catch { dui item config $p row${i}_bg \
+                -fill $L(card_bg) -outline $L(card_outline) }
+            catch { dui item config $p row${i}_line1 -fill $L(text_hi) }
+            catch { dui item config $p row${i}_line2 -fill $L(text_body) }
+            catch { dui item config $p row${i}_line3 -fill $L(text_mut) }
+        }
         catch { dui item config ShotHistoryEditor_recent row${i}_text -fill $L(text_body) }
         catch { dui item config ShotHistoryEditor_reconcile row${i}_text -fill $L(text_body) }
     }
@@ -370,30 +436,27 @@ proc ::plugins::ShotHistoryEditor::_retheme_all {} {
     catch { dui item config ShotHistoryEditor_edit_preview new_value \
         -bg $L(entry_bg) -foreground $L(value_blue) }
     catch { dui item config ShotHistoryEditor_edit_preview new_value-lbl -fill $L(text_body) }
-    # Buttons: shape fills (labels stay white; three danger labels follow).
+    # Buttons: shape fills, then labels (v0.13.2: btn_label_fill per theme;
+    # the five danger labels are set again right after this loop).
     foreach {p tags} {
-        ShotHistoryEditor_settings {mode_btn prev_page next_page bar_left bar_right btn_theme
+        ShotHistoryEditor_settings {mode_btn bar_left bar_right btn_theme
                                     row0_btn row1_btn row2_btn row3_btn row4_btn}
-        ShotHistoryEditor_advanced {source_inspector diagnostics help_guide trash_restore reconcile tidy back}
+        ShotHistoryEditor_advanced {source_inspector diagnostics help_guide trash_restore reconcile}
         ShotHistoryEditor_delete_review {cancel continue_btn}
         ShotHistoryEditor_delete_confirm {cancel confirm_delete}
         ShotHistoryEditor_delete_result {page_done}
         ShotHistoryEditor_edit_confirm {cancel save_change}
         ShotHistoryEditor_edit_result {page_done}
-        ShotHistoryEditor_trash {page_done back trash_prev_page trash_next_page empty_preview
+        ShotHistoryEditor_trash {empty_preview tidy
                                  row0_restore row1_restore row2_restore row3_restore
-                                 row4_restore row5_restore row6_restore row7_restore}
-        ShotHistoryEditor_recent {page_done back
-                                  row0_open row1_open row2_open row3_open
+                                 row4_restore}
+        ShotHistoryEditor_recent {row0_open row1_open row2_open row3_open
                                   row4_open row5_open row6_open}
-        ShotHistoryEditor_detail {page_done back prev_page next_page edit_preview}
-        ShotHistoryEditor_edit_preview {next_field preview_change save_change page_done back}
-        ShotHistoryEditor_diagnostics {back prev_page next_page page_done}
-        ShotHistoryEditor_help {back prev_page next_page page_done}
-        ShotHistoryEditor_reconcile {page_done back reconcile_prev_page reconcile_next_page
-                                     row0_unhide row1_unhide row2_unhide row3_unhide
+        ShotHistoryEditor_detail {edit_preview}
+        ShotHistoryEditor_edit_preview {next_field preview_change save_change}
+        ShotHistoryEditor_reconcile {row0_unhide row1_unhide row2_unhide row3_unhide
                                      row4_unhide row5_unhide}
-        ShotHistoryEditor_empty_preview {back prev_page next_page page_done empty_now}
+        ShotHistoryEditor_empty_preview {empty_now}
         ShotHistoryEditor_purge_confirm {cancel purge_confirm_btn}
         ShotHistoryEditor_purge_result {page_done}
     } {
@@ -401,7 +464,23 @@ proc ::plugins::ShotHistoryEditor::_retheme_all {} {
             catch { dui item config $p ${t}-btn \
                 -fill $L(btn_fill) -outline $L(btn_fill) \
                 -disabledfill $L(btn_disabled_fill) -disabledoutline $L(btn_disabled_fill) }
+            catch { dui item config $p ${t}-lbl -fill $L(btn_label_fill) }
         }
+    }
+    # v0.15.1 (F13): every Back drawn by _add_back and every pager drawn by
+    # _add_pager.
+    variable back_pages
+    variable pager_tags
+    set reg {}
+    foreach p $back_pages { lappend reg $p back }
+    foreach p [array names pager_tags] {
+        foreach t $pager_tags($p) { lappend reg $p $t }
+    }
+    foreach {p t} $reg {
+        catch { dui item config $p ${t}-btn \
+            -fill $L(btn_fill) -outline $L(btn_fill) \
+            -disabledfill $L(btn_disabled_fill) -disabledoutline $L(btn_disabled_fill) }
+        catch { dui item config $p ${t}-lbl -fill $L(btn_label_fill) }
     }
     foreach {p t} {
         ShotHistoryEditor_delete_confirm confirm_delete
@@ -412,6 +491,14 @@ proc ::plugins::ShotHistoryEditor::_retheme_all {} {
     } {
         catch { dui item config $p ${t}-lbl -fill $L(danger) }
     }
+    # v0.16.0: the Bags pages, the Shots/Bags tabs and the cleaning pills
+    # (before the selection look below, which the card fills defer to).
+    _retheme_bag_pages
+    # v0.15.0 (F12): the walk above painted every card plain and bar_left in
+    # the normal style; selected cards and Select mode's "Delete N" face
+    # take their look back (the theme toggle sits on the card page itself).
+    _paint_all_card_sel ShotHistoryEditor_settings
+    _refresh_select_bar ShotHistoryEditor_settings
 }
 
 proc ::plugins::ShotHistoryEditor::_init_layout {} {
@@ -464,6 +551,8 @@ proc ::plugins::ShotHistoryEditor::_init_layout {} {
 
     set L(btn_w_std) [expr {int(round(200 * $scale))}]
     set L(btn_w_wide) [expr {int(round(240 * $scale))}]
+    # v0.13.1: Shot Detail's Edit Metadata Preview, now a left-group button.
+    set L(btn_w_xwide) [expr {int(round(300 * $scale))}]
     set L(btn_h) [expr {int(max(60, round(60 * $scale)))}]
     set L(card_btn_w) [expr {int(round(150 * $scale))}]
     set L(card_btn_h) [expr {int(max(56, round(56 * $scale)))}]
@@ -476,8 +565,8 @@ proc ::plugins::ShotHistoryEditor::_init_layout {} {
     # to be current when this plugin loads or renders.
     # v0.8.0: every color token lives in _apply_palette (light / dark, per
     # settings(theme)) so the sun/moon toggle can swap it at runtime.
+    # v0.13.2: the button label colors too (a theme-blind white was set here).
     _apply_palette
-    set L(btn_label_fill) white
 
     set L(header_y1) [expr {int(round(96 * $scale))}]
     # Fixed header baselines (not fractions of header_y1) so title/subtitle
@@ -486,10 +575,32 @@ proc ::plugins::ShotHistoryEditor::_init_layout {} {
     # between the two lines at some scales, effectively touching.
     set L(header_title_y) [expr {int(round(28 * $scale))}]
     set L(header_subtitle_y) [expr {int(round(72 * $scale))}]
-    set L(header_solo_title_y) [expr {int(round(48 * $scale))}]
+    # v0.15.1 (F13): header_solo_title_y is gone -- every sub-page now has
+    # the title + subtitle header (_subpage_header).
     set L(toolbar_y0) [expr {int(round(104 * $scale))}]
     set L(toolbar_y1) [expr {int(round(152 * $scale))}]
     set L(list_top) [expr {int(round(168 * $scale))}]
+    # v0.18.1 (owner mockup 2026-10-02): the toolbar row holds the Shots |
+    # Bags switch (one rounded box at left_x, the active side filled), the
+    # status (centred) and Select (the card buttons' column, shorter than a
+    # bar button, centred on the row).
+    set L(toolbar_mid_y) [expr {($L(toolbar_y0) + $L(toolbar_y1)) / 2}]
+    set L(seg_w) [expr {int(round(264 * $scale))}]
+    set L(seg_inset) [expr {int(round(5 * $scale))}]
+    set L(seg_radius) [expr {int(round(10 * $scale))}]
+    set L(seg_btn_radius) [expr {int(round(8 * $scale))}]
+    set L(sel_btn_h) [expr {int(round(42 * $scale))}]
+    set L(sel_x1) [expr {$L(right_x) - $L(card_pad_x)}]
+    set L(sel_x0) [expr {$L(sel_x1) - $L(card_btn_w)}]
+    set mid_x [expr {($L(left_x) + $L(right_x)) / 2}]
+    set L(toolbar_status_w) [expr {2 * min($mid_x - $L(left_x) - $L(seg_w) - $L(md), $L(sel_x0) - $L(md) - $mid_x)}]
+    # v0.15.2 (F18): section cards (Advanced), GrindAdvisor's tokens -- pad
+    # lg, a 24 px section-title band, two columns an lg gutter apart.
+    set L(sec_pad) $L(lg)
+    set L(sec_title_h) [expr {int(round(24 * $scale))}]
+    set L(sec_gutter) $L(lg)
+    set L(sec_col_w) [expr {($L(content_w) - $L(sec_gutter)) / 2}]
+    set L(sec_col2_x) [expr {$L(left_x) + $L(sec_col_w) + $L(sec_gutter)}]
     set L(bar_y0) [expr {int(round(716 * $scale))}]
     set L(bar_y1) [expr {int(round(776 * $scale))}]
 
@@ -581,8 +692,10 @@ proc ::plugins::ShotHistoryEditor::_init_layout {} {
             shape round radius $L(btn_radius) \
             fill $L(btn_fill) disabledfill $L(btn_disabled_fill)]
         dui aspect set -theme default -type dbutton_label -style she_btn [list \
-            fill $L(btn_label_fill) disabledfill "#999999"]
+            fill $L(btn_label_fill) disabledfill $L(btn_label_disabled)]
     }
+    # v0.16.0: the Bags view's tokens.
+    _init_bag_layout
 }
 
 # Full-page background, drawn as the first item of every page so the
@@ -593,8 +706,91 @@ proc ::plugins::ShotHistoryEditor::_init_layout {} {
 # proven _page_bg.
 proc ::plugins::ShotHistoryEditor::_page_bg {page} {
     variable L
+    variable bg_pages
     dui add canvas_item rect $page 0 0 $L(screen_w) $L(screen_h) \
         -fill $L(page_bg) -outline $L(page_bg) -tags page_bg
+    # v0.15.1: registered for _retheme_all (review: a helper-built page kept
+    # a light background in dark mode).
+    if {$page ni $bg_pages} { lappend bg_pages $page }
+}
+
+# v0.13.1: ONE pager for every paged page (owner decision 2026-09-30, the
+# same standard in MaintenanceTracker and GrindAdvisor): bottom-right of the
+# bottom bar, Next's right edge on right_x, Prev an sm gap to its left,
+# arrow + word labels, both buttons always visible. The bar's other buttons
+# fill from the left (Done first).
+proc ::plugins::ShotHistoryEditor::_add_pager {page prev_tag next_tag prev_cmd next_cmd} {
+    variable L
+    variable pager_tags
+    # v0.15.1: registered for _retheme_all, like _add_back.
+    set pager_tags($page) [list $prev_tag $next_tag]
+    set bw $L(btn_w_std)
+    set next_x1 [expr {$L(right_x) - $bw}]
+    set prev_x1 [expr {$next_x1 - $L(sm) - $bw}]
+    dui add dbutton $page $prev_x1 $L(bar_y0) [expr {$prev_x1 + $bw}] $L(bar_y1) -tags $prev_tag \
+        -label [translate "[_u 0x25c0] Prev"] -command $prev_cmd \
+        -label_font $L(font_button) -style she_btn
+    dui add dbutton $page $next_x1 $L(bar_y0) $L(right_x) $L(bar_y1) -tags $next_tag \
+        -label [translate "Next [_u 0x25b6]"] -command $next_cmd \
+        -label_font $L(font_button) -style she_btn
+}
+
+# Disables the unavailable pager button instead of hiding it, so nothing on
+# the bar moves between pages. The WILDCARD tag reaches the shape, the label
+# and the tap rect, and dui restyles them with the style's disabled fills.
+# v0.15.1 (F13, review fold-in): through dui's enable_or_disable, which
+# leaves a hidden page alone. The raw -state config also reached a page a
+# late show hook refreshed after the user had left it, drawing Prev / Next
+# over the next page.
+proc ::plugins::ShotHistoryEditor::_set_pager_state {page prev_tag next_tag has_prev has_next} {
+    catch { dui item enable_or_disable [expr {$has_prev ? 1 : 0}] $page ${prev_tag}* }
+    catch { dui item enable_or_disable [expr {$has_next ? 1 : 0}] $page ${next_tag}* }
+}
+
+# v0.15.1 (F13): every sub-page's header -- the main page's 40 px title
+# (font_title at header_title_y) and one caption-size subtitle line under
+# it (header_subtitle_y), both centred; tags page_title and subtitle. The
+# page and its title role (text_hi, or danger on the confirm pages) are
+# registered, so _retheme_all repaints them with no list edit. Pass plain
+# English: the helper translates.
+proc ::plugins::ShotHistoryEditor::_subpage_header {page title subtitle {role text_hi}} {
+    variable L
+    variable header_roles
+    set cx [expr {($L(left_x) + $L(right_x)) / 2}]
+    dui add dtext $page $cx $L(header_title_y) -tags page_title -text [translate $title] \
+        -font $L(font_title) -width $L(content_w) -fill $L($role) -anchor center -justify center
+    dui add dtext $page $cx $L(header_subtitle_y) -tags subtitle -text [translate $subtitle] \
+        -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor center -justify center
+    set header_roles($page) $role
+}
+
+# v0.15.1 (F13): a sub-page's one way out -- Back, bottom-left at left_x,
+# standard width, tag back; command is the page's return (_return_to_page
+# to its parent, or the edit flow's own). The page is registered for
+# _retheme_all. Returns the x where the next bar button goes, sm right of it.
+proc ::plugins::ShotHistoryEditor::_add_back {page command} {
+    variable L
+    variable back_pages
+    set x1 [expr {$L(left_x) + $L(btn_w_std)}]
+    dui add dbutton $page $L(left_x) $L(bar_y0) $x1 $L(bar_y1) -tags back \
+        -label [translate "Back"] -command $command \
+        -label_font $L(font_button) -style she_btn
+    if {$page ni $back_pages} { lappend back_pages $page }
+    return [expr {$x1 + $L(sm)}]
+}
+
+# v0.15.2 (F18): a titled section card -- the house card (card_bg, card
+# outline, card radius) with a 24 px section title in its top band, as on
+# GrindAdvisor's Advanced. Tags <tag>_bg and <tag>_title (_retheme_all
+# repaints the two Advanced cards). Returns the y of the first content row.
+proc ::plugins::ShotHistoryEditor::_sec_card {page tag x y w h title} {
+    variable L
+    rounded_rect $page $x $y [expr {$x + $w}] [expr {$y + $h}] $L(card_radius) \
+        -fill $L(card_bg) -outline $L(card_outline) -width 2 -tags ${tag}_bg
+    dui add dtext $page [expr {$x + $L(sec_pad)}] [expr {$y + $L(sec_pad) + $L(sec_title_h) / 2}] \
+        -tags ${tag}_title -text [translate $title] -font $L(font_section) \
+        -width [expr {$w - 2 * $L(sec_pad)}] -fill $L(text_hi) -anchor w -justify left
+    return [expr {$y + $L(sec_pad) + $L(sec_title_h) + $L(md)}]
 }
 
 # Draws a rounded-rectangle card backdrop through the dui canvas_item wrapper
@@ -650,6 +846,13 @@ proc ::plugins::ShotHistoryEditor::preload_pages {} {
     dui page add ShotHistoryEditor_empty_preview -namespace true -theme default -type fpdialog
     dui page add ShotHistoryEditor_purge_confirm -namespace true -theme default -type fpdialog
     dui page add ShotHistoryEditor_purge_result -namespace true -theme default -type fpdialog
+    # v0.16.0: the Bags tab and its (preview-only) editor.
+    dui page add ShotHistoryEditor_bags -namespace true -theme default -type fpdialog
+    dui page add ShotHistoryEditor_bag_edit -namespace true -theme default -type fpdialog
+    dui page add ShotHistoryEditor_bag_review -namespace true -theme default -type fpdialog
+    # v0.17.0: the bag Save -- typed confirmation, then the result.
+    dui page add ShotHistoryEditor_bag_confirm -namespace true -theme default -type fpdialog
+    dui page add ShotHistoryEditor_bag_result -namespace true -theme default -type fpdialog
     return ShotHistoryEditor_settings
 }
 
@@ -1023,40 +1226,77 @@ proc ::plugins::ShotHistoryEditor::_edit_manifest_lines {} {
     return $lines
 }
 
-# Manifest line format (one per saved field): timestamp|filename|field|old_value|new_value|backup_path
+# Manifest line format: timestamp|filename|field|old|new|backup_path (v0.5.0,
+# values raw), or the same plus |e1|epoch with old/new escaped (v0.17.0 bag
+# Save; epoch = the save's clock seconds).
 proc ::plugins::ShotHistoryEditor::_edit_manifest_records {} {
     set records {}
     foreach line [_edit_manifest_lines] {
         set parts [split $line "|"]
-        if {[llength $parts] != 6} { continue }
-        lassign $parts ts filename field old_value new_value backup_path
+        if {[llength $parts] == 8 && [lindex $parts 6] eq "e1" && [string is wideinteger -strict [lindex $parts 7]]} {
+            lassign $parts ts filename field old_value new_value backup_path - epoch
+            set old_value [_unesc $old_value]
+            set new_value [_unesc $new_value]
+            set e1 1
+        } elseif {[llength $parts] == 6} {
+            lassign $parts ts filename field old_value new_value backup_path
+            set e1 0
+            set epoch ""
+        } else {
+            continue
+        }
         lappend records [dict create ts $ts filename $filename field $field \
-            old_value $old_value new_value $new_value backup_path $backup_path]
+            old_value $old_value new_value $new_value backup_path $backup_path e1 $e1 epoch $epoch]
     }
     return $records
 }
 
-# Builds filename -> {field -> latest edited value} from the whole edit
-# manifest once, so a list refresh doesn't re-parse the manifest per row
-# (same shape as _deleted_filenames_dict for the trash manifest).
+# filename -> field -> every record {new old e1 epoch}, in manifest order, built
+# once per list refresh.
 proc ::plugins::ShotHistoryEditor::_all_edit_overlays {} {
     set overlays [dict create]
     foreach rec [_edit_manifest_records] {
         set fn [dict get $rec filename]
-        if {![dict exists $overlays $fn]} { dict set overlays $fn [dict create] }
-        dict set overlays $fn [dict get $rec field] [dict get $rec new_value]
+        set field [dict get $rec field]
+        set l {}
+        if {[dict exists $overlays $fn $field]} { set l [dict get $overlays $fn $field] }
+        lappend l [list [dict get $rec new_value] [dict get $rec old_value] [dict get $rec e1] [dict get $rec epoch]]
+        dict set overlays $fn $field $l
     }
     return $overlays
 }
 
-# Overlays any edited field values onto an SDB-sourced row dict so the user
-# sees their correction immediately, even though SDB itself is never
-# written to and may show the stale value until it resyncs on its own.
+# Overlays edited values onto an SDB row so the change shows at once, before
+# SDB resyncs. A v0.5.0 record applies as before (always). A v0.17.0 bag-save
+# record (e1) is for the time until SDB re-reads the file: SDB's
+# file_modification_date at or past the save's epoch means the row already
+# holds that save, and everything before it, so the fold starts after the
+# last such save from the row's own value (a later revert in DYE shows as
+# it is). The e1 records SDB has not caught up with apply in order, each
+# only when the value so far is the one it replaced: a chain A to B to C
+# shows C. With no file_modification_date column, the value test alone.
 proc ::plugins::ShotHistoryEditor::_apply_edit_overlay {row overlays} {
     set filename [_dget $row filename]
     if {$filename eq "" || ![dict exists $overlays $filename]} { return $row }
-    dict for {field value} [dict get $overlays $filename] {
-        if {[dict exists $row $field]} { dict set row $field $value }
+    set fmd [_dget $row file_modification_date]
+    set known [string is double -strict $fmd]
+    dict for {field recs} [dict get $overlays $filename] {
+        if {![dict exists $row $field]} { continue }
+        set from 0
+        if {$known} {
+            set i 0
+            foreach rec $recs {
+                lassign $rec new old e1 epoch
+                incr i
+                if {$e1 && $fmd >= $epoch} { set from $i }
+            }
+        }
+        set v [dict get $row $field]
+        foreach rec [lrange $recs $from end] {
+            lassign $rec new old e1 epoch
+            if {!$e1 || [string trim $v] eq [string trim $old]} { set v $new }
+        }
+        dict set row $field $v
     }
     return $row
 }
@@ -1602,16 +1842,9 @@ proc ::plugins::ShotHistoryEditor::refresh_reconcile_page {page} {
             catch { dui item hide $page row${i}_unhide* -initial 1 }
         }
     }
-    if {$reconcile_offset > 0} {
-        catch { dui item show $page reconcile_prev_page* -initial 1 }
-    } else {
-        catch { dui item hide $page reconcile_prev_page* -initial 1 }
-    }
-    if {$reconcile_offset + [llength $shown] < $total} {
-        catch { dui item show $page reconcile_next_page* -initial 1 }
-    } else {
-        catch { dui item hide $page reconcile_next_page* -initial 1 }
-    }
+    # v0.13.1: standard pager -- disabled at the ends, never hidden.
+    _set_pager_state $page reconcile_prev_page reconcile_next_page \
+        [expr {$reconcile_offset > 0}] [expr {$reconcile_offset + [llength $shown] < $total}]
 }
 
 proc ::plugins::ShotHistoryEditor::unhide_row {i} {
@@ -1629,11 +1862,14 @@ proc ::plugins::ShotHistoryEditor::unhide_row {i} {
 }
 
 # Groups manifest records by batch id for the Trash/Restore page. Returns a
-# list of dicts: {batch_id ts file_count shot_count shots}, most recent first.
+# list of dicts: {batch_id ts file_count shot_count shots shot_files}, most
+# recent first. v0.14.0 (F6): shot_files pairs each .shot's name (its shot
+# timestamp) with the path of its trashed copy, so the card can name it.
 proc ::plugins::ShotHistoryEditor::_trash_batches {} {
     array set ts_by_batch {}
     array set files_by_batch {}
     array set shots_by_batch {}
+    array set shot_files_by_batch {}
     foreach rec [_manifest_records] {
         set b [dict get $rec batch]
         set ts_by_batch($b) [dict get $rec ts]
@@ -1642,16 +1878,70 @@ proc ::plugins::ShotHistoryEditor::_trash_batches {} {
         set orig [dict get $rec orig]
         if {[string match "*.shot" $orig]} {
             if {![info exists shots_by_batch($b)]} { set shots_by_batch($b) {} }
-            lappend shots_by_batch($b) [file rootname [file tail $orig]]
+            set name [file rootname [file tail $orig]]
+            lappend shots_by_batch($b) $name
+            lappend shot_files_by_batch($b) [list $name [dict get $rec trash]]
         }
     }
     set result {}
     foreach b [array names ts_by_batch] {
         set shots [expr {[info exists shots_by_batch($b)] ? $shots_by_batch($b) : {}}]
+        set shot_files [expr {[info exists shot_files_by_batch($b)] ? $shot_files_by_batch($b) : {}}]
         lappend result [dict create batch_id $b ts $ts_by_batch($b) \
-            file_count $files_by_batch($b) shot_count [llength $shots] shots $shots]
+            file_count $files_by_batch($b) shot_count [llength $shots] shots $shots \
+            shot_files $shot_files]
     }
     return [lsort -command ::plugins::ShotHistoryEditor::_batch_ts_cmp -decreasing $result]
+}
+
+# v0.14.0 (F6): the three lines of one Trash card, naming the batch's shot
+# rather than the batch. Line 1: the newest shot's own time and bean (+N more
+# when the batch holds more); line 2: its grind, dose and yield; line 3: when
+# it was deleted, the counts and the batch id (the logs' key). The bean and
+# numbers come from the trashed .shot's settings block through the same
+# read-only parser the edit flow uses, and only for a path inside the
+# plugin's own trash folder -- nothing is written, moved or renamed here.
+proc ::plugins::ShotHistoryEditor::_trash_card_lines {b} {
+    set files [lsort -index 0 -decreasing [_dget $b shot_files]]
+    set n [_dget $b shot_count 0]
+    set deleted [_dget $b ts]
+    catch { set deleted [_fmt_time [clock scan $deleted -format {%Y%m%dT%H%M%S}]] }
+    set files_n [_dget $b file_count 0]
+    set line3 "Deleted $deleted   |   $n [expr {$n == 1 ? {shot} : {shots}}], $files_n [expr {$files_n == 1 ? {file} : {files}}]   |   batch [_dget $b batch_id]"
+    if {[llength $files] == 0} {
+        return [list "No .shot file in this batch" "" $line3]
+    }
+    set more ""
+    if {$n > 1} { set more "   |   +[expr {$n - 1}] more" }
+    # The newest shot whose trashed file can be read names the card; if none
+    # can, the newest names it and line 2 says why.
+    set parsed "" ; set note ""
+    foreach f $files {
+        lassign $f name path
+        if {![_inside_trash_dir $path]} {
+            set note "Not read: the file is outside the trash folder."
+            continue
+        }
+        set p [_parse_settings_file $path]
+        if {[dict get $p status] eq "found"} { set parsed $p ; break }
+        if {$note eq ""} {
+            set note [expr {[dict get $p status] eq "missing"
+                ? "The trashed shot file is no longer there."
+                : "The trashed shot file could not be read."}]
+        }
+    }
+    if {$parsed eq ""} { lassign [lindex $files 0] name path }
+    set when $name
+    catch { set when [_fmt_time [clock scan $name -format {%Y%m%dT%H%M%S}]] }
+    if {$parsed eq ""} {
+        return [list "$when$more" $note $line3]
+    }
+    set v [dict get $parsed values]
+    set bean [_bean_label [_dget $v bean_brand] [_dget $v bean_type]]
+    if {[string length $bean] > 40} { set bean "[string range $bean 0 36]..." }
+    set line1 "$when   |   $bean$more"
+    set line2 "Grind [_display [_dget $v grinder_setting]]   Dose [_display [_dget $v grinder_dose_weight]]g   Yield [_display [_dget $v drink_weight]]g"
+    return [list $line1 $line2 $line3]
 }
 
 proc ::plugins::ShotHistoryEditor::_batch_ts_cmp {a b} {
@@ -1687,7 +1977,7 @@ proc ::plugins::ShotHistoryEditor::empty_trash_preview_text {} {
     if {[llength $batches] == 0} {
         lappend lines "The trash is empty: no batches, no files."
         if {$empties > 0} {
-            lappend lines "$empties empty batch folder(s) remain under the trash; Advanced > Tidy empty trash folders removes them."
+            lappend lines "$empties empty batch folder(s) remain under the trash; Tidy on the Trash page removes them."
         }
         return [join $lines "\n"]
     }
@@ -1727,7 +2017,7 @@ proc ::plugins::ShotHistoryEditor::empty_trash_preview_text {} {
         lappend lines "$tot_missing manifest entr(y/ies) point at files that are already gone (restored, or moved by hand)."
     }
     if {$empties > 0} {
-        lappend lines "$empties empty batch folder(s) under the trash (left by earlier restores) would go too; Advanced > Tidy removes them on their own."
+        lappend lines "$empties empty batch folder(s) under the trash (left by earlier restores) would go too; Tidy on the Trash page removes them on their own."
     }
     lappend lines "The trash manifest and delete log would be kept as the audit trail."
     return [join $lines "\n"]
@@ -1835,15 +2125,21 @@ proc ::plugins::ShotHistoryEditor::perform_purge {expected_batch_ids} {
 # but never removed the folder, so the tablet had 14 empty ones. This sweep
 # removes every EMPTY folder directly under the plugin trash (the ONLY folder
 # `file delete` in the plugin, guarded by _inside_trash_dir; a folder holding
-# anything at all stays). Shared by Empty trash and Advanced > Tidy.
+# anything at all stays). Shared by Empty trash and Tidy (Trash page).
 # ---------------------------------------------------------------------------
 
 proc ::plugins::ShotHistoryEditor::_empty_trash_dirs {} {
     set root [trash_dir]
-    if {![file isdirectory $root]} { return {} }
+    # v0.15.2 (review): precondition, not catch -- glob throws on a folder it
+    # cannot list (-nocomplain only covers "no match"), and since F18 the
+    # Trash page counts on every refresh. A folder that cannot be listed
+    # cannot be proven empty, so it stays: this only narrows what Tidy and
+    # Empty trash may remove.
+    if {![file isdirectory $root] || ![file readable $root]} { return {} }
     set out {}
     foreach d [lsort [glob -nocomplain -directory $root -types d *]] {
         if {![_inside_trash_dir $d]} { continue }
+        if {![file readable $d]} { continue }
         set left [lsearch -all -inline -not -regexp [glob -nocomplain -directory $d -tails * .*] {^\.\.?$}]
         if {[llength $left] == 0} { lappend out $d }
     }
@@ -1866,7 +2162,27 @@ proc ::plugins::ShotHistoryEditor::_remove_empty_trash_dirs {} {
     return $removed
 }
 
-# Advanced > Tidy: folders only, files and batches untouched; one audit line.
+# v0.15.2 (F18): the Trash page's Tidy button names what it would remove --
+# "Tidy N empty folders" -- and is greyed out while there is nothing to tidy
+# (dui's enable_or_disable: a hidden page is left alone). The count and the
+# number in the label are not part of the translated words.
+proc ::plugins::ShotHistoryEditor::_refresh_tidy_btn {page} {
+    set n [llength [_empty_trash_dirs]]
+    if {$n == 0} {
+        set lbl [translate "Tidy empty folders"]
+    } elseif {$n == 1} {
+        set lbl "[translate Tidy] 1 [translate {empty folder}]"
+    } else {
+        set lbl "[translate Tidy] $n [translate {empty folders}]"
+    }
+    catch { dui item config $page tidy -label $lbl }
+    # -initial 1 (review): the state survives the next page load too, so a
+    # greyed Tidy is drawn grey from the first frame instead of flashing.
+    catch { dui item enable_or_disable [expr {$n > 0}] $page tidy* -initial 1 }
+}
+
+# Trash page > Tidy (v0.15.2; was Advanced > Tidy since v0.13.0): folders
+# only, files and batches untouched; one audit line.
 proc ::plugins::ShotHistoryEditor::tidy_trash_folders {} {
     variable tidy_note
     set n [_remove_empty_trash_dirs]
@@ -1879,11 +2195,10 @@ proc ::plugins::ShotHistoryEditor::tidy_trash_folders {} {
     }
     msg -INFO "ShotHistoryEditor: Tidy removed $n empty trash folder(s)"
     set tidy_note "Tidy: removed $n empty trash folder(s); files and batches untouched."
-    refresh_advanced_page ShotHistoryEditor_advanced
+    refresh_trash_page ShotHistoryEditor_trash
 }
 
 proc ::plugins::ShotHistoryEditor::refresh_advanced_page {page} {
-    variable tidy_note
     set n [deleted_shot_count]
     set r [reconcile_count]
     set note ""
@@ -1892,9 +2207,6 @@ proc ::plugins::ShotHistoryEditor::refresh_advanced_page {page} {
     }
     if {$r > 0} {
         append note [expr {$note eq "" ? "" : " "}] "$r of them exist on disk again - see Reconcile hidden shots."
-    }
-    if {$tidy_note ne ""} {
-        append note [expr {$note eq "" ? "" : "\n"}] $tidy_note
     }
     catch { dui item config $page deleted_note -text $note }
 }
@@ -2273,11 +2585,17 @@ proc ::plugins::ShotHistoryEditor::_paged_text {text page_index} {
     return [list [join [lrange $lines $start $finish] "\n"] $page_index $pages]
 }
 
-proc ::plugins::ShotHistoryEditor::_set_paged_text {dui_page text_tag status_tag text index_var} {
+proc ::plugins::ShotHistoryEditor::_set_paged_text {dui_page text_tag status_tag text index_var {pager 0}} {
     upvar #0 ::plugins::ShotHistoryEditor::$index_var page_index
     lassign [_paged_text $text $page_index] shown page_index pages
     catch { dui item config $dui_page $text_tag -text $shown }
     catch { dui item config $dui_page $status_tag -text "Page [expr {$page_index + 1}] of $pages" }
+    # v0.13.1: pages carrying the standard pager (prev_page / next_page)
+    # disable its unavailable end; delete_review has no pager.
+    if {$pager} {
+        _set_pager_state $dui_page prev_page next_page \
+            [expr {$page_index > 0}] [expr {$page_index < $pages - 1}]
+    }
 }
 
 proc ::plugins::ShotHistoryEditor::scroll_page {kind delta dui_page} {
@@ -2285,17 +2603,17 @@ proc ::plugins::ShotHistoryEditor::scroll_page {kind delta dui_page} {
         detail {
             variable detail_page_index
             incr detail_page_index $delta
-            _set_paged_text $dui_page detail_text detail_page_status [build_detail_text] detail_page_index
+            _set_paged_text $dui_page detail_text detail_page_status [build_detail_text] detail_page_index 1
         }
         diagnostics {
             variable diagnostics_page_index
             incr diagnostics_page_index $delta
-            _set_paged_text $dui_page diagnostics_text diagnostics_page_status [diagnostics_text] diagnostics_page_index
+            _set_paged_text $dui_page diagnostics_text diagnostics_page_status [diagnostics_text] diagnostics_page_index 1
         }
         help {
             variable help_page_index
             incr help_page_index $delta
-            _set_paged_text $dui_page help_text help_page_status [help_text] help_page_index
+            _set_paged_text $dui_page help_text help_page_status [help_text] help_page_index 1
         }
         delete_review {
             variable delete_review_page_index
@@ -2305,7 +2623,7 @@ proc ::plugins::ShotHistoryEditor::scroll_page {kind delta dui_page} {
         empty_preview {
             variable empty_preview_page_index
             incr empty_preview_page_index $delta
-            _set_paged_text $dui_page empty_preview_text empty_preview_page_status [empty_trash_preview_text] empty_preview_page_index
+            _set_paged_text $dui_page empty_preview_text empty_preview_page_status [empty_trash_preview_text] empty_preview_page_index 1
         }
     }
 }
@@ -2327,7 +2645,8 @@ proc ::plugins::ShotHistoryEditor::load_recent_shots {} {
     }
 
     set cols [_columns $db $table]
-    set aliases {clock filename profile_title grinder_setting grinder_dose_weight drink_weight bean_brand bean_type espresso_notes extraction_time removed}
+    # v0.17.0: file_modification_date retires bag-save overlays (_apply_edit_overlay).
+    set aliases {clock filename profile_title grinder_setting grinder_dose_weight drink_weight bean_brand bean_type espresso_notes extraction_time removed file_modification_date}
     set select_parts {}
     foreach alias $aliases {
         lappend select_parts [_select_expr $cols $alias $alias]
@@ -2435,6 +2754,15 @@ proc ::plugins::ShotHistoryEditor::_parse_settings_file {path} {
                 break
             }
             if {$trimmed eq ""} { continue }
+            # v0.14.0: skip a line that is not a complete Tcl list BEFORE
+            # lindex can fail on it -- a real .shot's settings block holds a
+            # read_only_backup line that opens a brace it closes lines later,
+            # and the caught lindex error left errorInfo dirty, which the core
+            # prints as a "BLE error info" line (de1_comms.tcl:120). The Trash
+            # cards parse up to five files per refresh. Same lines skipped.
+            # (No literal braces in this comment: they would unbalance the
+            # proc body, see the Pass 5.0 note above.)
+            if {![info complete $trimmed]} { continue }
             if {[catch {
                 set key [lindex $trimmed 0]
                 set val [_clean_value [join [lrange $trimmed 1 end] " "]]
@@ -2961,6 +3289,7 @@ proc ::plugins::ShotHistoryEditor::diagnostics_text {} {
         "Backups folder path: [backups_dir]" \
         "Edit manifest path: [edit_manifest_path]" \
         "Edit log path: [edit_log_path]" \
+        "Bag fields in SDB (Bags view): [_bag_field_detect]" \
         "Issues:" \
         "  [join $issues "\n  "]"] "\n"]
 }
@@ -2982,6 +3311,9 @@ proc ::plugins::ShotHistoryEditor::help_text {} {
         "" \
         "Raw pressure, flow, temperature, resistance, shot_series, chart arrays, and machine sensor data are off-limits -- never displayed for editing, never modified." \
         "Reconcile hidden shots (Advanced, v0.10.0): shots the trash manifest still hides although their file is back in history/. Unhide appends one marker line to reconcile_manifest.txt (plus an audit line); the trash entry is never edited." \
+        "" \
+        "Bags (v0.16.0): the Bags tab groups shots by roaster and bag name, newest first. Edit bag changes a bag's roaster, name, notes, roast date or roast level in every file of the bag (cleaning runs included): Review shows each field now and after, then Save asks you to type the number of files. Each file is backed up to plugins/ShotHistoryEditor/backups/ and checked first, rewritten (only those settings lines) and checked again; a failed check restores its backup. edit_log.txt records every file. SDB and history_v2 are never written. If the bag is the one loaded for your next shot (DYE's plan), Save updates the next shot too; Review says so and the result page lists what changed (without DYE it lists what to enter again)." \
+        "Cleaning runs are marked CLEANING on the Shots tab and never counted as shots." \
         "" \
         "Rinse, flush, steam, hot water, and cleaning shots never trigger anything in this plugin -- it has no automatic hooks at all."] "\n"]
 }
@@ -3049,7 +3381,9 @@ proc ::plugins::ShotHistoryEditor::load_recent_shots_paged {offset limit} {
     }
 
     set cols [_columns $db $table]
-    set aliases {clock filename profile_title grinder_setting grinder_dose_weight drink_weight bean_brand bean_type espresso_notes extraction_time removed}
+    # v0.16.0: beverage_type marks cleaning runs (_is_cleaning_row).
+    # v0.17.0: file_modification_date retires bag-save overlays (_apply_edit_overlay).
+    set aliases {clock filename profile_title grinder_setting grinder_dose_weight drink_weight bean_brand bean_type espresso_notes extraction_time removed beverage_type file_modification_date}
     set select_parts {}
     foreach alias $aliases {
         lappend select_parts [_select_expr $cols $alias $alias]
@@ -3190,9 +3524,70 @@ proc ::plugins::ShotHistoryEditor::clear_selection_state {} {
     array unset sel
 }
 
+# v0.15.0 (F12): Clear Selection repaints the cards and the bar only --
+# selection never reads the database (paging and mode switches do).
 proc ::plugins::ShotHistoryEditor::clear_selection {} {
     clear_selection_state
-    refresh_main_page ShotHistoryEditor_settings
+    _paint_all_card_sel ShotHistoryEditor_settings
+    _refresh_select_bar ShotHistoryEditor_settings
+}
+
+# v0.15.0 (F12): one card's look follows its selection -- tint + value-blue
+# outline when selected in Select mode, the plain card otherwise -- and its
+# button label says Selected / Select (Edit outside Select mode).
+proc ::plugins::ShotHistoryEditor::_paint_card_sel {page i} {
+    variable L
+    variable card_rows
+    variable select_mode
+    if {$i < 0 || $i >= [llength $card_rows]} { return }
+    set filename [_dget [lindex $card_rows $i] filename]
+    set on [expr {$select_mode && [_is_selected $filename]}]
+    # v0.16.0: a cleaning run's card is tinted unless it is selected.
+    set clean [_is_cleaning_row [lindex $card_rows $i]]
+    catch { dui item config $page row${i}_bg \
+        -fill [expr {$on ? $L(card_sel_bg) : ($clean ? $L(clean_bg) : $L(card_bg))}] \
+        -outline [expr {$on ? $L(card_sel_outline) : ($clean ? $L(clean_outline) : $L(card_outline))}] }
+    if {$select_mode} {
+        set lbl [expr {$on ? "[_u 0x2611] Selected" : "[_u 0x2610] Select"}]
+    } else {
+        set lbl "[_u 0x270e] Edit"
+    }
+    catch { dui item config $page row${i}_btn -label [translate $lbl] }
+}
+
+proc ::plugins::ShotHistoryEditor::_paint_all_card_sel {page} {
+    variable card_rows
+    for {set i 0} {$i < [llength $card_rows]} {incr i} { _paint_card_sel $page $i }
+}
+
+# v0.15.0 (F12): the bottom-left slot (one dbutton, one dispatcher) reads
+# "Delete N" on the danger face in Select mode, disabled while nothing is
+# selected (it used to say "Delete" in Done's style and silently do
+# nothing at 0), and "Done" in the normal style otherwise. The state goes
+# through dui's enable_or_disable, which leaves a hidden page alone.
+proc ::plugins::ShotHistoryEditor::_refresh_select_bar {page} {
+    variable L
+    variable select_mode
+    set n [selected_count]
+    if {$select_mode} {
+        # The word is translated, the count appended (review: a "Delete 3"
+        # key would be a new, never-translated string for every count).
+        set lbl [translate "Delete"]
+        if {$n > 0} { append lbl " $n" }
+        set fill $L(btn_danger_fill) ; set ink $L(btn_danger_label)
+        catch { dui item config $page recent_status \
+            -text "$n selected. Tap cards to choose the shots to delete." }
+    } else {
+        set lbl [translate "Done"]
+        set fill $L(btn_fill) ; set ink $L(btn_label_fill)
+    }
+    catch { dui item config $page bar_left -label $lbl }
+    catch { dui item config $page bar_left-btn -fill $fill -outline $fill \
+        -disabledfill $L(btn_disabled_fill) -disabledoutline $L(btn_disabled_fill) }
+    catch { dui item config $page bar_left-lbl -fill $ink }
+    catch { dui item enable_or_disable [expr {!$select_mode || $n > 0}] $page bar_left* }
+    # v0.16.0: the Bags tab waits until Select mode ends.
+    _refresh_view_tabs $page
 }
 
 proc ::plugins::ShotHistoryEditor::toggle_select_mode {} {
@@ -3217,7 +3612,17 @@ proc ::plugins::ShotHistoryEditor::row_toggle_select {i} {
     } else {
         set sel($filename) 1
     }
-    refresh_main_page ShotHistoryEditor_settings
+    # v0.15.0 (F12): repaint only this card and the bar -- no database read
+    # per tap (refresh_main_page re-counted the whole shot table).
+    _paint_card_sel ShotHistoryEditor_settings $i
+    _refresh_select_bar ShotHistoryEditor_settings
+}
+
+# v0.15.0 (F12): a tap on a card's text area -- toggles it in Select mode,
+# does nothing otherwise (the card button keeps Edit).
+proc ::plugins::ShotHistoryEditor::card_tap_click {i} {
+    variable select_mode
+    if {$select_mode} { row_toggle_select $i }
 }
 
 proc ::plugins::ShotHistoryEditor::edit_from_card {i} {
@@ -3477,6 +3882,7 @@ proc ::plugins::ShotHistoryEditor::scroll_trash {delta} {
 proc ::plugins::ShotHistoryEditor::refresh_trash_page {page} {
     variable trash_offset
     variable trash_page_size
+    variable tidy_note
 
     set batches [_trash_batches]
     set total [llength $batches]
@@ -3499,21 +3905,32 @@ proc ::plugins::ShotHistoryEditor::refresh_trash_page {page} {
         set to [expr {$trash_offset + [llength $shown]}]
         set status "Showing $from-$to of $total batch(es)."
     }
+    # v0.15.2 (F18): the Tidy result, on the page that holds the button.
+    if {$tidy_note ne ""} { append status "\n" $tidy_note }
     catch { dui item config $page trash_status -text $status }
 
+    # v0.14.0 (F6): one card per batch, shown and hidden exactly as the main
+    # page's cards are (every part with -initial 1, the button by its
+    # literal <tag>* group tag).
     for {set i 0} {$i < $trash_page_size} {incr i} {
         if {$i < [llength $shown]} {
-            set b [lindex $shown $i]
-            set ts [dict get $b ts]
-            set friendly $ts
-            catch { set friendly [clock format [clock scan $ts -format {%Y%m%dT%H%M%S}] -format "%Y/%m/%d %H:%M"] }
-            set text "$friendly  |  [dict get $b shot_count] shot(s), [dict get $b file_count] file(s)  |  batch [dict get $b batch_id]"
-            catch { dui item config $page row${i}_text -text $text }
-            catch { dui item show $page row${i}_text }
+            lassign [_trash_card_lines [lindex $shown $i]] line1 line2 line3
+            catch { dui item show $page row${i}_bg -initial 1 }
+            catch { dui item config $page row${i}_line1 -text $line1 }
+            catch { dui item config $page row${i}_line2 -text $line2 }
+            catch { dui item config $page row${i}_line3 -text $line3 }
+            catch { dui item show $page row${i}_line1 -initial 1 }
+            catch { dui item show $page row${i}_line2 -initial 1 }
+            catch { dui item show $page row${i}_line3 -initial 1 }
             catch { dui item show $page row${i}_restore* -initial 1 }
         } else {
-            catch { dui item config $page row${i}_text -text "" }
-            catch { dui item hide $page row${i}_text }
+            catch { dui item hide $page row${i}_bg -initial 1 }
+            catch { dui item config $page row${i}_line1 -text "" }
+            catch { dui item config $page row${i}_line2 -text "" }
+            catch { dui item config $page row${i}_line3 -text "" }
+            catch { dui item hide $page row${i}_line1 -initial 1 }
+            catch { dui item hide $page row${i}_line2 -initial 1 }
+            catch { dui item hide $page row${i}_line3 -initial 1 }
             catch { dui item hide $page row${i}_restore* -initial 1 }
         }
     }
@@ -3521,19 +3938,14 @@ proc ::plugins::ShotHistoryEditor::refresh_trash_page {page} {
     # v0.8.1: wildcard tag form for dbutton show/hide -- see the note in
     # refresh_main_page. The old bare-tag hides left dead-but-visible
     # Restore/Prev buttons on this page too.
-    if {$trash_offset > 0} {
-        catch { dui item show $page trash_prev_page* -initial 1 }
-    } else {
-        catch { dui item hide $page trash_prev_page* -initial 1 }
-    }
-    # v0.9.1: Next, hidden on the last page and on an empty list. Before
-    # this the page had no Next at all, so with more than trash_page_size
-    # batches the older ones were unreachable (tablet: "Showing 1-6 of 7").
-    if {$trash_offset + [llength $shown] < $total} {
-        catch { dui item show $page trash_next_page* -initial 1 }
-    } else {
-        catch { dui item hide $page trash_next_page* -initial 1 }
-    }
+    # v0.9.1: Next exists (older batches were unreachable without it).
+    # v0.13.1: both pager buttons stay visible; the unavailable one (first
+    # page / last page / empty list) is disabled instead of hidden.
+    _set_pager_state $page trash_prev_page trash_next_page \
+        [expr {$trash_offset > 0}] [expr {$trash_offset + [llength $shown] < $total}]
+    # v0.15.2 (F18): the Tidy count, LAST (review): cards and pager are
+    # already right if the trash folder ever misbehaves.
+    _refresh_tidy_btn $page
 }
 
 proc ::plugins::ShotHistoryEditor::restore_row {i} {
@@ -3573,7 +3985,7 @@ proc ::plugins::ShotHistoryEditor::refresh_main_page {page} {
 
     # Toolbar status / paging label.
     if {$select_mode} {
-        set status "[selected_count] selected. Tap a card's button to choose shots."
+        set status "[selected_count] selected. Tap cards to choose the shots to delete."
     } elseif {$shown == 0} {
         set status "No recent SDB shots found."
         if {$last_error ne ""} { append status "\n$last_error" }
@@ -3581,9 +3993,9 @@ proc ::plugins::ShotHistoryEditor::refresh_main_page {page} {
         set from [expr {$card_offset + 1}]
         set to [expr {$card_offset + $shown}]
         if {$total ne ""} {
-            set status "Showing $from-$to of $total shots."
+            set status "Showing $from-$to of $total shots, newest first."
         } else {
-            set status "Showing $from-$to."
+            set status "Showing $from-$to, newest first."
         }
     }
     catch { dui item config $page recent_status -text $status }
@@ -3593,8 +4005,9 @@ proc ::plugins::ShotHistoryEditor::refresh_main_page {page} {
     # A fix note in the settings page setup{} for why this replaced the
     # overlapping-duplicate-button design from v0.3.0.
     catch { dui item config $page mode_btn -label [translate [expr {$select_mode ? "Cancel" : "Select"}]] }
-    catch { dui item config $page bar_left -label [translate [expr {$select_mode ? "Delete" : "Done"}]] }
     catch { dui item config $page bar_right -label [translate [expr {$select_mode ? "Clear Selection" : "Advanced"}]] }
+    # v0.15.0 (F12): "Delete N" on the danger face / "Done" (see the proc).
+    _refresh_select_bar $page
 
     for {set i 0} {$i < $card_page_size} {incr i} {
         if {$i < $shown} {
@@ -3605,6 +4018,13 @@ proc ::plugins::ShotHistoryEditor::refresh_main_page {page} {
             set line1 "[_fmt_time [_dget $row clock]]   |   $filename"
             set line2 "Grind [_display [_dget $row grinder_setting]]   Dose [_display [_dget $row grinder_dose_weight]]g   Yield [_display [_dget $row drink_weight]]g   |   [_display [_dget $row extraction_time]]s"
             set line3 "Bean: $bean   |   Profile: $profile"
+            # v0.16.0: a cleaning run says so -- tinted card (_paint_card_sel)
+            # and a CLEANING pill at the right end of line 1.
+            set clean [_is_cleaning_row $row]
+            if {$clean} {
+                set line2 "Cleaning run   |   not counted as a shot   |   [_display [_dget $row extraction_time]]s"
+            }
+            _vis $page [list row${i}_clean_bg row${i}_clean_txt] $clean
 
             catch { dui item show $page row${i}_bg -initial 1 }
             catch { dui item config $page row${i}_line1 -text $line1 }
@@ -3614,17 +4034,10 @@ proc ::plugins::ShotHistoryEditor::refresh_main_page {page} {
             catch { dui item show $page row${i}_line2 -initial 1 }
             catch { dui item show $page row${i}_line3 -initial 1 }
             catch { dui item show $page row${i}_btn* -initial 1 }
+            catch { dui item show $page she_row${i}_tap* -initial 1 }
 
-            if {$select_mode} {
-                if {[_is_selected $filename]} {
-                    set lbl "[::plugins::ShotHistoryEditor::_u 0x2611] Selected"
-                } else {
-                    set lbl "[::plugins::ShotHistoryEditor::_u 0x2610] Select"
-                }
-                catch { dui item config $page row${i}_btn -label [translate $lbl] }
-            } else {
-                catch { dui item config $page row${i}_btn -label [translate "[::plugins::ShotHistoryEditor::_u 0x270e] Edit"] }
-            }
+            # v0.15.0 (F12): tint/outline and button label by selection.
+            _paint_card_sel $page $i
         } else {
             catch { dui item hide $page row${i}_bg -initial 1 }
             catch { dui item config $page row${i}_line1 -text "" }
@@ -3634,6 +4047,8 @@ proc ::plugins::ShotHistoryEditor::refresh_main_page {page} {
             catch { dui item hide $page row${i}_line2 -initial 1 }
             catch { dui item hide $page row${i}_line3 -initial 1 }
             catch { dui item hide $page row${i}_btn* -initial 1 }
+            catch { dui item hide $page she_row${i}_tap* -initial 1 }
+            _vis $page [list row${i}_clean_bg row${i}_clean_txt] 0
         }
     }
 
@@ -3646,20 +4061,2393 @@ proc ::plugins::ShotHistoryEditor::refresh_main_page {page} {
     # DPx_Flow_Calibrator: "dui item hide <page> <tag>*"). -initial 1 also
     # persists the state through the framework's pre-show{} re-show of all
     # items, so hidden buttons cannot flash back on a page revisit.
-    if {$card_offset > 0} {
-        catch { dui item show $page prev_page* -initial 1 }
+    # v0.13.1: the pager no longer hides -- both buttons stay put and the
+    # unavailable one is disabled (_set_pager_state). Next is unavailable
+    # on the last page (offset+shown reaches the clamped total); when the
+    # total is unknown (SDB unreadable), "a full page probably has a next
+    # one".
+    _set_pager_state $page prev_page next_page [expr {$card_offset > 0}] \
+        [expr {($total ne "" && $card_offset + $shown < $total) ||
+               ($total eq "" && $shown == $card_page_size)}]
+}
+
+# ---------------------------------------------------------------------------
+# v0.16.0 -- Bags view (pass A, READ-ONLY). Shots are grouped into bags by
+# roaster (bean_brand) and bag name (bean_type), read from SDB through the
+# same read-only handle, removed-column filter, trash-manifest filter and
+# edit overlay as the card list. The Edit bag page and its Review page are a
+# PREVIEW: Save is disabled and nothing in this section writes, moves,
+# renames or deletes a file. Cleaning runs carry the bag that was loaded
+# when they ran, so they belong to that bag (owner 2026-10-01: a bag edit
+# includes them) but are never counted as shots.
+# ---------------------------------------------------------------------------
+
+namespace eval ::plugins::ShotHistoryEditor {
+    variable bag_page_size 6
+    variable bag_offset 0
+    # Every bag of the last Bags read (dicts, newest first); the pages paint
+    # from this cache, so a theme switch never reads the database.
+    variable bag_list {}
+    # The bag the editor is showing (a snapshot of one bag_list entry).
+    variable bag_cur {}
+    variable bag_edit_roaster ""
+    variable bag_edit_name ""
+    variable bag_edit_notes ""
+    variable bag_edit_date ""
+    variable bag_edit_level ""
+    variable bag_notes_widget ""
+    # Roast-level choices on the Edit bag page; the empty one is "None".
+    variable bag_levels {"" Light Medium-Light Medium Medium-Dark Dark}
+    # The bag fields, in display order: settings key, label.
+    variable bag_fields {bean_brand Roaster bean_type {Bag name} bean_notes Notes roast_date {Roast date} roast_level {Roast level}}
+    # Card-face tile parts (plain canvas items) of one Bags tile.
+    variable bag_tile_parts {bg roaster pill_bg pill_txt name lvl_bg lvl_dot lvl_txt date_bg date_txt notes count span clean}
+}
+
+# Bags view and cleaning-run colours, called at the end of _apply_palette.
+# Pairs (WCAG 2.1, checked by the pass 0.16.0 offline test): card texts on
+# clean_bg, clean_pill_text on clean_pill_bg, clean_text on card_bg,
+# inuse_text on inuse_bg, choice_on_label on choice_on_fill.
+proc ::plugins::ShotHistoryEditor::_apply_bag_palette {dark} {
+    variable L
+    if {$dark} {
+        set L(clean_bg)        "#21333a"
+        set L(clean_outline)   "#3c6460"
+        set L(clean_pill_bg)   "#2f5a55"
+        set L(clean_pill_text) "#c4f5ec"
+        set L(clean_text)      "#8fdccf"
+        set L(chip_bg)         "#41475a"
+        set L(chip_missing)    "#6a7186"
+        set L(choice_on_fill)  "#8ab4ff"
+        set L(choice_on_label) "#16213a"
+        set L(inuse_bg)        "#2c3b5e"
+        set L(inuse_text)      "#b9d0ff"
     } else {
-        catch { dui item hide $page prev_page* -initial 1 }
+        set L(clean_bg)        "#e3f4f1"
+        set L(clean_outline)   "#8cc9bf"
+        set L(clean_pill_bg)   "#1f6b62"
+        set L(clean_pill_text) "#ffffff"
+        set L(clean_text)      "#1d6158"
+        set L(chip_bg)         "#e6e8f2"
+        set L(chip_missing)    "#8a8fa3"
+        set L(choice_on_fill)  "#2753bb"
+        set L(choice_on_label) "#ffffff"
+        set L(inuse_bg)        "#dde6ff"
+        set L(inuse_text)      "#1f3f99"
     }
-    # Next hides on the last page (offset+shown reaches the clamped total).
-    # When the total is unknown (SDB unreadable), fall back to "a full page
-    # probably has a next one".
-    if {($total ne "" && $card_offset + $shown < $total) ||
-        ($total eq "" && $shown == $card_page_size)} {
-        catch { dui item show $page next_page* -initial 1 }
+    set L(dot_outline) "#8a8f9c"
+    set L(dot_unknown) "#9aa0ad"
+}
+
+# Bags view layout tokens, called at the end of _init_layout: reference px
+# at 1340x800, scaled like every other token. No coordinate below this
+# block is a bare number.
+proc ::plugins::ShotHistoryEditor::_init_bag_layout {} {
+    variable L
+    set s $L(scale)
+    foreach {tok ref} {
+        top_btn_y 11 tab_w 130 clean_pill_w 120 clean_pill_h 24
+        bag_roaster_dy 13 bag_pill_dy 11 bag_pill_w 85 bag_pill_h 24 bag_name_dy 35
+        bag_chip_dy 70 bag_chip_h 28 bag_lvl_chip_w 180 bag_date_chip_w 150
+        bag_dot_r 6 bag_dot_dx 18 bag_notes_dy 108 bag_footer_dy 160 bag_btn_w 130
+        be_col_gap 28 be_label_h 26 be_entry_h 48 be_notes_h 80 be_date_w 300
+        be_rowA_y 100 be_rowB_y 186 be_rowC_y 304 be_rowD_y 406 be_panel_y0 504
+        be_div_w 1 rv_head_y 104 rv_row_y0 132 rv_row_h 40 rv_x_now 240 rv_x_after 660
+        rv_warn_y 340 rv_panel_y0 396
+    } {
+        set L($tok) [expr {int(round($ref * $s))}]
+    }
+    set L(bag_cols) 3
+    set L(bag_rows) 2
+    set L(bag_tile_w) [expr {($L(content_w) - ($L(bag_cols) - 1) * $L(md)) / $L(bag_cols)}]
+    set L(bag_tile_h) [expr {($L(bar_y0) - $L(md) - $L(list_top) - ($L(bag_rows) - 1) * $L(md)) / $L(bag_rows)}]
+    set L(be_panel_y1) [expr {$L(bar_y0) - $L(md)}]
+    set L(rv_panel_y1) [expr {$L(bar_y0) - $L(md)}]
+    # Line heights in VIRTUAL units, from the real fonts (physical px, mapped
+    # by sh/psh like caption_h in _init_layout); 1.36 em when there is no
+    # font system. Stacked text below is spaced by these, never by guesses.
+    foreach {tok ref} {body 19 section 24} {
+        set L(${tok}_h) [expr {int(ceil($ref * 1.36 * $s))}]
+        if {[llength [info commands font]] && [lsearch -exact [font names] $L(font_$tok)] >= 0} {
+            set lh [font metrics $L(font_$tok) -linespace]
+            if {$lh > 0} { set L(${tok}_h) [expr {int(ceil($lh * double($L(screen_h)) / $L(physical_screen_h)))}] }
+        }
+    }
+    # Review page panels: title, body, and a two-line note at the bottom;
+    # the Files list shows as many lines as fit between body and note.
+    set L(rv_body_y) [expr {$L(rv_panel_y0) + $L(card_pad_y) + $L(section_h) + $L(md)}]
+    set L(rv_note_y) [expr {$L(rv_panel_y1) - $L(card_pad_y) - 2 * $L(caption_h)}]
+    set L(rv_fl_lines) [expr {max(1, min(7, ($L(rv_note_y) - $L(md) - $L(rv_body_y)) / $L(body_h)))}]
+    # v0.17.0 Confirm page, top down: the change summary, up to five warning
+    # lines (every warning Save can carry, one line each), the instruction, the typed entry (with Hide keyboard beside it)
+    # and its error line all above y 800 (the Android keyboard), then the
+    # what-happens panel down to the bar.
+    set L(bc_changes_y) $L(toolbar_y0)
+    set L(bc_warn_y) [expr {$L(bc_changes_y) + $L(caption_h) + $L(sm)}]
+    set L(bc_warn_lines) 5
+    set L(bc_instr_y) [expr {$L(bc_warn_y) + $L(bc_warn_lines) * $L(caption_h) + $L(sm)}]
+    set L(bc_entry_y) [expr {$L(bc_instr_y) + $L(body_h) + $L(xs)}]
+    set L(bc_error_y) [expr {$L(bc_entry_y) + $L(be_entry_h) + $L(sm)}]
+    set L(bc_panel_y0) [expr {$L(bc_error_y) + $L(caption_h) + $L(md)}]
+}
+
+# A cleaning run: the app saves it as an ordinary shot with beverage_type
+# "cleaning"; older runs are recognised by their profile title (the same
+# words Grind Advisor rejects).
+proc ::plugins::ShotHistoryEditor::_is_cleaning_row {row} {
+    if {[string tolower [string trim [_dget $row beverage_type]]] eq "cleaning"} { return 1 }
+    return [regexp -nocase {\m(clean|cleaning|descale|backflush)\M} [_dget $row profile_title]]
+}
+
+proc ::plugins::ShotHistoryEditor::_page_is_current {page} {
+    set cur ""
+    catch { set cur [dui page current] }
+    return [expr {$cur eq $page}]
+}
+
+# Physical px of a virtual (2560-wide) horizontal distance -- dui's own
+# conversion when the app runs. Text is measured in physical px by `font
+# measure`, so both sides of every fit test are physical.
+proc ::plugins::ShotHistoryEditor::_phys_w {v} {
+    variable L
+    if {[llength [info commands ::dui::platform::rescale_x]]} {
+        return [::dui::platform::rescale_x $v]
+    }
+    return [expr {int($v * double($L(physical_screen_w)) / $L(screen_w))}]
+}
+
+proc ::plugins::ShotHistoryEditor::_text_px {font text} {
+    if {[llength [info commands font]] && [lsearch -exact [font names] $font] >= 0} {
+        return [font measure $font $text]
+    }
+    # No Tk font system (offline test): a generous 11 px per character.
+    return [expr {[string length $text] * 11}]
+}
+
+# One line that fits width_v (virtual), cut with "..." when it does not.
+# Line breaks inside the text become " / ".
+proc ::plugins::ShotHistoryEditor::_fit_line {text font width_v} {
+    set text [string map [list "\r" "" "\n" " / "] [string trim $text]]
+    set max [_phys_w $width_v]
+    if {[_text_px $font $text] <= $max} { return $text }
+    set lo 0
+    set hi [string length $text]
+    while {$hi - $lo > 1} {
+        set mid [expr {($lo + $hi) / 2}]
+        if {[_text_px $font "[string range $text 0 [expr {$mid - 1}]]..."] <= $max} {
+            set lo $mid
+        } else {
+            set hi $mid
+        }
+    }
+    return "[string trimright [string range $text 0 [expr {$lo - 1}]]]..."
+}
+
+# Word-wraps text into at most maxlines lines of width_v; the last kept
+# line ends in "..." when text was left out.
+proc ::plugins::ShotHistoryEditor::_wrap_lines {text font width_v maxlines} {
+    set max [_phys_w $width_v]
+    set out {}
+    foreach para [split [string map [list "\r" ""] [string trim $text]] "\n"] {
+        set line ""
+        foreach word [split [string trim $para] " "] {
+            if {$word eq ""} { continue }
+            set try [_pick [expr {$line eq ""}] $word "$line $word"]
+            if {$line ne "" && [_text_px $font $try] > $max} {
+                lappend out $line
+                set line $word
+            } else {
+                set line $try
+            }
+        }
+        if {$line ne ""} { lappend out $line }
+    }
+    if {[llength $out] > $maxlines} {
+        set rest [join [lrange $out [expr {$maxlines - 1}] end] " "]
+        set out [lrange $out 0 [expr {$maxlines - 2}]]
+        set last [_fit_line "$rest " $font $width_v]
+        if {![string match "*..." $last]} { set last "[string trimright $last]..." }
+        lappend out $last
+    }
+    return [join [lmap l $out { _fit_line $l $font $width_v }] "\n"]
+}
+
+# "30 Sep", "18-23 Sep", "31 Jul - 7 Aug", or with years when either end is
+# not in the current year.
+proc ::plugins::ShotHistoryEditor::_fmt_span {first last} {
+    if {![string is integer -strict $first] || ![string is integer -strict $last]} { return "" }
+    if {$first > $last} { lassign [list $first $last] last first }
+    set this_year [clock format [clock seconds] -format %Y]
+    foreach w {first last} {
+        set t [set $w]
+        set d($w) [string trimleft [clock format $t -format %d] 0]
+        set m($w) [clock format $t -format %b]
+        set y($w) [clock format $t -format %Y]
+    }
+    set ys [_pick [expr {$y(first) eq $this_year && $y(last) eq $this_year}] "" " $y(last)"]
+    if {$y(first) eq $y(last) && $m(first) eq $m(last)} {
+        if {$d(first) eq $d(last)} { return "$d(last) $m(last)$ys" }
+        return "$d(first)-$d(last) $m(last)$ys"
+    }
+    if {$y(first) eq $y(last)} {
+        return "$d(first) $m(first) - $d(last) $m(last)$ys"
+    }
+    return "$d(first) $m(first) $y(first) - $d(last) $m(last) $y(last)"
+}
+
+# String choice without expr: expr's ?: hands numeric-looking strings back
+# in canonical form ("1." -> "1.0", "1.50" -> "1.5", " 2025" -> "2025"),
+# so any branch that can carry text or user data goes through this.
+proc ::plugins::ShotHistoryEditor::_pick {cond a b} {
+    if {$cond} { return $a }
+    return $b
+}
+
+proc ::plugins::ShotHistoryEditor::_plural {n one many} {
+    return "$n [_pick [expr {$n == 1}] $one $many]"
+}
+
+# v0.16.1 (tablet-found): the tile's date chip. "Roasted 2026-09-20" was cut
+# to "Roasted 2026-..."; an ISO date now reads "Roasted 20 Sep" (another
+# year: "Roasted Sep 2025"), anything else is shown as typed. Parsed with
+# regexp and scan, so a malformed date never raises (no caught error).
+proc ::plugins::ShotHistoryEditor::_roast_chip_text {date} {
+    if {![regexp {^([0-9]{4})-([0-9]{2})-([0-9]{2})$} $date -> y m d]} { return $date }
+    set mon [lindex {Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec} [expr {[scan $m %d] - 1}]]
+    if {$mon eq "" || [scan $d %d] < 1 || [scan $d %d] > 31} { return $date }
+    if {$y eq [clock format [clock seconds] -format %Y]} {
+        return "[translate Roasted] [scan $d %d] $mon"
+    }
+    return "[translate Roasted] $mon $y"
+}
+
+# Every visible row with the bag fields, newest first: the card list's
+# source and filters (read-only handle, removed column, trash manifest,
+# edit overlay), without its LIMIT.
+proc ::plugins::ShotHistoryEditor::_load_bag_rows {} {
+    variable last_error
+    set rows {}
+    set last_error ""
+    set db [_open_ro_db]
+    if {$db eq ""} { return $rows }
+    set table [_choose_source $db]
+    if {$table eq ""} {
+        set last_error "No SDB shot table or V_shot view detected."
+        _close_db
+        return $rows
+    }
+    set cols [_columns $db $table]
+    set aliases {clock filename profile_title bean_brand bean_type bean_notes roast_level roast_date beverage_type file_modification_date}
+    set select_parts [lmap a $aliases { _select_expr $cols $a $a }]
+    set sql "SELECT [join $select_parts {, }] FROM [_q $table]"
+    if {[_has_col $cols removed]} {
+        append sql " WHERE (removed IS NULL OR removed=0)"
+    }
+    if {[_has_col $cols clock]} {
+        append sql " ORDER BY [_q clock] DESC"
+    } elseif {[_has_col $cols filename]} {
+        append sql " ORDER BY [_q filename] DESC"
+    }
+    set deleted [_deleted_filenames_dict]
+    set overlays [_all_edit_overlays]
+    if {[catch {
+        $db eval $sql row {
+            if {[dict exists $deleted $row(filename)]} { continue }
+            set item {}
+            foreach a $aliases { dict set item $a $row($a) }
+            lappend rows [_apply_edit_overlay $item $overlays]
+        }
+    } err]} {
+        set last_error "Could not read shots for the Bags view: $err"
+    }
+    _close_db
+    return $rows
+}
+
+# Diagnostics: which of the Bags view's columns the SDB source has (a
+# missing one reads as empty; nothing assumes the schema).
+proc ::plugins::ShotHistoryEditor::_bag_field_detect {} {
+    set db [_open_ro_db]
+    if {$db eq ""} { return "SDB not readable" }
+    set table [_choose_source $db]
+    if {$table eq ""} {
+        _close_db
+        return "no shot table or view"
+    }
+    set cols [_columns $db $table]
+    _close_db
+    set out {}
+    foreach c {bean_brand bean_type bean_notes roast_level roast_date beverage_type} {
+        lappend out "$c [_pick [_has_col $cols $c] yes no]"
+    }
+    return [join $out ", "]
+}
+
+# Groups rows (newest first) into bags keyed by the trimmed roaster and bag
+# name. Each bag: roaster, name, key, files (one dict per file: filename,
+# clock, cleaning and the five bag fields), shots, cleaning, first/last
+# (oldest/newest shot clock), show (the newest shot -- the values the tile
+# and the editor show) and editable (0 for the no-roaster-no-name group).
+proc ::plugins::ShotHistoryEditor::_group_bags {rows} {
+    set order {}
+    array set g {}
+    foreach r $rows {
+        set brand [string trim [_dget $r bean_brand]]
+        set type [string trim [_dget $r bean_type]]
+        set key [list $brand $type]
+        if {![info exists g($key)]} {
+            lappend order $key
+            set g($key) [dict create roaster $brand name $type key $key files {} \
+                shots 0 cleaning 0 first "" last "" show ""]
+        }
+        set clean [_is_cleaning_row $r]
+        set f [dict create filename [_dget $r filename] clock [_dget $r clock] cleaning $clean]
+        foreach k {bean_brand bean_type bean_notes roast_level roast_date} {
+            dict set f $k [string trim [_dget $r $k]]
+        }
+        dict lappend g($key) files $f
+        if {$clean} {
+            dict incr g($key) cleaning
+            continue
+        }
+        dict incr g($key) shots
+        if {[dict get $g($key) show] eq ""} { dict set g($key) show $f }
+        set c [_dget $r clock]
+        if {[string is integer -strict $c]} {
+            if {[dict get $g($key) last] eq ""} { dict set g($key) last $c }
+            dict set g($key) first $c
+        }
+    }
+    set out {}
+    foreach key $order {
+        set b $g($key)
+        if {[dict get $b show] eq ""} { dict set b show [lindex [dict get $b files] 0] }
+        if {[dict get $b last] eq ""} {
+            foreach f [dict get $b files] {
+                set c [dict get $f clock]
+                if {![string is integer -strict $c]} { continue }
+                if {[dict get $b last] eq ""} { dict set b last $c }
+                dict set b first $c
+            }
+        }
+        dict set b editable [expr {[lindex $key 0] ne "" || [lindex $key 1] ne ""}]
+        lappend out $b
+    }
+    return $out
+}
+
+# Is this bag the one the next shot will be saved with? Exact trimmed
+# roaster + name, as bags are grouped here (v0.18.0; was any letter case and
+# either source, which flagged a bag a disabled DYE still named).
+proc ::plugins::ShotHistoryEditor::_bag_in_use {b} {
+    if {![dict get $b editable]} { return 0 }
+    set n [_bag_next_source]
+    if {[dict get $n source] eq "none"} { return 0 }
+    return [expr {[dict get $b key] eq [list [dict get $n bean_brand] [dict get $n bean_type]]}]
+}
+
+# value -> number of files, over every file of the bag (cleaning runs too:
+# a bag edit writes them as well).
+proc ::plugins::ShotHistoryEditor::_bag_field_counts {b field} {
+    set counts [dict create]
+    foreach f [dict get $b files] {
+        dict incr counts [_dget $f $field]
+    }
+    return $counts
+}
+
+proc ::plugins::ShotHistoryEditor::_bag_labels {b} {
+    if {![dict get $b editable]} {
+        return [list [translate "Shots with no roaster or bag name"] [translate "No bag recorded"]]
+    }
+    set roaster [dict get $b roaster]
+    set name [dict get $b name]
+    if {$roaster eq ""} { set roaster [translate "No roaster"] }
+    if {$name eq ""} { set name [translate "No bag name"] }
+    return [list $roaster $name]
+}
+
+proc ::plugins::ShotHistoryEditor::_roast_dot {level} {
+    variable L
+    switch -- [string tolower $level] {
+        light          { return "#e2c08d" }
+        medium-light   { return "#c99a62" }
+        medium         { return "#a5703f" }
+        medium-dark    { return "#7d4c2a" }
+        dark           { return "#55321c" }
+    }
+    return $L(dot_unknown)
+}
+
+# Shows or hides plain items by exact tag; -initial 1 so the state survives
+# the framework's re-show on the next page load (the page-show flash trap).
+proc ::plugins::ShotHistoryEditor::_vis {page tags on} {
+    foreach t $tags {
+        if {$on} {
+            catch { dui item show $page $t -initial 1 }
+        } else {
+            catch { dui item hide $page $t -initial 1 }
+        }
+    }
+}
+
+# ---- Shots | Bags switch (toolbar row of the main page and the Bags page) -----
+
+# v0.18.1 (owner mockup): one rounded box at left_x in the toolbar row with
+# the two sides inside it; the box is drawn first so the sides sit on it.
+proc ::plugins::ShotHistoryEditor::_add_view_tabs {page active} {
+    variable L
+    set x0 $L(left_x)
+    set y0 $L(toolbar_y0)
+    set y1 $L(toolbar_y1)
+    set in $L(seg_inset)
+    rounded_rect $page $x0 $y0 [expr {$x0 + $L(seg_w)}] $y1 $L(seg_radius) \
+        -fill $L(seg_bg) -outline $L(seg_outline) -width 2 -tags she_tabs_bg
+    set w [expr {($L(seg_w) - 3 * $in) / 2}]
+    set sx [expr {$x0 + $in}]
+    dui add dbutton $page $sx [expr {$y0 + $in}] [expr {$sx + $w}] [expr {$y1 - $in}] -tags she_tab_shots \
+        -label [translate "Shots"] -command ::plugins::ShotHistoryEditor::tab_shots_click \
+        -label_font $L(font_button) -style she_btn -radius $L(seg_btn_radius)
+    set sx [expr {$sx + $w + $in}]
+    dui add dbutton $page $sx [expr {$y0 + $in}] [expr {$sx + $w}] [expr {$y1 - $in}] -tags she_tab_bags \
+        -label [translate "Bags"] -command ::plugins::ShotHistoryEditor::tab_bags_click \
+        -label_font $L(font_button) -style she_btn -radius $L(seg_btn_radius)
+    _paint_view_tabs $page $active
+}
+
+# The side of the page you are on is filled like a button with a bold
+# label; the other side is the box itself with a plain label (muted while
+# disabled: Bags in Select mode).
+proc ::plugins::ShotHistoryEditor::_paint_view_tabs {page active} {
+    variable L
+    catch { dui item config $page she_tabs_bg -fill $L(seg_bg) -outline $L(seg_outline) }
+    foreach {t name} {she_tab_shots shots she_tab_bags bags} {
+        set on [expr {$name eq $active}]
+        set fill [_pick $on $L(btn_fill) $L(seg_bg)]
+        set ink [_pick $on $L(btn_label_fill) $L(text_body)]
+        set font [_pick $on $L(font_button) $L(font_body)]
+        catch { dui item config $page ${t}-btn -fill $fill -outline $fill \
+            -disabledfill $L(seg_bg) -disabledoutline $L(seg_bg) }
+        catch { dui item config $page ${t}-lbl -fill $ink -disabledfill $L(btn_label_disabled) -font $font }
+    }
+}
+
+# Select mode stays on the Shots tab: Bags is disabled while it is on.
+proc ::plugins::ShotHistoryEditor::_refresh_view_tabs {page} {
+    variable select_mode
+    catch { dui item enable_or_disable [expr {!$select_mode}] $page she_tab_bags* -initial 1 }
+}
+
+proc ::plugins::ShotHistoryEditor::tab_shots_click {} {
+    if {[_page_is_current ShotHistoryEditor_bags]} {
+        _return_to_page ShotHistoryEditor_settings
+    }
+}
+
+proc ::plugins::ShotHistoryEditor::tab_bags_click {} {
+    variable select_mode
+    variable bag_offset
+    if {$select_mode || ![_page_is_current ShotHistoryEditor_settings]} { return }
+    set bag_offset 0
+    open_page ShotHistoryEditor_bags
+}
+
+# Done on the Bags tab leaves the plugin, as on the Shots tab.
+proc ::plugins::ShotHistoryEditor::bags_done {} {
+    variable _settings_return_page
+    if {![_bag_flow_settled]} { return }
+    _navigate_done $_settings_return_page
+}
+
+# ---- Main page: cleaning-run cards ------------------------------------------
+
+proc ::plugins::ShotHistoryEditor::_paint_main_clean_pills {} {
+    variable L
+    variable card_page_size
+    set page ShotHistoryEditor_settings
+    for {set i 0} {$i < $card_page_size} {incr i} {
+        catch { dui item config $page row${i}_clean_bg -fill $L(clean_pill_bg) -outline $L(clean_pill_bg) }
+        catch { dui item config $page row${i}_clean_txt -fill $L(clean_pill_text) }
+    }
+}
+
+# ---- Bags page ------------------------------------------------------------
+
+proc ::plugins::ShotHistoryEditor::_bag_tile_box {i} {
+    variable L
+    set x0 [expr {$L(left_x) + ($i % $L(bag_cols)) * ($L(bag_tile_w) + $L(md))}]
+    set y0 [expr {$L(list_top) + ($i / $L(bag_cols)) * ($L(bag_tile_h) + $L(md))}]
+    return [list $x0 $y0 [expr {$x0 + $L(bag_tile_w)}] [expr {$y0 + $L(bag_tile_h)}]]
+}
+
+# The text widths of a tile (virtual): line (full inner width), roaster
+# (clear of the IN USE pill), footer (clear of the Edit bag button).
+proc ::plugins::ShotHistoryEditor::_bag_tile_widths {} {
+    variable L
+    set inner [expr {$L(bag_tile_w) - 2 * $L(card_pad_x)}]
+    return [list $inner [expr {$inner - $L(bag_pill_w) - $L(md)}] \
+        [expr {$inner - $L(bag_btn_w) - $L(md)}]]
+}
+
+# The Bags page from SDB (plus the edit overlay). A bag Save whose result
+# page could not be shown leaves its first line for the status, once.
+proc ::plugins::ShotHistoryEditor::refresh_bags_page {page} {
+    variable bag_list
+    variable bag_result_unseen
+    set bag_list [_group_bags [_load_bag_rows]]
+    _paint_bags_page $page
+    if {$bag_result_unseen ne "" && [_page_is_current $page]} {
+        catch { dui item config $page bags_status -text "[translate {Last bag save}]: $bag_result_unseen" }
+        set bag_result_unseen ""
+    }
+}
+
+proc ::plugins::ShotHistoryEditor::_bags_shown {} {
+    variable bag_list
+    variable bag_offset
+    variable bag_page_size
+    set total [llength $bag_list]
+    if {$total <= 0} {
+        set bag_offset 0
     } else {
-        catch { dui item hide $page next_page* -initial 1 }
+        set max_offset [expr {(($total - 1) / $bag_page_size) * $bag_page_size}]
+        if {$bag_offset > $max_offset} { set bag_offset $max_offset }
     }
+    if {$bag_offset < 0} { set bag_offset 0 }
+    return [list $total [lrange $bag_list $bag_offset [expr {$bag_offset + $bag_page_size - 1}]]]
+}
+
+proc ::plugins::ShotHistoryEditor::scroll_bags {delta} {
+    variable bag_offset
+    variable bag_page_size
+    incr bag_offset [expr {$delta * $bag_page_size}]
+    if {$bag_offset < 0} { set bag_offset 0 }
+    _paint_bags_page ShotHistoryEditor_bags
+}
+
+# Paints the Bags page from the cached bag_list (no database read).
+proc ::plugins::ShotHistoryEditor::_paint_bags_page {page} {
+    variable bag_offset
+    variable bag_page_size
+    variable last_error
+    lassign [_bags_shown] total shown
+    if {$total == 0} {
+        set status [translate "No bags found."]
+        if {$last_error ne ""} { append status " $last_error" }
+    } else {
+        set status "Showing [expr {$bag_offset + 1}]-[expr {$bag_offset + [llength $shown]}] of [_plural $total bag bags], newest first."
+    }
+    catch { dui item config $page bags_status -text $status }
+    for {set i 0} {$i < $bag_page_size} {incr i} {
+        if {$i < [llength $shown]} {
+            _paint_bag_tile $page $i [lindex $shown $i]
+        } else {
+            _hide_bag_tile $page $i
+        }
+    }
+    # The pager's -state writes are live canvas state: only on the page on
+    # screen (a theme switch elsewhere repaints this page from the cache).
+    if {[_page_is_current $page]} {
+        _set_pager_state $page bags_prev bags_next [expr {$bag_offset > 0}] \
+            [expr {$bag_offset + [llength $shown] < $total}]
+    }
+}
+
+proc ::plugins::ShotHistoryEditor::_hide_bag_tile {page i} {
+    variable bag_tile_parts
+    _vis $page [lmap p $bag_tile_parts { string cat bag${i}_ $p }] 0
+    _vis $page [list bag${i}_edit*] 0
+}
+
+proc ::plugins::ShotHistoryEditor::_paint_bag_tile {page i b} {
+    variable L
+    variable bag_tile_parts
+    set p bag${i}_
+    lassign [_bag_tile_widths] w_line w_roaster w_footer
+    set in_use [_bag_in_use $b]
+    set editable [dict get $b editable]
+    set show [dict get $b show]
+    lassign [_bag_labels $b] roaster name
+
+    catch { dui item config $page ${p}bg -fill $L(card_bg) \
+        -outline [expr {$in_use ? $L(value_blue) : $L(card_outline)}] }
+    catch { dui item config $page ${p}roaster -text [_fit_line $roaster $L(font_caption) $w_roaster] -fill $L(text_mut) }
+    catch { dui item config $page ${p}name -text [_fit_line $name $L(font_section) $w_line] -fill $L(text_hi) }
+    catch { dui item config $page ${p}pill_bg -fill $L(inuse_bg) -outline $L(inuse_bg) }
+    catch { dui item config $page ${p}pill_txt -fill $L(inuse_text) }
+
+    # Roast level and roast date chips: filled when set, outlined "+ ..."
+    # when missing (the details a bag edit is for).
+    set lvl [_dget $show roast_level]
+    if {$lvl ne ""} {
+        catch { dui item config $page ${p}lvl_bg -fill $L(chip_bg) -outline $L(chip_bg) }
+        catch { dui item config $page ${p}lvl_txt -fill $L(text_hi) \
+            -text [_fit_line $lvl $L(font_caption) [expr {$L(bag_lvl_chip_w) - $L(bag_dot_dx) - 2 * $L(bag_dot_r) - 2 * $L(sm)}]] }
+        catch { dui item config $page ${p}lvl_dot -fill [_roast_dot $lvl] -outline $L(dot_outline) }
+    } else {
+        catch { dui item config $page ${p}lvl_bg -fill $L(card_bg) -outline $L(chip_missing) }
+        catch { dui item config $page ${p}lvl_txt -fill $L(text_mut) -text [translate "+ Roast level"] }
+    }
+    set date [_dget $show roast_date]
+    if {$date ne ""} {
+        catch { dui item config $page ${p}date_bg -fill $L(chip_bg) -outline $L(chip_bg) }
+        catch { dui item config $page ${p}date_txt -fill $L(text_hi) \
+            -text [_fit_line [_roast_chip_text $date] $L(font_caption) [expr {$L(bag_date_chip_w) - 2 * $L(sm)}]] }
+    } else {
+        catch { dui item config $page ${p}date_bg -fill $L(card_bg) -outline $L(chip_missing) }
+        catch { dui item config $page ${p}date_txt -fill $L(text_mut) -text [translate "+ Roast date"] }
+    }
+
+    set notes [_dget $show bean_notes]
+    if {!$editable} {
+        catch { dui item config $page ${p}notes -fill $L(text_mut) \
+            -text [_wrap_lines [translate "Edit these one at a time from the Shots list."] $L(font_caption) $w_line 2] }
+    } elseif {$notes ne ""} {
+        catch { dui item config $page ${p}notes -fill $L(text_body) -text [_wrap_lines $notes $L(font_caption) $w_line 2] }
+    } else {
+        catch { dui item config $page ${p}notes -fill $L(text_mut) -text [translate "No notes yet"] }
+    }
+
+    # Footer, one fact per line: shots, when, cleaning runs.
+    set count [_plural [dict get $b shots] shot shots]
+    catch { dui item config $page ${p}count -fill $L(text_body) -text [_fit_line $count $L(font_body) $w_footer] }
+    set span [_fmt_span [dict get $b first] [dict get $b last]]
+    catch { dui item config $page ${p}span -fill $L(text_mut) -text [_fit_line $span $L(font_caption) $w_footer] }
+    set nc [dict get $b cleaning]
+    set clean [_pick [expr {$nc > 0}] "+[_plural $nc {cleaning run} {cleaning runs}]" ""]
+    catch { dui item config $page ${p}clean -fill $L(clean_text) -text [_fit_line $clean $L(font_caption) $w_footer] }
+
+    set shown_parts {}
+    foreach part $bag_tile_parts {
+        if {$part in {pill_bg pill_txt} && !$in_use} { continue }
+        if {$part eq "lvl_dot" && $lvl eq ""} { continue }
+        lappend shown_parts ${p}$part
+    }
+    _vis $page [lmap part $bag_tile_parts { string cat $p $part }] 0
+    _vis $page $shown_parts 1
+    _vis $page [list ${p}edit*] 1
+    catch { dui item enable_or_disable $editable $page ${p}edit* -initial 1 }
+}
+
+# ---- Edit bag page (preview) -------------------------------------------------
+
+proc ::plugins::ShotHistoryEditor::_bag_edit_var {field} {
+    switch -- $field {
+        bean_brand  { return ::plugins::ShotHistoryEditor::bag_edit_roaster }
+        bean_type   { return ::plugins::ShotHistoryEditor::bag_edit_name }
+        bean_notes  { return ::plugins::ShotHistoryEditor::bag_edit_notes }
+        roast_date  { return ::plugins::ShotHistoryEditor::bag_edit_date }
+        roast_level { return ::plugins::ShotHistoryEditor::bag_edit_level }
+    }
+    return ""
+}
+
+proc ::plugins::ShotHistoryEditor::_bag_edit_value {field} {
+    set v [_bag_edit_var $field]
+    if {$v eq "" || ![info exists $v]} { return "" }
+    return [string trim [set $v]]
+}
+
+# Loads one bag into the editor: every field starts at the bag's newest
+# shot's value, so an untouched field is never written.
+proc ::plugins::ShotHistoryEditor::_bag_edit_begin {b} {
+    variable bag_cur
+    variable bag_fields
+    set bag_cur $b
+    set show [dict get $b show]
+    foreach {field label} $bag_fields {
+        set [_bag_edit_var $field] [_dget $show $field]
+    }
+}
+
+# Forward into the editor: the page is painted for THIS bag before it loads
+# (a load re-shows the last visit's items before show runs).
+proc ::plugins::ShotHistoryEditor::bag_edit_open {i} {
+    if {![_bag_flow_settled]} { return }
+    lassign [_bags_shown] total shown
+    if {$i < 0 || $i >= [llength $shown]} { return }
+    set b [lindex $shown $i]
+    if {![dict get $b editable]} { return }
+    _bag_edit_begin $b
+    _paint_bag_edit ShotHistoryEditor_bag_edit
+    open_page ShotHistoryEditor_bag_edit
+    _bag_flow_mark
+}
+
+# The editor opened with no bag chosen -- only possible by loading the page
+# directly (the DevBridge harness): it shows the newest bag, read-only as
+# everything here.
+proc ::plugins::ShotHistoryEditor::_bag_default_pick {} {
+    variable bag_cur
+    variable bag_list
+    if {$bag_cur ne ""} { return }
+    if {[llength $bag_list] == 0} { set bag_list [_group_bags [_load_bag_rows]] }
+    foreach b $bag_list {
+        if {[dict get $b editable]} {
+            _bag_edit_begin $b
+            msg -INFO "ShotHistoryEditor: Edit bag opened without a choice; showing the newest bag"
+            return
+        }
+    }
+}
+
+# One dict per bag field: field label orig new changed counts, where orig is
+# the value the editor started from and counts covers every file.
+proc ::plugins::ShotHistoryEditor::_bag_changes {} {
+    variable bag_cur
+    variable bag_fields
+    set out {}
+    if {$bag_cur eq ""} { return $out }
+    set show [dict get $bag_cur show]
+    foreach {field label} $bag_fields {
+        set orig [string trim [_dget $show $field]]
+        set new [_bag_edit_value $field]
+        lappend out [dict create field $field label $label orig $orig new $new \
+            changed [expr {$new ne $orig}] counts [_bag_field_counts $bag_cur $field]]
+    }
+    return $out
+}
+
+proc ::plugins::ShotHistoryEditor::_bag_change_count {} {
+    set n 0
+    foreach c [_bag_changes] { if {[dict get $c changed]} { incr n } }
+    return $n
+}
+
+proc ::plugins::ShotHistoryEditor::_bag_file_total {b} {
+    return [llength [dict get $b files]]
+}
+
+proc ::plugins::ShotHistoryEditor::_bag_summary_line {b} {
+    lassign [_bag_labels $b] roaster name
+    set line "$roaster  [_u 0xb7]  $name  [_u 0xb7]  [_plural [dict get $b shots] shot shots]"
+    set nc [dict get $b cleaning]
+    if {$nc > 0} { append line " + [_plural $nc {cleaning run} {cleaning runs}]" }
+    return $line
+}
+
+proc ::plugins::ShotHistoryEditor::bag_pick_level {k} {
+    variable bag_levels
+    variable bag_edit_level
+    if {$k < 0 || $k >= [llength $bag_levels]} { return }
+    set bag_edit_level [lindex $bag_levels $k]
+    _paint_bag_edit_state ShotHistoryEditor_bag_edit
+}
+
+proc ::plugins::ShotHistoryEditor::bag_hide_keyboard {} {
+    catch { dui platform hide_android_keyboard }
+    catch { focus [dui canvas] }
+}
+
+# Variable traces and the notes box's key releases call this while typing.
+proc ::plugins::ShotHistoryEditor::_bag_edit_trace {args} {
+    if {[catch { _paint_bag_edit_state ShotHistoryEditor_bag_edit } err]} {
+        msg -ERROR "ShotHistoryEditor: Edit bag state refresh failed: $err"
+    }
+}
+
+proc ::plugins::ShotHistoryEditor::_paint_bag_levels {page} {
+    variable L
+    variable bag_levels
+    set cur [_bag_edit_value roast_level]
+    set k 0
+    foreach lv $bag_levels {
+        set on [expr {[string tolower $lv] eq [string tolower $cur]}]
+        set fill [expr {$on ? $L(choice_on_fill) : $L(btn_fill)}]
+        set ink [expr {$on ? $L(choice_on_label) : $L(btn_label_fill)}]
+        catch { dui item config $page bag_lvl${k}-btn -fill $fill -outline $fill \
+            -disabledfill $L(btn_disabled_fill) -disabledoutline $L(btn_disabled_fill) }
+        catch { dui item config $page bag_lvl${k}-lbl -fill $ink }
+        incr k
+    }
+}
+
+proc ::plugins::ShotHistoryEditor::_paint_bag_edit_state {page} {
+    variable L
+    variable bag_cur
+    set changes [_bag_changes]
+    set n 0
+    foreach c $changes {
+        set field [dict get $c field]
+        set tag [dict get {bean_brand bag_st_roaster bean_type bag_st_name bean_notes bag_st_notes roast_date bag_st_date roast_level bag_st_level} $field]
+        set counts [dict get $c counts]
+        if {[dict get $c changed]} {
+            incr n
+            set p [_bag_value_problem $field [dict get $c new]]
+            if {$p ne ""} {
+                set text "[translate {Not allowed}]: $p" ; set role danger
+            } else {
+                set text [translate "Changed"] ; set role value_blue
+            }
+        } elseif {[dict size $counts] > 1} {
+            set text [translate "Differs between files; the newest is shown"] ; set role warn
+        } else {
+            set text "" ; set role text_mut
+        }
+        if {$field eq "roast_level" && ![dict get $c changed]} {
+            set cur [dict get $c orig]
+            set known 0
+            foreach lv $::plugins::ShotHistoryEditor::bag_levels {
+                if {[string tolower $lv] eq [string tolower $cur]} { set known 1 }
+            }
+            if {!$known} { set text "[translate Now]: $cur" ; set role text_mut }
+        }
+        catch { dui item config $page $tag -text $text -fill $L($role) }
+    }
+    _paint_bag_levels $page
+    if {$bag_cur eq ""} {
+        set lbl [translate "Review changes"]
+    } elseif {$n == 0} {
+        set lbl [translate "No changes yet"]
+    } else {
+        set lbl "[translate Review] [_plural $n change changes]"
+    }
+    catch { dui item config $page bag_edit_review -label $lbl }
+    catch { dui item enable_or_disable [expr {$bag_cur ne "" && $n > 0}] $page bag_edit_review* -initial 1 }
+}
+
+proc ::plugins::ShotHistoryEditor::_paint_bag_edit {page} {
+    variable L
+    variable bag_cur
+    set col_w [expr {$L(content_w) / 3 - 2 * $L(card_pad_x)}]
+    if {$bag_cur eq ""} {
+        catch { dui item config $page subtitle -text [translate "No bag selected. Open one from the Bags view."] }
+        foreach k {0 1 2} {
+            catch { dui item config $page bag_info_v$k -text "" }
+            catch { dui item config $page bag_info_d$k -text "" }
+        }
+        _paint_bag_edit_state $page
+        return
+    }
+    set b $bag_cur
+    catch { dui item config $page subtitle -text [_fit_line [_bag_summary_line $b] $L(font_caption) $L(content_w)] }
+    set span [_fmt_span [dict get $b first] [dict get $b last]]
+    set nfiles [_bag_file_total $b]
+    catch { dui item config $page bag_info_v0 -text [_plural [dict get $b shots] shot shots] }
+    catch { dui item config $page bag_info_d0 -text [_wrap_lines \
+        "[_pick [expr {$span ne ""}] "$span. " ""][translate {Only the fields you change are written, to all}] [_plural $nfiles file files]." \
+        $L(font_caption) $col_w 3] }
+    set nc [dict get $b cleaning]
+    if {$nc > 0} {
+        catch { dui item config $page bag_info_v1 -text [_plural $nc {cleaning run} {cleaning runs}] }
+        catch { dui item config $page bag_info_d1 -text [_wrap_lines \
+            [translate "Cleaning runs carry the bag that was loaded, so they change with it and stay in this bag."] \
+            $L(font_caption) $col_w 3] }
+    } else {
+        catch { dui item config $page bag_info_v1 -text [translate "No cleaning runs"] }
+        catch { dui item config $page bag_info_d1 -text [_wrap_lines \
+            [translate "None of this bag's files is a cleaning run."] $L(font_caption) $col_w 3] }
+    }
+    catch { dui item config $page bag_info_v2 -text [translate "Shot data"] }
+    catch { dui item config $page bag_info_d2 -text [_wrap_lines \
+        [translate "Grind, dose, yield, time, profile and the shot curves."] $L(font_caption) $col_w 3] }
+    _paint_bag_edit_state $page
+}
+
+# Back to Bags: repainted from the cached list first (close_dialog shows the
+# page without its load hook).
+proc ::plugins::ShotHistoryEditor::bag_edit_back {} {
+    variable bag_plan
+    if {![_bag_flow_settled]} { return }
+    set bag_plan {}
+    _paint_bags_page ShotHistoryEditor_bags
+    _return_to_page ShotHistoryEditor_bags
+    _bag_flow_mark
+}
+
+# Forward into Review: the snapshot is built here, once (it reads every file
+# of the bag), and the page painted from it before it loads.
+proc ::plugins::ShotHistoryEditor::bag_review_open {} {
+    variable bag_cur
+    if {![_bag_flow_settled] || $bag_cur eq "" || [_bag_change_count] == 0} { return }
+    bag_hide_keyboard
+    _bag_plan_build
+    _paint_bag_review ShotHistoryEditor_bag_review
+    open_page ShotHistoryEditor_bag_review
+    _bag_flow_mark
+}
+
+# ---- Review bag changes page (v0.17.0: Save opens the typed confirmation) --
+
+proc ::plugins::ShotHistoryEditor::_bag_now_text {c nfiles} {
+    set counts [dict get $c counts]
+    if {[dict size $counts] == 1} {
+        set v [lindex [dict keys $counts] 0]
+        if {$v eq ""} { return "[translate empty] ([translate all] [_plural $nfiles file files])" }
+        return "$v ([translate all] [_plural $nfiles file files])"
+    }
+    set text "[dict size $counts] [translate {different values}]"
+    if {[dict exists $counts ""]} { append text ", [dict get $counts {}] [translate empty]" }
+    return $text
+}
+
+# Plain-language warnings about what the change would do, most important
+# first: a merge, the bag in use, Grind Advisor's per-roast-date bags, a
+# non-ISO date. (Blocking conditions are _bag_save_blocker's.)
+proc ::plugins::ShotHistoryEditor::_bag_review_warnings {changes} {
+    variable bag_cur
+    variable bag_list
+    set warn {}
+    if {$bag_cur eq ""} { return $warn }
+    array set new {}
+    array set chg {}
+    foreach c $changes {
+        set new([dict get $c field]) [dict get $c new]
+        set chg([dict get $c field]) [dict get $c changed]
+    }
+    if {($chg(bean_brand) || $chg(bean_type)) && ($new(bean_brand) ne "" || $new(bean_type) ne "")} {
+        set key_lc [list [string tolower $new(bean_brand)] [string tolower $new(bean_type)]]
+        foreach b $bag_list {
+            if {![dict get $b editable] || [dict get $b key] eq [dict get $bag_cur key]} { continue }
+            if {[list [string tolower [dict get $b roaster]] [string tolower [dict get $b name]]] eq $key_lc} {
+                lassign [_bag_labels $b] r n
+                lappend warn "[translate {Joins the bag}] $r [_u 0xb7] $n ([_plural [_bag_file_total $b] file files]): [translate {the two become one bag, for Grind Advisor too.}]"
+                break
+            }
+        }
+    }
+    set ch [dict create]
+    foreach c $changes {
+        if {[dict get $c changed]} { dict set ch [dict get $c field] [dict get $c new] }
+    }
+    set np [_bag_next_preview [dict get $bag_cur key] $ch [_bag_value_sets $bag_cur]]
+    if {[dict get $np status] eq "update" && [_dye_next_api]} {
+        set w "[translate {Loaded for your next shot: Save updates it too}] ([join [lmap f [dict keys [dict get $np new]] { _bag_next_label $f }] {, }])"
+        if {[dict size [dict get $np kept]]} {
+            append w "; [translate {it keeps its own}] [join [lmap f [dict keys [dict get $np kept]] { _bag_next_label $f }] {, }]"
+        }
+        lappend warn "$w."
+    } elseif {[dict get $np status] ne "none"} {
+        lappend warn "[translate {Loaded for your next shot, which keeps the old details until you load the bag again}]: [_bag_reload_hint $np]."
+    }
+    if {$chg(roast_date)} {
+        set dates {}
+        foreach f [dict get $bag_cur files] {
+            if {[dict get $f cleaning]} { continue }
+            set d [string tolower [string trim [dict get $f roast_date]]]
+            if {$d ne "" && $d ni $dates} { lappend dates $d }
+        }
+        if {[llength $dates] > 1} {
+            lappend warn "[translate {Grind Advisor and Lumen see}] [llength $dates] [translate {bags here, one per roast date: one date joins their grind data.}]"
+        }
+    }
+    if {$chg(roast_date) && $new(roast_date) ne "" && ![regexp {^[0-9]{4}-[0-9]{2}-[0-9]{2}$} $new(roast_date)]} {
+        lappend warn [translate "The roast date is not YYYY-MM-DD; it is saved exactly as typed."]
+    }
+    return $warn
+}
+
+proc ::plugins::ShotHistoryEditor::_paint_bag_review {page} {
+    variable L
+    variable bag_cur
+    variable bag_plan
+    set w_field [expr {$L(rv_x_now) - $L(card_pad_x) - $L(lg)}]
+    set w_now [expr {$L(rv_x_after) - $L(rv_x_now) - $L(lg)}]
+    set w_after [expr {$L(content_w) - $L(rv_x_after) - $L(card_pad_x)}]
+    set panel_w [expr {($L(content_w) - $L(md)) / 2 - 2 * $L(card_pad_x)}]
+    set changes [_bag_changes]
+    if {$bag_cur eq "" || $bag_plan eq ""} {
+        catch { dui item config $page subtitle -text [translate "No bag selected. Open one from the Bags view."] }
+        for {set k 0} {$k < 5} {incr k} {
+            _vis $page [list rv_f$k rv_n$k rv_a$k rv_d$k] 0
+        }
+        catch { dui item config $page rv_warn -text "" }
+        catch { dui item config $page rv_fl_title -text [translate "Files"] }
+        catch { dui item config $page rv_fl_text -text "" }
+        catch { dui item config $page rv_fl_more -text "" }
+        catch { dui item config $page rv_do_text -text "" }
+        catch { dui item config $page rv_do_note -text "" }
+        catch { dui item config $page rv_save -label [translate "Save"] }
+        catch { dui item enable_or_disable 0 $page rv_save* -initial 1 }
+        return
+    }
+    set b $bag_cur
+    set nfiles [_bag_file_total $b]
+    set nc [dict get $b cleaning]
+    catch { dui item config $page subtitle -text [_fit_line [_bag_summary_line $b] $L(font_caption) $L(content_w)] }
+
+    set k 0
+    set labels {}
+    foreach c $changes {
+        set on [dict get $c changed]
+        if {$on} { lappend labels [translate [dict get $c label]] }
+        set now [_bag_now_text $c $nfiles]
+        set after [translate unchanged]
+        if {$on} { set after [_pick [expr {[dict get $c new] eq ""}] [translate empty] [dict get $c new]] }
+        catch { dui item config $page rv_f$k -text [_fit_line [translate [dict get $c label]] $L(font_primary) $w_field] \
+            -fill [expr {$on ? $L(text_hi) : $L(text_mut)}] }
+        catch { dui item config $page rv_n$k -text [_fit_line $now $L(font_body) $w_now] \
+            -fill [expr {$on ? $L(text_body) : $L(text_mut)}] }
+        catch { dui item config $page rv_a$k -text [_fit_line $after $L(font_body) $w_after] \
+            -fill [expr {$on ? $L(value_blue) : $L(text_mut)}] }
+        catch { dui item config $page rv_d$k -fill $L(card_outline) -outline $L(card_outline) }
+        _vis $page [list rv_f$k rv_n$k rv_a$k rv_d$k] 1
+        incr k
+    }
+    catch { dui item config $page rv_warn -fill $L(warn) -text [join [_bag_warning_lines 2] "\n"] }
+
+    set n [dict get $bag_plan to_change]
+    set which [_pick [llength $labels] [join $labels ", "] [translate "changed"]]
+    set steps {}
+    foreach s [list \
+        "1. [translate {Back up all}] [_plural $n file files] [translate {to backups/ and check each copy.}]" \
+        "2. [translate {Rewrite only the}] $which [translate {lines in each file.}]" \
+        "3. [translate {Check each file; a failed check restores its backup.}]" \
+        "4. [translate {Log each file; never write SDB or history_v2.}]"] {
+        lappend steps [_wrap_lines $s $L(font_body) $panel_w 2]
+    }
+    set np [_bag_next_for_plan]
+    if {$np ne "" && [dict get $np status] eq "update" && [_dye_next_api]} {
+        lappend steps [_wrap_lines "5. [translate {Update your next shot through DYE.}]" $L(font_body) $panel_w 2]
+    }
+    set steps [split [join $steps "\n"] "\n"]
+    catch { dui item config $page rv_do_text -text [join [lrange $steps 0 [expr {$L(rv_fl_lines) - 1}]] "\n"] }
+    catch { dui item config $page rv_do_note -fill $L(text_mut) -text [_wrap_lines \
+        [translate "Nothing is written until you type the number of files on the next page."] \
+        $L(font_caption) $panel_w 2] }
+
+    # Files, newest first, each with what Save would do to it.
+    set lines {}
+    set nshow $L(rv_fl_lines)
+    foreach f [lrange [dict get $bag_plan files] 0 [expr {$nshow - 1}]] {
+        set line "[_fmt_time [dict get $f clock]]   [dict get $f filename].shot"
+        switch -- [dict get $f status] {
+            unchanged { append line "   ([translate {up to date}])" }
+            skipped   { append line "   ([translate skipped])" }
+            default   { if {[dict get $f cleaning]} { append line "   ([translate cleaning])" } }
+        }
+        lappend lines [_fit_line $line $L(font_body) $panel_w]
+    }
+    set title [_plural $nfiles file files]
+    if {$nc > 0} { append title " ([_plural $nc {cleaning run} {cleaning runs}])" }
+    catch { dui item config $page rv_fl_title -text $title }
+    catch { dui item config $page rv_fl_text -text [join $lines "\n"] }
+    set more ""
+    if {[llength [dict get $bag_plan files]] > $nshow} {
+        set more "+ [expr {[llength [dict get $bag_plan files]] - $nshow}] [translate more]. "
+    }
+    if {[dict get $bag_plan blocker] eq ""} {
+        append more "[translate {To change}]: $n. [translate {Up to date}]: [dict get $bag_plan unchanged]. [translate Skipped]: [dict get $bag_plan skipped]."
+    }
+    catch { dui item config $page rv_fl_more -text [_wrap_lines $more $L(font_caption) $panel_w 2] }
+    set ok [expr {[dict get $bag_plan blocker] eq "" && $n > 0 && [_bag_plan_matches]}]
+    catch { dui item config $page rv_save -label [_pick $ok "[translate Save] [_plural $n file files]..." [translate "Nothing to save"]] }
+    catch { dui item enable_or_disable $ok $page rv_save* -initial 1 }
+}
+
+proc ::plugins::ShotHistoryEditor::bag_review_back {} {
+    variable bag_plan
+    if {![_bag_flow_settled]} { return }
+    set bag_plan {}
+    _paint_bag_edit ShotHistoryEditor_bag_edit
+    _return_to_page ShotHistoryEditor_bag_edit
+    _bag_flow_mark
+}
+
+# Repaints what the shared registries do not cover (backgrounds, headers,
+# Backs and pagers are repainted by _retheme_all itself): the Bags pages'
+# texts, panels, entries and buttons, the main page's tabs and cleaning
+# pills, all from cached data only. The Confirm page's Save keeps its
+# danger label (painted after the button loop).
+proc ::plugins::ShotHistoryEditor::_retheme_bag_pages {} {
+    variable L
+    foreach {p tag role} {
+        ShotHistoryEditor_bags bags_status text_mut
+        ShotHistoryEditor_bag_edit bag_lbl_roaster text_mut
+        ShotHistoryEditor_bag_edit bag_lbl_name text_mut
+        ShotHistoryEditor_bag_edit bag_lbl_notes text_mut
+        ShotHistoryEditor_bag_edit bag_lbl_date text_mut
+        ShotHistoryEditor_bag_edit bag_hint_date text_mut
+        ShotHistoryEditor_bag_edit bag_lbl_level text_mut
+        ShotHistoryEditor_bag_edit bag_info_h0 text_mut
+        ShotHistoryEditor_bag_edit bag_info_h1 clean_text
+        ShotHistoryEditor_bag_edit bag_info_h2 text_mut
+        ShotHistoryEditor_bag_edit bag_info_v0 text_hi
+        ShotHistoryEditor_bag_edit bag_info_v1 text_hi
+        ShotHistoryEditor_bag_edit bag_info_v2 text_hi
+        ShotHistoryEditor_bag_edit bag_info_d0 text_mut
+        ShotHistoryEditor_bag_edit bag_info_d1 text_mut
+        ShotHistoryEditor_bag_edit bag_info_d2 text_mut
+        ShotHistoryEditor_bag_review rv_h_field text_mut
+        ShotHistoryEditor_bag_review rv_h_now text_mut
+        ShotHistoryEditor_bag_review rv_h_after text_mut
+        ShotHistoryEditor_bag_review rv_do_title text_hi
+        ShotHistoryEditor_bag_review rv_do_text text_body
+        ShotHistoryEditor_bag_review rv_do_note text_mut
+        ShotHistoryEditor_bag_review rv_fl_title text_hi
+        ShotHistoryEditor_bag_review rv_fl_text text_body
+        ShotHistoryEditor_bag_review rv_fl_more text_mut
+        ShotHistoryEditor_bag_confirm bc_changes text_body
+        ShotHistoryEditor_bag_confirm bc_warn warn
+        ShotHistoryEditor_bag_confirm bc_instr text_body
+        ShotHistoryEditor_bag_confirm bc_error danger
+        ShotHistoryEditor_bag_confirm bc_files text_body
+        ShotHistoryEditor_bag_result br_text text_body
+    } {
+        catch { dui item config $p $tag -fill $L($role) }
+    }
+    foreach {p tag} {
+        ShotHistoryEditor_bag_edit bag_info_bg
+        ShotHistoryEditor_bag_review rv_do_bg
+        ShotHistoryEditor_bag_review rv_fl_bg
+        ShotHistoryEditor_bag_confirm bc_panel_bg
+    } {
+        catch { dui item config $p $tag -fill $L(card_bg) -outline $L(card_outline) }
+    }
+    foreach {p tag} {
+        ShotHistoryEditor_bag_edit bag_info_div1
+        ShotHistoryEditor_bag_edit bag_info_div2
+        ShotHistoryEditor_bag_review rv_div_head
+    } {
+        catch { dui item config $p $tag -fill $L(card_outline) -outline $L(card_outline) }
+    }
+    foreach t {bag_ent_roaster bag_ent_name bag_ent_date bag_ent_notes} {
+        catch { dui item config ShotHistoryEditor_bag_edit $t \
+            -bg $L(entry_bg) -foreground $L(text_hi) -insertbackground $L(text_hi) }
+    }
+    catch { dui item config ShotHistoryEditor_bag_confirm bc_entry \
+        -bg $L(entry_danger_bg) -foreground $L(danger) -insertbackground $L(danger) }
+    variable bag_page_size
+    set bag_btns {btn_theme bags_done}
+    for {set i 0} {$i < $bag_page_size} {incr i} { lappend bag_btns bag${i}_edit }
+    foreach {p tags} [list \
+        ShotHistoryEditor_bags $bag_btns \
+        ShotHistoryEditor_bag_edit {bag_hidekb bag_edit_review} \
+        ShotHistoryEditor_bag_review {rv_save} \
+        ShotHistoryEditor_bag_confirm {bc_cancel bc_save bc_hidekb} \
+        ShotHistoryEditor_bag_result {br_done}] {
+        foreach t $tags {
+            catch { dui item config $p ${t}-btn \
+                -fill $L(btn_fill) -outline $L(btn_fill) \
+                -disabledfill $L(btn_disabled_fill) -disabledoutline $L(btn_disabled_fill) }
+            catch { dui item config $p ${t}-lbl -fill $L(btn_label_fill) }
+        }
+    }
+    catch { dui item config ShotHistoryEditor_bag_confirm bc_save-lbl -fill $L(danger) }
+    catch { dui item config ShotHistoryEditor_bags btn_theme -label [_theme_button_face] }
+    _paint_view_tabs ShotHistoryEditor_settings shots
+    _paint_view_tabs ShotHistoryEditor_bags bags
+    _paint_main_clean_pills
+    _paint_bags_page ShotHistoryEditor_bags
+    _paint_bag_edit ShotHistoryEditor_bag_edit
+    _paint_bag_review ShotHistoryEditor_bag_review
+    _paint_bag_confirm ShotHistoryEditor_bag_confirm
+    _paint_bag_result ShotHistoryEditor_bag_result
+}
+
+
+namespace eval ::plugins::ShotHistoryEditor {
+    # v0.17.0: the bag Save (write capability 7).
+    # The snapshot Review shows, Confirm types against and Save re-checks.
+    variable bag_plan {}
+    variable bag_confirm_input ""
+    variable bag_confirm_error ""
+    # Clock ms while a Save runs; counts as running for 10 minutes at most,
+    # so a lost reset can never block the buttons for good.
+    variable bag_save_running 0
+    variable bag_result_text ""
+    # 1 when the last Save wrote at least one file (Done then goes to Bags;
+    # otherwise back to Edit bag with the edits kept).
+    variable bag_result_wrote 0
+    # The last result's first line when its page could not be shown (the app
+    # had moved to a machine page); the Bags status shows it once.
+    variable bag_result_unseen ""
+    # Clock ms of the last page change in the bag flow: a tap within 700 ms of
+    # it is a repeat queued while a slow step ran, and is ignored (the next
+    # page's button sits where the last one was). A time, not a flag.
+    variable bag_flow_opened 0
+    # 1 only between Review's Save button and the end of a submit or a
+    # Cancel: Confirm arms nothing it was not opened for (a direct load).
+    variable bag_confirm_armed 0
+}
+
+# ---------------------------------------------------------------------------
+# v0.17.0 -- .shot text surgery for the bag Save (write capability 7). Pure
+# procs: no file access, no dui. A .shot file is a Tcl dict (the app reads it
+# with `array set`; SDB's modify_shot_file writes each setting as
+# "<tab>[list $k] [list $v]"), so entries are found the way Tcl's list
+# parser reads them -- lines accumulated until `info complete` -- which
+# handles values that span lines (bean_notes) and the long read_only_backup
+# value, unlike the one-line-per-key scan of the v0.5.0 single-field save.
+# The file is handled as BYTES: every byte outside the replaced entries is
+# copied from the original, and a file whose UTF-8 does not round-trip
+# exactly is refused (every .shot carries raw BLE bytes).
+# ---------------------------------------------------------------------------
+
+# Top-level entries of a .shot text given as lines (no newlines in them),
+# from line index `from` to `to`: a list of {key first last} line ranges,
+# or an error message string.
+proc ::plugins::ShotHistoryEditor::_shot_chunks {lines from to} {
+    set out {}
+    set i $from
+    while {$i <= $to} {
+        set first $i
+        set chunk [lindex $lines $i]
+        if {[string trim $chunk] eq ""} {
+            incr i
+            continue
+        }
+        # An incomplete chunk can only complete on a line that closes a brace
+        # or a quote, or after a line ending in a backslash, so `info
+        # complete` (which rescans the whole chunk) runs only then: the
+        # settings block is one top-level chunk of ~300 lines.
+        set done [info complete $chunk]
+        while {!$done && $i < $to} {
+            set prev [lindex $lines $i]
+            incr i
+            set line [lindex $lines $i]
+            append chunk "\n" $line
+            if {[string first "\}" $line] >= 0 || [string first "\"" $line] >= 0 ||
+                [string index $prev end] eq "\\"} {
+                set done [info complete $chunk]
+            }
+        }
+        if {!$done} {
+            return "an entry starting at line [expr {$first + 1}] never closes"
+        }
+        set t [string trim $chunk]
+        if {![string is list $t] || [llength $t] != 2} {
+            return "the entry at line [expr {$first + 1}] is not one key and one value"
+        }
+        lappend out [list [lindex $t 0] $first $i]
+        incr i
+    }
+    return $out
+}
+
+# Locates the settings block and its entries. Returns a dict:
+# ok 1 settings_first settings_last entries (key first last triples), or
+# ok 0 message <why>.
+proc ::plugins::ShotHistoryEditor::_shot_settings_layout {lines} {
+    set top [_shot_chunks $lines 0 [expr {[llength $lines] - 1}]]
+    if {[llength $top] == 0 || [llength [lindex $top 0]] != 3} {
+        return [dict create ok 0 message [_pick [llength $top] $top "the file is empty"]]
+    }
+    set hits [lsearch -all -index 0 -exact $top settings]
+    if {[llength $hits] != 1} {
+        return [dict create ok 0 message "[llength $hits] top-level settings entries (need exactly one)"]
+    }
+    lassign [lindex $top [lindex $hits 0]] - sfirst slast
+    if {[string trim [lindex $lines $sfirst]] ne "settings \{" || [string trim [lindex $lines $slast]] ne "\}"} {
+        return [dict create ok 0 message "the settings block is not laid out one entry per line"]
+    }
+    set inner [_shot_chunks $lines [expr {$sfirst + 1}] [expr {$slast - 1}]]
+    if {[llength $inner] && [llength [lindex $inner 0]] != 3} {
+        return [dict create ok 0 message "settings: $inner"]
+    }
+    return [dict create ok 1 settings_first $sfirst settings_last $slast entries $inner]
+}
+
+# Applies changes (dict key -> new value) to the raw BYTES of a .shot file.
+# Returns dict ok 1 bytes <new bytes> text <original text> new_text <new
+# text> settings <original settings dict> old <key -> old value>, or ok 0
+# message <why>. Each changed key must exist exactly once directly in the
+# settings block; its line range becomes one entry in the app's own form
+# (leading whitespace kept, [list key] [list value]); all other bytes are
+# copied unchanged from raw.
+proc ::plugins::ShotHistoryEditor::_shot_apply_changes {raw changes} {
+    set text [encoding convertfrom utf-8 $raw]
+    if {[encoding convertto utf-8 $text] ne $raw} {
+        return [dict create ok 0 message "the file is not plain UTF-8 (it would not be rewritten byte for byte)"]
+    }
+    if {![string is list $text] || [llength $text] % 2} {
+        return [dict create ok 0 message "the file is not a key/value list"]
+    }
+    set top [dict create {*}$text]
+    if {![dict exists $top settings]} {
+        return [dict create ok 0 message "the file has no settings"]
+    }
+    set settings [dict get $top settings]
+    if {![string is list $settings] || [llength $settings] % 2} {
+        return [dict create ok 0 message "the settings are not a key/value list"]
+    }
+    set settings [dict create {*}$settings]
+    set lines [split $text "\n"]
+    set lay [_shot_settings_layout $lines]
+    if {![dict get $lay ok]} { return $lay }
+    # Byte offset of the start of every line (each line is followed by one
+    # newline byte, except possibly the last).
+    set offs {}
+    set pos 0
+    foreach line $lines {
+        lappend offs $pos
+        incr pos [expr {[string length [encoding convertto utf-8 $line]] + 1}]
+    }
+    set ranges {}
+    set old [dict create]
+    dict for {key new} $changes {
+        set found [lsearch -all -index 0 -exact [dict get $lay entries] $key]
+        if {[llength $found] != 1} {
+            return [dict create ok 0 message "$key appears [llength $found] times in the settings block"]
+        }
+        lassign [lindex [dict get $lay entries] [lindex $found 0]] - first last
+        dict set old $key [dict get $settings $key]
+        regexp {^[ \t]*} [lindex $lines $first] ws
+        set b0 [lindex $offs $first]
+        set b1 [expr {[lindex $offs $last] + [string length [encoding convertto utf-8 [lindex $lines $last]]] - 1}]
+        lappend ranges [list $b0 $b1 [encoding convertto utf-8 "$ws[list $key] [list $new]"]]
+    }
+    set bytes $raw
+    foreach r [lsort -integer -decreasing -index 0 $ranges] {
+        lassign $r b0 b1 rep
+        set bytes [string replace $bytes $b0 $b1 $rep]
+    }
+    return [dict create ok 1 bytes $bytes text $text new_text [encoding convertfrom utf-8 $bytes] \
+        settings $settings old $old]
+}
+
+# Proves new_text differs from orig_text only by the changed settings:
+# both parse as even-length lists with the same top-level keys in the same
+# order, every top-level value but settings is string-equal, and settings
+# has the same keys in the same order with every unchanged value equal and
+# every changed value equal to its new value. Returns "" or the reason.
+proc ::plugins::ShotHistoryEditor::_shot_verify_edit {orig_text new_text changes} {
+    foreach {name t} [list original $orig_text new $new_text] {
+        if {![string is list $t] || [llength $t] % 2} { return "the $name text is not a key/value list" }
+    }
+    if {[llength $orig_text] != [llength $new_text]} { return "top-level entry count changed" }
+    foreach {ok ov} $orig_text {nk nv} $new_text {
+        if {$ok ne $nk} { return "top-level key order changed ($ok / $nk)" }
+        if {$ok ne "settings"} {
+            if {$ov ne $nv} { return "top-level $ok changed" }
+            continue
+        }
+        foreach {name t} [list original $ov new $nv] {
+            if {![string is list $t] || [llength $t] % 2} { return "the $name settings are not a key/value list" }
+        }
+        if {[llength $ov] != [llength $nv]} { return "settings entry count changed" }
+        foreach {sk sv} $ov {tk tv} $nv {
+            if {$sk ne $tk} { return "settings key order changed ($sk / $tk)" }
+            if {[dict exists $changes $sk]} {
+                if {$tv ne [dict get $changes $sk]} { return "$sk is not the new value" }
+            } elseif {$sv ne $tv} {
+                return "$sk changed although it was not edited"
+            }
+        }
+    }
+    return ""
+}
+
+# ---------------------------------------------------------------------------
+# v0.17.0 -- bag Save, WRITE CAPABILITY 7. Rewrites the changed bag fields
+# (bean_brand, bean_type, bean_notes, roast_date, roast_level) in every
+# history/<f>.shot file of one bag -- cleaning runs included (owner
+# 2026-10-01) -- after the typed file count on the confirm page. The write
+# path is documented in full in CHANGELOG v0.17.0. In short, per Save:
+# re-check every file against the snapshot (nothing written if the set
+# changed); a write-ahead BEGIN line in edit_log.txt; a verified whole-file
+# backup of EVERY file into backups/<ts>_<batch>_bag/ before the first
+# write; then per file: new bytes to a temp file in that backup folder,
+# read back, `file rename` into history/, read back, `file mtime` (SDB
+# resync); a failed read-back copies the backup over and checks it; its
+# edit_log line and edit_manifest records right after it; stop at the first
+# failure; an END line; one _notify_downstream. SDB and history_v2 are never
+# written. No `file delete` anywhere in this capability.
+# ---------------------------------------------------------------------------
+
+# Manifest / log value escaping: the manifest is "|"-separated, one record
+# per line, and bean_notes holds both ("Peru | Washed | Bourbon" + newline).
+# Decoding is ONE string map with all four pairs (sequential maps corrupt a
+# literal backslash followed by n or p).
+proc ::plugins::ShotHistoryEditor::_esc {v} {
+    return [string map [list "\\" "\\\\" "|" "\\p" "\n" "\\n" "\r" "\\r"] $v]
+}
+
+proc ::plugins::ShotHistoryEditor::_unesc {v} {
+    return [string map [list "\\\\" "\\" "\\p" "|" "\\n" "\n" "\\r" "\r"] $v]
+}
+
+# A path directly inside history/ (the purge path's _inside_trash_dir shape).
+proc ::plugins::ShotHistoryEditor::_inside_history_dir {path} {
+    set root [file normalize [history_path]]
+    set p [file normalize $path]
+    return [expr {[string first "$root/" $p] == 0 && [file dirname $p] eq $root}]
+}
+
+# A path inside the plugin's backups/ folder.
+proc ::plugins::ShotHistoryEditor::_inside_backups_dir {path} {
+    set root [file normalize [backups_dir]]
+    return [expr {[string first "$root/" [file normalize $path]] == 0}]
+}
+
+proc ::plugins::ShotHistoryEditor::_read_bytes {path} {
+    set fh [open $path r]
+    fconfigure $fh -translation binary
+    set raw [read $fh]
+    close $fh
+    return $raw
+}
+
+# The file's bytes, or "" when it cannot be read (a comparison then fails).
+proc ::plugins::ShotHistoryEditor::_read_bytes_or_empty {path} {
+    if {![file isfile $path] || ![file readable $path]} { return "" }
+    if {[catch { set raw [_read_bytes $path] } err]} {
+        msg -ERROR "ShotHistoryEditor: could not read back $path: $err"
+        return ""
+    }
+    return $raw
+}
+
+proc ::plugins::ShotHistoryEditor::_write_bytes {path bytes} {
+    set fh [open $path w]
+    fconfigure $fh -translation binary
+    puts -nonewline $fh $bytes
+    close $fh
+}
+
+# Appends one line; 1 when it is on disk, 0 (logged) when not.
+proc ::plugins::ShotHistoryEditor::_bag_append {path line} {
+    if {[catch {
+        set fh [open $path a]
+        fconfigure $fh -encoding utf-8
+        puts $fh $line
+        close $fh
+    } err]} {
+        if {[info exists fh]} { catch { close $fh } }
+        msg -ERROR "ShotHistoryEditor: could not append to $path: $err"
+        return 0
+    }
+    return 1
+}
+
+proc ::plugins::ShotHistoryEditor::_bag_log {line} {
+    return [_bag_append [edit_log_path] $line]
+}
+
+# One manifest record per changed field, 7 parts (the 7th, e1, marks the
+# escaped values); _edit_manifest_records reads both forms.
+proc ::plugins::ShotHistoryEditor::_bag_manifest {ts epoch filename field old new backup_path} {
+    return [_bag_append [edit_manifest_path] \
+        "$ts|$filename|$field|[_esc $old]|[_esc $new]|$backup_path|e1|$epoch"]
+}
+
+proc ::plugins::ShotHistoryEditor::_bag_fields_text {d} {
+    set parts {}
+    dict for {k v} $d { lappend parts "$k=[_esc $v]" }
+    return [join $parts " "]
+}
+
+# Is an SDB sync running right now? Copied from Grind Advisor v3.16.8
+# (_sdb_busy): SDB's updating_db counts only while populate / create /
+# upgrade is really on the call stack (a failed sync leaves the flag at 1).
+proc ::plugins::ShotHistoryEditor::_sdb_busy {} {
+    if {![info exists ::plugins::SDB::updating_db] \
+     || $::plugins::SDB::updating_db != 1} { return 0 }
+    for {set i [info frame]} {$i >= 1} {incr i -1} {
+        set f [info frame $i]
+        if {[dict exists $f proc] && [dict get $f proc] in {
+                ::plugins::SDB::populate ::plugins::SDB::create
+                ::plugins::SDB::upgrade}} { return 1 }
+    }
+    return 0
+}
+
+# "" when the DE1 is disconnected or resting, else the state to report.
+# DevBridge v0.3.0's machine_busy, copied: ::de1(device_handle) is 0 when
+# disconnected; ::de1_num_state names ::de1(state); unreadable fails closed.
+proc ::plugins::ShotHistoryEditor::_machine_busy {} {
+    set handle "unknown"
+    if {[info exists ::de1(device_handle)]} { set handle $::de1(device_handle) }
+    if {$handle eq "0"} { return "" }
+    set name ""
+    if {[info exists ::de1(state)] && [info exists ::de1_num_state($::de1(state))]} {
+        set name $::de1_num_state($::de1(state))
+    }
+    if {$name in {Idle Sleep GoingToSleep}} { return "" }
+    return [_pick [expr {$name eq ""}] "unknown" $name]
+}
+
+# What a typed value may not hold (the v0.5.0 single-field save and the
+# plugin's readers count braces line by line, so a brace or a backslash
+# in a value would break them for that file).
+proc ::plugins::ShotHistoryEditor::_bag_value_problem {field v} {
+    if {[regexp {[\{\}\\]} $v]} { return [translate "can't contain braces or a backslash"] }
+    if {[string first "\r" $v] >= 0} { return [translate "can't contain a carriage return"] }
+    if {$field ne "bean_notes" && [string first "\n" $v] >= 0} { return [translate "must be one line"] }
+    return ""
+}
+
+# "" when the open bag may be saved, else why not (shown on Review and
+# Confirm; checked again by perform_bag_save before any file is touched).
+proc ::plugins::ShotHistoryEditor::_bag_save_blocker {} {
+    variable bag_cur
+    if {$bag_cur eq ""} { return [translate "No bag is open."] }
+    set n 0
+    set id_changed 0
+    array set new {}
+    foreach c [_bag_changes] {
+        set new([dict get $c field]) [dict get $c new]
+        if {![dict get $c changed]} { continue }
+        incr n
+        if {[dict get $c field] in {bean_brand bean_type}} { set id_changed 1 }
+        set p [_bag_value_problem [dict get $c field] [dict get $c new]]
+        if {$p ne ""} { return "[translate [dict get $c label]] $p." }
+    }
+    if {$n == 0} { return [translate "Nothing has changed."] }
+    if {$new(bean_brand) eq "" && $new(bean_type) eq ""} {
+        return [translate "A bag needs a roaster or a bag name."]
+    }
+    # A new roaster + name that matches another bag in all but letter case
+    # would stay a separate bag here (bags group by exact spelling) while
+    # Grind Advisor and SDB join them: it must be typed exactly. Only a
+    # roaster or name change is checked (a case twin made by another tool
+    # can still have its notes, date and level saved).
+    if {!$id_changed} { return "" }
+    variable bag_list
+    set key [list $new(bean_brand) $new(bean_type)]
+    set key_lc [list [string tolower $new(bean_brand)] [string tolower $new(bean_type)]]
+    foreach b $bag_list {
+        if {![dict get $b editable] || [dict get $b key] eq [dict get $bag_cur key] || [dict get $b key] eq $key} { continue }
+        if {[list [string tolower [dict get $b roaster]] [string tolower [dict get $b name]]] eq $key_lc} {
+            lassign [_bag_labels $b] r n
+            return "[translate {another bag is spelled}] $r [_u 0xb7] $n: [translate {type it exactly that way to join it.}]"
+        }
+    }
+    return ""
+}
+
+# The bag the next shot will be saved with, read-only. While DYE is loaded
+# its next-shot plan wins: its shot-start hook copies next_* over ::settings
+# (DYE.tcl ~722-733). Otherwise the app's ::settings. Returns dict source
+# dye | settings | none plus the five bag fields, trimmed.
+proc ::plugins::ShotHistoryEditor::_bag_next_source {} {
+    set fields {bean_brand bean_type bean_notes roast_date roast_level}
+    set out [dict create source none]
+    if {[llength [info commands ::plugins::loaded]] && [::plugins::loaded DYE] &&
+        [info exists ::plugins::DYE::settings(next_bean_brand)] &&
+        [info exists ::plugins::DYE::settings(next_bean_type)]} {
+        dict set out source dye
+        foreach f $fields {
+            set v ""
+            if {[info exists ::plugins::DYE::settings(next_$f)]} { set v [string trim $::plugins::DYE::settings(next_$f)] }
+            dict set out $f $v
+        }
+    } elseif {[info exists ::settings(bean_brand)] && [info exists ::settings(bean_type)]} {
+        dict set out source settings
+        foreach f $fields {
+            set v ""
+            if {[info exists ::settings($f)]} { set v [string trim $::settings($f)] }
+            dict set out $f $v
+        }
+    }
+    return $out
+}
+
+# A bag's values of the fields that may differ between its files (notes,
+# roast date, roast level): field -> the distinct trimmed values over all its
+# files, cleaning runs included.
+proc ::plugins::ShotHistoryEditor::_bag_value_sets {b} {
+    set out [dict create bean_notes {} roast_date {} roast_level {}]
+    if {$b eq ""} { return $out }
+    foreach f [dict get $b files] {
+        foreach k {bean_notes roast_date roast_level} {
+            set v [string trim [_dget $f $k]]
+            if {$v ni [dict get $out $k]} { dict lappend out $k $v }
+        }
+    }
+    return $out
+}
+
+# What a bag save of `changes` (field -> new value) on the bag `key` (vals:
+# its _bag_value_sets) would change in the next-shot plan. Read-only.
+# status: none (the next shot is another bag, or already has these values),
+# update (DYE's plan names this bag: v0.19.0 applies it, _bag_next_apply),
+# manual (the app settings name it and DYE is not loaded: SHE never writes
+# ::settings, so only a manual reload helps). old / new: the fields that
+# would change; kept: changed fields the plan holds its OWN value for (none
+# of the bag's files has it), left as they are.
+# A plan whose roast date none of the bag's files carry is another physical
+# bag of the same coffee (Grind Advisor and Lumen key a bag by roast date
+# too; e.g. a newer bag just scanned): none, it is never touched.
+proc ::plugins::ShotHistoryEditor::_bag_next_preview {key changes vals} {
+    set n [_bag_next_source]
+    set out [dict create status none source [dict get $n source] old {} new {} kept {}]
+    if {[dict get $n source] eq "none" || [llength $key] != 2} { return $out }
+    if {$key ne [list [dict get $n bean_brand] [dict get $n bean_type]]} { return $out }
+    set pd [dict get $n roast_date]
+    if {$pd ne "" && $pd ni [_dget $vals roast_date]} { return $out }
+    set old [dict create]
+    set new [dict create]
+    set kept [dict create]
+    dict for {f v} $changes {
+        if {![dict exists $n $f]} { continue }
+        set pv [dict get $n $f]
+        if {$pv eq [string trim $v]} { continue }
+        if {$f in {bean_notes roast_date roast_level} && $pv ni [_dget $vals $f]} {
+            dict set kept $f $pv
+            continue
+        }
+        dict set old $f $pv
+        dict set new $f [string trim $v]
+    }
+    dict set out kept $kept
+    if {[dict size $new] == 0} { return $out }
+    dict set out old $old
+    dict set out new $new
+    dict set out status [_pick [expr {[dict get $n source] eq "dye"}] update manual]
+    return $out
+}
+
+# DYE's next-shot calls that BeanScanner (its one write path) and Lumen's bag
+# arrows already use on the tablet.
+proc ::plugins::ShotHistoryEditor::_dye_next_api {} {
+    return [expr {[llength [info commands ::plugins::DYE::shots::get_next]] &&
+                  [llength [info commands ::plugins::DYE::shots::source_next_from]]}]
+}
+
+# ---------------------------------------------------------------------------
+# v0.19.0 WRITE CAPABILITY 8 (owner 2026-10-02: "Yes, update it"; previewed
+# in v0.18.x and tested on the tablet first). After a bag Save that wrote at
+# least one file, when DYE is loaded and its next-shot plan names EXACTLY the
+# saved bag, the fields this save changed (and only those that differ in the
+# plan) are applied to the plan with BeanScanner's proven call:
+#   array set nx [::plugins::DYE::shots::get_next]; set nx(clock) 0
+#   set nx(<field>) <new> for each changed field
+#   ::plugins::DYE::shots::source_next_from {} nx <fields>
+# DYE then sets next_<field> and ::settings(<field>), saves the app settings
+# and its own, marks the plan modified and rebuilds its description; it does
+# not touch grind, dose, profile or the plan's source shot (a selected DYE
+# favourite may be deselected, as with a BeanScanner scan or a Lumen arrow).
+# Runs BEFORE _notify_downstream, so Grind Advisor computes for the new bag
+# and Lumen lights its dot. Refused while the DE1 is busy or SDB syncs.
+# Write-ahead: a "BAGSAVE NEXT BEGIN" line (old and new plan values) must be
+# in edit_log.txt before the call; "BAGSAVE NEXT OK | FAILED" follows with
+# what the plan holds afterwards (post-check of every applied field). SHE
+# itself never writes ::settings or DYE's settings array.
+# ---------------------------------------------------------------------------
+
+# Returns dict status applied | failed | skipped | manual | none, why, old,
+# new (the fields and values concerned), kept (fields the plan keeps).
+proc ::plugins::ShotHistoryEditor::_bag_next_apply {key changes vals ts batch} {
+    set p [_bag_next_preview $key $changes $vals]
+    set out [dict create status [dict get $p status] why "" old [dict get $p old] new [dict get $p new] kept [dict get $p kept]]
+    switch -- [dict get $p status] {
+        none { return $out }
+        manual {
+            _bag_log "$ts BAGSAVE NEXT SKIPPED batch=$batch status=manual old: [_bag_fields_text [dict get $p old]] (DYE is not loaded; the app settings keep the old details)"
+            return $out
+        }
+    }
+    set new [dict get $p new]
+    set fields [dict keys $new]
+    set why ""
+    if {![_dye_next_api]} {
+        set why [translate "DYE's next-shot calls are missing"]
+    } elseif {[_machine_busy] ne "" || [_sdb_busy]} {
+        set why [translate "the DE1 or the shot database is busy"]
+    }
+    if {$why ne ""} {
+        _bag_log "$ts BAGSAVE NEXT SKIPPED batch=$batch reason=[_esc $why]"
+        dict set out status skipped
+        dict set out why $why
+        return $out
+    }
+    if {[catch { array set nx [::plugins::DYE::shots::get_next] } err]} {
+        msg -ERROR "ShotHistoryEditor: could not read DYE's next shot after the bag save: $err"
+        _bag_log "$ts BAGSAVE NEXT SKIPPED batch=$batch reason=[_esc "get_next failed: $err"]"
+        dict set out status skipped
+        dict set out why [translate "DYE's next shot could not be read"]
+        return $out
+    }
+    # get_next leaves clock empty; source_next_from compares it numerically.
+    set nx(clock) 0
+    dict for {f v} $new { set nx($f) $v }
+    set kept_txt ""
+    if {[dict size [dict get $p kept]]} { set kept_txt " kept: [_bag_fields_text [dict get $p kept]]" }
+    if {![_bag_log "$ts BAGSAVE NEXT BEGIN batch=$batch fields=[join $fields ,] old: [_bag_fields_text [dict get $p old]] new: [_bag_fields_text $new]$kept_txt"]} {
+        dict set out status skipped
+        dict set out why [translate "edit_log.txt could not be written"]
+        return $out
+    }
+    set rc 0
+    if {[catch { set rc [::plugins::DYE::shots::source_next_from {} nx $fields] } err]} {
+        msg -ERROR "ShotHistoryEditor: DYE refused the next-shot update after the bag save: $err"
+        set why "DYE: $err"
+    } elseif {$rc != 1} {
+        set why [translate "DYE did not apply it"]
+    }
+    set now [dict create]
+    foreach f $fields {
+        set v ""
+        if {[info exists ::plugins::DYE::settings(next_$f)]} { set v [string trim $::plugins::DYE::settings(next_$f)] }
+        dict set now $f $v
+        if {$why eq "" && $v ne [dict get $new $f]} { set why "[translate {the plan reads}] $f=$v" }
+    }
+    if {$why eq ""} {
+        _bag_log "$ts BAGSAVE NEXT OK batch=$batch now: [_bag_fields_text $now]"
+        msg -INFO "ShotHistoryEditor: next shot updated after bag save $ts/$batch: [join $fields {, }]"
+        dict set out status applied
+    } else {
+        _bag_log "$ts BAGSAVE NEXT FAILED batch=$batch reason=[_esc $why] now: [_bag_fields_text $now]"
+        dict set out status failed
+        dict set out why $why
+    }
+    return $out
+}
+
+# How to load the bag again by hand, for a dict with status and new (the
+# Review warning and the result). Lumen's arrows load a bag through DYE: from
+# a bag missing from its list (renamed, or a new roast date) the first tap of
+# either arrow jumps to the bag with the newest shot (skin.tcl cycle_bag), so
+# "another bag and back" holds only when the name and date did not change.
+# Without DYE neither the arrows nor DYE's Next shot exist.
+proc ::plugins::ShotHistoryEditor::_bag_reload_hint {p} {
+    if {[_dget $p status] eq "manual"} {
+        return [translate "enter the new details again where your skin sets the bean for the next shot (DYE is not loaded, so the next shot takes them from the app settings)"]
+    }
+    set new [_dget $p new]
+    if {[dict exists $new bean_brand] || [dict exists $new bean_type] || [dict exists $new roast_date]} {
+        return [translate "on Lumen, tap a bag arrow until this bag shows with its dot lit (or edit DYE's Next shot)"]
+    }
+    return [translate "on Lumen, arrow to another bag and back to this one (or edit DYE's Next shot)"]
+}
+
+# The preview for the open bag and its snapshot's changes ("" when none).
+proc ::plugins::ShotHistoryEditor::_bag_next_for_plan {} {
+    variable bag_cur
+    variable bag_plan
+    if {$bag_cur eq "" || $bag_plan eq ""} { return "" }
+    return [_bag_next_preview [dict get $bag_cur key] [dict get $bag_plan changes] [_bag_value_sets $bag_cur]]
+}
+
+# Field labels for the next-shot lines.
+proc ::plugins::ShotHistoryEditor::_bag_next_label {f} {
+    set labels [dict create bean_brand Roaster bean_type {Bag name} bean_notes Notes \
+        roast_date {Roast date} roast_level {Roast level}]
+    return [translate [_pick [dict exists $labels $f] [_dget $labels $f] $f]]
+}
+
+# The result page's next-shot block for a _bag_next_apply result a: what
+# changed in the plan, or what it still holds and how to load the bag again.
+proc ::plugins::ShotHistoryEditor::_bag_next_lines {a} {
+    variable L
+    set lines {}
+    set st [dict get $a status]
+    switch -- $st {
+        applied { lappend lines [translate "Your next shot now has the new details (DYE's next-shot plan):"] }
+        manual  { lappend lines [translate "Your next shot still has the old details:"] }
+        default { lappend lines "[translate {Your next shot still has the old details}] ([dict get $a why]):" }
+    }
+    dict for {f v} [dict get $a new] {
+        set o [dict get $a old $f]
+        set line "- [_bag_next_label $f]: [_pick [expr {$o eq {}}] [translate empty] $o] -> [_pick [expr {$v eq {}}] [translate empty] $v]"
+        lappend lines [_fit_line $line $L(font_body) $L(content_w)]
+    }
+    dict for {f v} [_dget $a kept] {
+        set line "- [_bag_next_label $f]: [translate {kept, the next shot has its own}] ([_pick [expr {$v eq {}}] [translate empty] $v])"
+        lappend lines [_fit_line $line $L(font_body) $L(content_w)]
+    }
+    if {$st ne "applied"} {
+        lappend lines "[translate {Load it again}]: [_bag_reload_hint [dict create status [_pick [expr {$st eq {manual}}] manual update] new [dict get $a new]]]."
+    }
+    return $lines
+}
+
+# Everything Save needs to know about one file, read-only: status change |
+# unchanged | skipped, reason, and for a change the path, the raw bytes, the
+# new bytes and the old values. Used for the snapshot and again at Save.
+proc ::plugins::ShotHistoryEditor::_bag_prepare {filename changes key} {
+    set out [dict create status skipped reason "" path "" raw "" bytes "" old {}]
+    if {![regexp {^[0-9]{8}T[0-9]{6}$} $filename]} {
+        dict set out reason [translate "unexpected file name"]
+        return $out
+    }
+    set path [_legacy_file $filename]
+    dict set out path $path
+    if {![_inside_history_dir $path] || ![file isfile $path] || ![file readable $path]} {
+        dict set out reason [translate "not found in history/"]
+        return $out
+    }
+    set raw [_read_bytes_or_empty $path]
+    if {$raw eq ""} {
+        dict set out reason [translate "could not be read"]
+        return $out
+    }
+    set r [_shot_apply_changes $raw $changes]
+    if {![dict get $r ok]} {
+        dict set out reason [dict get $r message]
+        return $out
+    }
+    set s [dict get $r settings]
+    if {[list [string trim [_dget $s bean_brand]] [string trim [_dget $s bean_type]]] ne $key} {
+        dict set out reason [translate "no longer in this bag on disk (SDB is out of date)"]
+        return $out
+    }
+    dict set out raw $raw
+    dict set out bytes [dict get $r bytes]
+    dict set out old [dict get $r old]
+    if {[dict get $r bytes] eq $raw} {
+        dict set out status unchanged
+        return $out
+    }
+    set why [_shot_verify_edit [dict get $r text] [dict get $r new_text] $changes]
+    if {$why ne ""} {
+        dict set out reason "[translate {would not verify}]: $why"
+        return $out
+    }
+    dict set out status change
+    return $out
+}
+
+# The snapshot: the open bag's changes and every file's status, built once
+# when Review opens (Review and Confirm only paint from it; Save checks the
+# files again against it).
+# The open bag's changed fields as field -> new value, in bag_fields order.
+proc ::plugins::ShotHistoryEditor::_bag_current_changes {} {
+    set changes [dict create]
+    foreach c [_bag_changes] {
+        if {[dict get $c changed]} { dict set changes [dict get $c field] [dict get $c new] }
+    }
+    return $changes
+}
+
+# Is the snapshot the one for the open bag and its edits as they are now?
+# Review, Confirm and Save all require it, so a page reached without
+# bag_review_open (a direct load) can never arm or write an old snapshot.
+proc ::plugins::ShotHistoryEditor::_bag_plan_matches {} {
+    variable bag_plan
+    variable bag_cur
+    if {$bag_plan eq "" || $bag_cur eq ""} { return 0 }
+    return [expr {[dict get $bag_plan key] eq [dict get $bag_cur key] &&
+                  [dict get $bag_plan changes] eq [_bag_current_changes]}]
+}
+
+proc ::plugins::ShotHistoryEditor::_bag_flow_settled {} {
+    variable bag_flow_opened
+    # A clock stepped back counts as settled: the block stays 700 ms at most.
+    set d [expr {[clock milliseconds] - $bag_flow_opened}]
+    return [expr {$d < 0 || $d >= 700}]
+}
+
+proc ::plugins::ShotHistoryEditor::_bag_flow_mark {} {
+    variable bag_flow_opened
+    set bag_flow_opened [clock milliseconds]
+}
+
+proc ::plugins::ShotHistoryEditor::_bag_plan_build {} {
+    variable bag_cur
+    variable bag_plan
+    set changes [_bag_current_changes]
+    set blocker [_bag_save_blocker]
+    set files {}
+    set counts [dict create change 0 unchanged 0 skipped 0]
+    if {$bag_cur ne "" && $blocker eq ""} {
+        foreach f [dict get $bag_cur files] {
+            set p [_bag_prepare [dict get $f filename] $changes [dict get $bag_cur key]]
+            dict incr counts [dict get $p status]
+            lappend files [dict create filename [dict get $f filename] clock [dict get $f clock] \
+                cleaning [dict get $f cleaning] status [dict get $p status] reason [dict get $p reason]]
+        }
+    }
+    set bag_plan [dict create key [_pick [expr {$bag_cur ne ""}] [_dget $bag_cur key] {}] \
+        changes $changes blocker $blocker files $files \
+        to_change [dict get $counts change] unchanged [dict get $counts unchanged] \
+        skipped [dict get $counts skipped]]
+    return $bag_plan
+}
+
+# One file of a Save, after its verified backup. p = the file's Save-time
+# _bag_prepare result (status change: path, raw, bytes, old), so the file is
+# not parsed again; it is only re-read and compared byte for byte with the
+# bytes that were checked and backed up. Returns dict status ok | skipped |
+# failed | restore_failed, reason, old.
+proc ::plugins::ShotHistoryEditor::_bag_write_file {p backup tmp} {
+    set out [dict create status ok reason "" old [dict get $p old]]
+    set path [dict get $p path]
+    set expected_raw [dict get $p raw]
+    set bytes [dict get $p bytes]
+    if {[_read_bytes_or_empty $path] ne $expected_raw} {
+        return [dict create status skipped reason [translate "changed on disk after its backup"] old {}]
+    }
+    if {![_inside_history_dir $path] || ![_inside_backups_dir $tmp] || ![_inside_backups_dir $backup]} {
+        return [dict create status failed reason [translate "a path left its folder; nothing written"] old {}]
+    }
+    if {[catch { _write_bytes $tmp $bytes } err]} {
+        return [dict create status failed reason "[translate {temp file not written}] ($err); [translate {original untouched}]" old {}]
+    }
+    if {[_read_bytes_or_empty $tmp] ne $bytes} {
+        return [dict create status failed reason [translate "temp file did not read back; original untouched"] old {}]
+    }
+    if {[catch { file rename -force -- $tmp $path } err]} {
+        if {[_read_bytes_or_empty $path] eq $expected_raw} {
+            return [dict create status failed reason "[translate {not renamed into place}] ($err); [translate {original untouched}]" old {}]
+        }
+        return [_bag_restore $path $backup $expected_raw "[translate {rename failed}] ($err)"]
+    }
+    if {[_read_bytes_or_empty $path] ne $bytes} {
+        return [_bag_restore $path $backup $expected_raw [translate "the written file did not read back"]]
+    }
+    if {[catch { file mtime $path [clock seconds] } err]} {
+        msg -NOTICE "ShotHistoryEditor: could not stamp the modification time of $path: $err (SDB will not see this edit until it is resynced another way)"
+    }
+    dict set out status ok
+    return $out
+}
+
+# Puts the verified backup back over a file whose write went wrong, and
+# checks it. restore_failed names the intact copy.
+proc ::plugins::ShotHistoryEditor::_bag_restore {path backup expected_raw why} {
+    if {[catch { file copy -force -- $backup $path } err] || [_read_bytes_or_empty $path] ne $expected_raw} {
+        return [dict create status restore_failed old {} \
+            reason "$why; [translate {RESTORE FAILED: the intact copy is}] $backup"]
+    }
+    return [dict create status failed old {} reason "$why; [translate {restored from its backup}]"]
+}
+
+# The Save. plan = the snapshot Confirm typed against. Returns dict ok,
+# message (why nothing was written, when that is so), written, unchanged,
+# skipped, failed, restore_failed (lists; the last three of filename
+# reason pairs), not_attempted, backup_dir, ts and batch (once a backup
+# folder is named; v0.18.0, for the next-shot preview log line).
+proc ::plugins::ShotHistoryEditor::perform_bag_save {plan} {
+    set res [dict create ok 0 message "" written {} unchanged {} skipped {} failed {} \
+        restore_failed {} not_attempted {} backup_dir "" ts "" batch ""]
+    set blocker [_bag_save_blocker]
+    if {$blocker eq ""} { set blocker [dict get $plan blocker] }
+    if {$blocker ne ""} {
+        dict set res message "[translate {Not saved}]: $blocker"
+        return $res
+    }
+    set changes [dict get $plan changes]
+    set key [dict get $plan key]
+    if {[dict size $changes] == 0 || [llength $key] != 2} {
+        dict set res message [translate "Nothing to save."]
+        return $res
+    }
+    # Save-time check of every file: the set to write must be exactly the
+    # set the count was typed for.
+    set planned {}
+    set fresh {}
+    set prepared [dict create]
+    foreach f [dict get $plan files] {
+        set fn [dict get $f filename]
+        if {[dict get $f status] eq "change"} { lappend planned $fn }
+        set p [_bag_prepare $fn $changes $key]
+        if {[dict get $p status] eq "change"} {
+            lappend fresh $fn
+            dict set prepared $fn $p
+        }
+    }
+    if {$fresh ne $planned} {
+        dict set res message [translate "The files changed since Review. Go back and open Review again; nothing was written."]
+        return $res
+    }
+    if {[llength $fresh] == 0} {
+        dict set res message [translate "Every file is already up to date; nothing was written."]
+        return $res
+    }
+    # Every file's mtime is stamped at or after this second, so SDB rows
+    # re-read since then hold this save (the overlay retires on it).
+    set epoch [clock seconds]
+    set ts [clock format $epoch -format {%Y%m%dT%H%M%S}]
+    set batch [_new_batch_id]
+    dict set res ts $ts
+    dict set res batch $batch
+    set dir [file join [backups_dir] "${ts}_${batch}_bag"]
+    dict set res backup_dir $dir
+    if {![_inside_backups_dir $dir] || [file exists $dir]} {
+        dict set res message [translate "The backup folder could not be prepared; nothing was written."]
+        return $res
+    }
+    if {[catch { file mkdir $dir } err]} {
+        dict set res message "[translate {Could not create the backup folder}] ($err); [translate {nothing was written.}]"
+        return $res
+    }
+    if {![_bag_log "$ts BAGSAVE BEGIN batch=$batch bag=[_esc [lindex $key 0]]|[_esc [lindex $key 1]] [_bag_fields_text $changes] files=[llength $fresh] backup=$dir"]} {
+        dict set res message [translate "edit_log.txt could not be written; nothing was written."]
+        return $res
+    }
+    # Every backup, checked byte for byte, before the first write.
+    foreach fn $fresh {
+        set p [dict get $prepared $fn]
+        set backup [file join $dir "$fn.shot"]
+        set err ""
+        if {[catch { file copy -- [dict get $p path] $backup } err] || [_read_bytes_or_empty $backup] ne [dict get $p raw]} {
+            _bag_log "$ts BAGSAVE STOPPED batch=$batch backup_failed=$fn [_esc $err] written=0"
+            dict set res message "[translate {The backup of}] $fn [translate {did not check out; nothing was written.}]"
+            return $res
+        }
+    }
+    set i 0
+    foreach fn $fresh {
+        set p [dict get $prepared $fn]
+        set backup [file join $dir "$fn.shot"]
+        if {[catch { _bag_write_file $p $backup [file join $dir "$fn.shot.new"] } w]} {
+            msg -ERROR "ShotHistoryEditor: bag save of $fn stopped by an error: $w"
+            set w [dict create status failed reason "[translate {stopped by an error}]: $w" old {}]
+        }
+        set st [dict get $w status]
+        set reason [dict get $w reason]
+        set stop 0
+        switch -- $st {
+            ok {
+                dict lappend res written $fn
+                set oldtxt [dict create]
+                set logged [_bag_log "$ts BAGSAVE OK file=$fn old: [_bag_fields_text [dict get $w old]] backup=$backup"]
+                dict for {field new} $changes {
+                    set old [dict get $w old $field]
+                    if {$old ne $new && $logged} {
+                        set logged [_bag_manifest $ts $epoch $fn $field $old $new $backup]
+                    }
+                }
+                if {!$logged} {
+                    dict set res message [translate "edit_log.txt or edit_manifest.txt could not be written; stopped after this file."]
+                    set stop 1
+                }
+            }
+            unchanged { dict lappend res unchanged $fn }
+            skipped {
+                dict lappend res skipped [list $fn $reason]
+                _bag_log "$ts BAGSAVE SKIPPED file=$fn reason=[_esc $reason]"
+            }
+            failed {
+                dict lappend res failed [list $fn $reason]
+                _bag_log "$ts BAGSAVE FAILED file=$fn reason=[_esc $reason]"
+                set stop 1
+            }
+            restore_failed {
+                dict lappend res restore_failed [list $fn $reason]
+                _bag_log "$ts BAGSAVE RESTORE_FAILED file=$fn intact_copy=$backup reason=[_esc $reason]"
+                set stop 1
+            }
+            default {
+                set reason "[translate {unexpected status}] $st"
+                dict lappend res failed [list $fn $reason]
+                _bag_log "$ts BAGSAVE FAILED file=$fn reason=[_esc $reason]"
+                set stop 1
+            }
+        }
+        incr i
+        if {$stop} {
+            dict set res not_attempted [lrange $fresh $i end]
+            break
+        }
+    }
+    _bag_log "$ts BAGSAVE END batch=$batch written=[llength [dict get $res written]] unchanged=[llength [dict get $res unchanged]] skipped=[llength [dict get $res skipped]] failed=[llength [dict get $res failed]] restore_failed=[llength [dict get $res restore_failed]] not_attempted=[llength [dict get $res not_attempted]]"
+    dict set res ok [expr {[dict get $res message] eq "" && [llength [dict get $res failed]] == 0 &&
+                           [llength [dict get $res restore_failed]] == 0}]
+    msg -INFO "ShotHistoryEditor: bag save $ts/$batch wrote [llength [dict get $res written]] of [llength $fresh] files"
+    return $res
+}
+
+# The warning lines for a page, ready to show: the blocker first, then the
+# warnings in priority order, each wrapped to at most two lines of the
+# content width; at most max lines in all. A warning that does not fit
+# whole gets one cut line, and a last line says how many more follow.
+# Files a roaster, name or roast-date change would leave in the old bag:
+# the snapshot's skipped files, when the snapshot is for the current edits.
+proc ::plugins::ShotHistoryEditor::_bag_left_behind {} {
+    variable bag_plan
+    if {$bag_plan eq "" || [dict get $bag_plan blocker] ne "" || ![_bag_plan_matches]} { return 0 }
+    set c [dict get $bag_plan changes]
+    if {![dict exists $c bean_brand] && ![dict exists $c bean_type] && ![dict exists $c roast_date]} { return 0 }
+    return [dict get $bag_plan skipped]
+}
+
+proc ::plugins::ShotHistoryEditor::_bag_warning_lines {max {last 0}} {
+    variable L
+    variable bag_plan
+    set items {}
+    set blocker [_pick [expr {$bag_plan ne ""}] [_dget $bag_plan blocker] [_bag_save_blocker]]
+    if {$blocker ne ""} { lappend items "[translate {Save is off}]: $blocker" }
+    foreach w [_bag_review_warnings [_bag_changes]] { lappend items $w }
+    set left [_bag_left_behind]
+    if {$left > 0} {
+        lappend items "[_plural $left file files] [translate {cannot be changed (Skipped) and will stay in the old bag.}]"
+    }
+    set n [llength $items]
+    # The last step before the write never says "more on the next step":
+    # when the wrapped warnings do not fit, each gets one cut line, and a
+    # list longer than max (only with Save off) ends with "+ N more".
+    if {$last} {
+        set out {}
+        foreach item $items {
+            lappend out {*}[split [_wrap_lines $item $L(font_caption) $L(content_w) 2] "\n"]
+        }
+        if {[llength $out] <= $max} { return $out }
+        if {$n <= $max} {
+            return [lmap item $items { _fit_line $item $L(font_caption) $L(content_w) }]
+        }
+        set out [lmap item [lrange $items 0 [expr {$max - 2}]] { _fit_line $item $L(font_caption) $L(content_w) }]
+        lappend out "+ [expr {$n - $max + 1}] [translate {more warnings}]"
+        return $out
+    }
+    set out {}
+    for {set i 0} {$i < $n} {incr i} {
+        set item [lindex $items $i]
+        set wl [split [_wrap_lines $item $L(font_caption) $L(content_w) 2] "\n"]
+        set after [expr {$n - $i - 1 > 0 ? 1 : 0}]
+        if {[llength $out] + [llength $wl] + $after <= $max} {
+            lappend out {*}$wl
+            continue
+        }
+        if {[llength $out] + 1 + $after <= $max} {
+            lappend out [_fit_line $item $L(font_caption) $L(content_w)]
+            incr i
+        }
+        if {$n - $i > 0} {
+            lappend out "+ [expr {$n - $i}] [_pick [expr {$blocker eq ""}] [translate {more on the next step}] [translate {more warnings}]]"
+        }
+        break
+    }
+    return $out
+}
+
+proc ::plugins::ShotHistoryEditor::_bag_save_is_running {} {
+    variable bag_save_running
+    if {$bag_save_running <= 0} { return 0 }
+    set d [expr {[clock milliseconds] - $bag_save_running}]
+    return [expr {$d >= 0 && $d < 600000}]
+}
+
+proc ::plugins::ShotHistoryEditor::bag_save_open {} {
+    variable bag_plan
+    variable bag_confirm_input
+    variable bag_confirm_error
+    variable bag_confirm_armed
+    if {![_bag_flow_settled] || [_bag_save_is_running] || ![_bag_plan_matches]} { return }
+    if {[dict get $bag_plan blocker] ne "" || [dict get $bag_plan to_change] == 0} { return }
+    set bag_confirm_input ""
+    set bag_confirm_error ""
+    set bag_confirm_armed 1
+    _paint_bag_confirm ShotHistoryEditor_bag_confirm
+    open_page ShotHistoryEditor_bag_confirm
+    _bag_flow_mark
+}
+
+proc ::plugins::ShotHistoryEditor::bag_confirm_cancel {} {
+    variable bag_confirm_input
+    variable bag_confirm_error
+    variable bag_confirm_armed
+    if {![_bag_flow_settled] || [_bag_save_is_running]} { return }
+    set bag_confirm_input ""
+    set bag_confirm_error ""
+    set bag_confirm_armed 0
+    bag_hide_keyboard
+    _paint_bag_review ShotHistoryEditor_bag_review
+    _return_to_page ShotHistoryEditor_bag_review
+    _bag_flow_mark
+}
+
+proc ::plugins::ShotHistoryEditor::_paint_bag_confirm {page} {
+    variable L
+    variable bag_plan
+    variable bag_cur
+    variable bag_confirm_error
+    variable bag_confirm_armed
+    if {!$bag_confirm_armed || ![_bag_plan_matches] || [dict get $bag_plan to_change] == 0} {
+        catch { dui item config $page subtitle -text [translate "Open a bag and its Review first."] }
+        foreach t {bc_changes bc_warn bc_instr bc_files} { catch { dui item config $page $t -text "" } }
+        # (a refusal from bag_confirm_submit stays readable)
+        catch { dui item config $page bc_error -text $bag_confirm_error -fill $L(danger) }
+        catch { dui item config $page bc_save -label [translate "Save"] }
+        catch { dui item enable_or_disable 0 $page bc_save* -initial 1 }
+        catch { dui item enable_or_disable 1 $page bc_cancel* -initial 1 }
+        return
+    }
+    set n [dict get $bag_plan to_change]
+    catch { dui item config $page subtitle -text [_fit_line [_bag_summary_line $bag_cur] $L(font_caption) $L(content_w)] }
+    set parts {}
+    foreach c [_bag_changes] {
+        if {![dict get $c changed]} { continue }
+        set v [_pick [expr {[dict get $c new] eq ""}] [translate empty] [dict get $c new]]
+        lappend parts "[translate [dict get $c label]] [_u 0x2192] $v"
+    }
+    catch { dui item config $page bc_changes -text [_fit_line [join $parts "   "] $L(font_caption) $L(content_w)] }
+    catch { dui item config $page bc_warn -text [join [_bag_warning_lines $L(bc_warn_lines) 1] "\n"] }
+    catch { dui item config $page bc_instr -text \
+        "[translate Type] $n [translate {(the number of files to change), then tap}] [translate Save] [_plural $n file files]." }
+    catch { dui item config $page bc_error -text $bag_confirm_error -fill $L(danger) }
+    set shots 0 ; set runs 0
+    foreach f [dict get $bag_plan files] {
+        if {[dict get $f status] ne "change"} { continue }
+        if {[dict get $f cleaning]} { incr runs } else { incr shots }
+    }
+    set info "[_plural $n file files] [translate {will change}]: [_plural $shots shot shots], [_plural $runs {cleaning run} {cleaning runs}]."
+    append info "\n[translate {Already up to date}]: [dict get $bag_plan unchanged]. [translate Skipped]: [dict get $bag_plan skipped]."
+    append info "\n[translate {Every file is backed up and checked first, then rewritten and checked again; a failed check puts its backup back.}]"
+    set np [_bag_next_for_plan]
+    if {$np ne "" && [dict get $np status] eq "update" && [_dye_next_api]} {
+        append info "\n[translate {history/*.shot changes, and through DYE your next-shot plan; SDB, history_v2 copies and Visualizer uploads keep the old values.}]"
+    } else {
+        append info "\n[translate {Only history/*.shot changes: SDB, history_v2 copies and Visualizer uploads keep the old values.}]"
+    }
+    set tw [expr {$L(content_w) - 2 * $L(card_pad_x)}]
+    catch { dui item config $page bc_files -text [join [lmap l [split $info "\n"] { _wrap_lines $l $L(font_body) $tw 2 }] "\n"] }
+    catch { dui item config $page bc_save -label "[translate Save] [_plural $n file files]" }
+    catch { dui item enable_or_disable 1 $page bc_save* -initial 1 }
+    catch { dui item enable_or_disable 1 $page bc_cancel* -initial 1 }
+}
+
+# Typed count, refusals, then the Save. Buttons go grey and a status line
+# is painted first; the downstream refresh (Grind Advisor's SDB resync,
+# which yields with `update`) runs while they are still grey, and the
+# result page opens only after it.
+proc ::plugins::ShotHistoryEditor::bag_confirm_submit {} {
+    variable L
+    variable bag_plan
+    variable bag_cur
+    variable bag_confirm_input
+    variable bag_confirm_error
+    variable bag_save_running
+    variable bag_result_text
+    variable bag_result_wrote
+    variable bag_result_unseen
+    set page ShotHistoryEditor_bag_confirm
+    variable bag_confirm_armed
+    if {![_bag_flow_settled] || [_bag_save_is_running] || $bag_plan eq "" || !$bag_confirm_armed} { return }
+    if {![_bag_plan_matches]} {
+        set bag_confirm_error [translate "The changes differ from the Review; open Review again. Nothing was written."]
+        _paint_bag_confirm $page
+        return
+    }
+    set n [dict get $bag_plan to_change]
+    if {[string trim $bag_confirm_input] ne $n} {
+        set bag_confirm_error "[translate {Type exactly}] \"$n\" [translate {to save. Nothing was written.}]"
+        _paint_bag_confirm $page
+        return
+    }
+    set busy [_machine_busy]
+    if {$busy ne ""} {
+        set bag_confirm_error "[translate {The DE1 is busy}] ($busy). [translate {Try again when it is idle. Nothing was written.}]"
+        _paint_bag_confirm $page
+        return
+    }
+    if {[_sdb_busy]} {
+        set bag_confirm_error [translate "The shot database is syncing. Try again in a moment. Nothing was written."]
+        _paint_bag_confirm $page
+        return
+    }
+    set bag_save_running [clock milliseconds]
+    bag_hide_keyboard
+    catch { dui item enable_or_disable 0 $page bc_save* -initial 1 }
+    catch { dui item enable_or_disable 0 $page bc_cancel* -initial 1 }
+    catch { dui item config $page bc_error -fill $L(warn) \
+        -text "[translate Saving] [_plural $n file files]... [translate {please wait.}]" }
+    catch { update idletasks }
+    set changed_identity [expr {[dict exists [dict get $bag_plan changes] bean_brand] ||
+        [dict exists [dict get $bag_plan changes] bean_type] || [dict exists [dict get $bag_plan changes] roast_date]}]
+    set next [dict create status none why "" old {} new {}]
+    if {[catch { set r [perform_bag_save $bag_plan] } err]} {
+        msg -ERROR "ShotHistoryEditor: bag save stopped by an error: $err"
+        set r [dict create ok 0 message "[translate {Stopped by an error}]: $err" written {} unchanged {} \
+            skipped {} failed {} restore_failed {} not_attempted {} backup_dir "" ts "" batch ""]
+    }
+    set note ""
+    if {[llength [dict get $r written]]} {
+        # v0.19.0 capability 8: the next-shot plan follows the bag, before
+        # Grind Advisor and Lumen refresh (they read it).
+        set next [_bag_next_apply [dict get $bag_plan key] [dict get $bag_plan changes] [_bag_value_sets $bag_cur] [dict get $r ts] [dict get $r batch]]
+        catch { dui item config $page bc_error -text [translate "Updating Grind Advisor and the shot database..."] }
+        catch { update idletasks }
+        set note [_notify_downstream "the bag save"]
+    }
+    set bag_result_text [_bag_result_text $r $n $changed_identity $next $note]
+    set bag_result_wrote [expr {[llength [dict get $r written]] > 0}]
+    if {$bag_result_wrote} {
+        # The bag may have a new name now: the editor starts over.
+        set bag_cur {}
+        set bag_plan {}
+    }
+    set bag_confirm_error ""
+    set bag_confirm_input ""
+    set bag_confirm_armed 0
+    set bag_save_running 0
+    catch { dui item enable_or_disable 1 $page bc_cancel* -initial 1 }
+    catch { dui item enable_or_disable 1 $page bc_save* -initial 1 }
+    _paint_bag_result ShotHistoryEditor_bag_result
+    # The downstream refresh yields (SDB's populate runs update): if the app
+    # moved to a machine page meanwhile, the result is not loaded over it --
+    # the Bags status shows its first line instead.
+    set busy [_machine_busy]
+    if {![_page_is_current $page] || $busy ne ""} {
+        set bag_result_unseen [lindex [split $bag_result_text "\n"] 0]
+        if {$bag_result_wrote && [dict get $next status] ni {none applied}} {
+            append bag_result_unseen " [translate {Your next shot still has the old details: load the bag again.}]"
+        }
+        msg -NOTICE "ShotHistoryEditor: bag save finished while the app was elsewhere ([_pick [expr {$busy ne {}}] $busy {another page}]); result kept for the Bags page"
+        return
+    }
+    set bag_result_unseen ""
+    open_page ShotHistoryEditor_bag_result
+    _bag_flow_mark
+}
+
+# next = the _bag_next_apply result ("" or 0: none).
+proc ::plugins::ShotHistoryEditor::_bag_result_text {r n changed_identity next note} {
+    set w [llength [dict get $r written]]
+    set lines {}
+    if {[dict get $r message] ne "" && $w == 0} {
+        lappend lines [dict get $r message]
+    } elseif {[llength [dict get $r restore_failed]] || [llength [dict get $r failed]] || [dict get $r message] ne ""} {
+        lappend lines "[translate Stopped]: [translate saved] $w [translate of] [_plural $n file files]."
+        if {[dict get $r message] ne ""} { lappend lines [dict get $r message] }
+    } else {
+        lappend lines "[translate Saved] [_plural $w file files]."
+    }
+    foreach {key label} {restore_failed {RESTORE FAILED} failed {Stopped at}} {
+        foreach f [dict get $r $key] {
+            lassign $f fn why
+            lappend lines "[translate $label] $fn.shot: $why"
+        }
+    }
+    set u [llength [dict get $r unchanged]]
+    if {$u} { lappend lines "[translate {Already up to date}]: $u." }
+    set sk [dict get $r skipped]
+    if {[llength $sk]} {
+        lappend lines "[translate Skipped]: [llength $sk]."
+        foreach f [lrange $sk 0 2] { lassign $f fn why ; lappend lines "   $fn.shot: $why" }
+        if {[llength $sk] > 3} { lappend lines "   + [expr {[llength $sk] - 3}] [translate {more, see edit_log.txt}]" }
+    }
+    set na [llength [dict get $r not_attempted]]
+    if {$na} {
+        lappend lines "[translate {Not attempted}]: [_plural $na file files] [translate {(unchanged on disk).}]"
+    }
+    if {$changed_identity && $w > 0 && $w + $u < $n} {
+        lappend lines [translate "This bag is now split: open the old bag on the Bags page and save again to finish."]
+    }
+    if {[dict get $r backup_dir] ne "" && $w > 0} { lappend lines "[translate Backups]: [dict get $r backup_dir]" }
+    if {$w > 0 && [llength $next] > 1 && [dict get $next status] ne "none"} {
+        lappend lines {*}[_bag_next_lines $next]
+    }
+    if {$w > 0} {
+        if {[llength $next] > 1 && [dict get $next status] eq "applied"} {
+            lappend lines [translate "history/*.shot and, through DYE, your next-shot plan changed; SDB is never written by this plugin; history_v2 copies and Visualizer uploads keep the old values."]
+        } else {
+            lappend lines [translate "Only history/*.shot changed: SDB is never written by this plugin; history_v2 copies and Visualizer uploads keep the old values."]
+        }
+        lappend lines [_pick [expr {$note ne ""}] "Grind Advisor: $note" \
+            [translate "SDB picks the change up on its next resync (SDB settings: Resync database to history)."]]
+    }
+    return [join $lines "\n"]
+}
+
+proc ::plugins::ShotHistoryEditor::_paint_bag_result {page} {
+    variable L
+    variable bag_result_text
+    set text [_pick [expr {$bag_result_text ne ""}] $bag_result_text [translate "No bag save has run yet."]]
+    set out {}
+    foreach l [split $text "\n"] { lappend out [_wrap_lines $l $L(font_body) $L(content_w) 2] }
+    catch { dui item config $page br_text -text [join $out "\n"] }
+}
+
+# Done ends the flow. After a Save that wrote files: on the Bags page,
+# freshly read (SDB plus the edit overlay) and painted before the unwind.
+# After one that wrote nothing: back on Edit bag with the edits kept, so
+# Review can be opened again. Taps queued while the Save ran are ignored
+# (the flow's settle guard).
+proc ::plugins::ShotHistoryEditor::bag_result_done {} {
+    variable bag_result_wrote
+    variable bag_cur
+    if {![_bag_flow_settled]} { return }
+    if {!$bag_result_wrote && $bag_cur ne ""} {
+        _paint_bag_edit ShotHistoryEditor_bag_edit
+        _return_to_page ShotHistoryEditor_bag_edit
+    } else {
+        refresh_bags_page ShotHistoryEditor_bags
+        _return_to_page ShotHistoryEditor_bags
+    }
+    _bag_flow_mark
 }
 
 namespace eval ::dui::pages::ShotHistoryEditor_settings {
@@ -3693,36 +6481,35 @@ namespace eval ::dui::pages::ShotHistoryEditor_settings {
 
         dui add dtext $page $cx $L(header_title_y) -tags page_title -text [translate "Shot History Editor"] \
             -font $L(font_title) -width $L(content_w) -fill $L(text_hi) -anchor center -justify center
-        dui add dtext $page $cx $L(header_subtitle_y) -tags subtitle -text [translate "Edits and Delete both require confirmation. Delete moves files to trash, never permanent."] \
+        dui add dtext $page $cx $L(header_subtitle_y) -tags subtitle -text [translate "Edits and deletes are confirmed first. Delete moves shots to the trash."] \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor center -justify center
+        # v0.18.1: the Shots | Bags switch, toolbar row left (was top-left).
+        ::plugins::ShotHistoryEditor::_add_view_tabs $page shots
 
-        # Mode button, top-right (single button; see fix note above).
-        set mode_btn_y1 [expr {int(($L(header_y1)-$L(btn_h))/2)}]
-        dui add dbutton $page [expr {$rx-$L(btn_w_std)}] $mode_btn_y1 $rx [expr {$mode_btn_y1+$L(btn_h)}] \
-            -tags mode_btn -label [translate "Select"] -command ::plugins::ShotHistoryEditor::toggle_select_mode \
-            -label_font $L(font_button) -style she_btn
-
-        # v0.8.0: theme toggle. The top-right header slot is taken by the
-        # mode button on this page, so the toggle mirrors it in the
-        # top-LEFT corner (square, sun/moon face).
-        dui add dbutton $page $lx $mode_btn_y1 [expr {$lx+$L(btn_h)}] [expr {$mode_btn_y1+$L(btn_h)}] \
+        # v0.13.1: theme toggle in the top-RIGHT corner, the exact box
+        # MaintenanceTracker, GrindAdvisor and BeanScanner use (square
+        # btn_h, y = 11 ref, right edge = right_x); it sat top-left before.
+        set theme_y0 [expr {int(round(11 * $L(scale)))}]
+        set theme_x1 [expr {$rx-$L(btn_h)}]
+        dui add dbutton $page $theme_x1 $theme_y0 $rx [expr {$theme_y0+$L(btn_h)}] \
             -tags btn_theme -label [::plugins::ShotHistoryEditor::_theme_button_face] \
             -command ::plugins::ShotHistoryEditor::toggle_theme \
             -label_font [expr {$L(have_icons) ? $L(font_icon) : $L(font_button)}] \
             -style she_btn
 
-        # Toolbar: status left, Prev/Next right (moved up from the bottom per spec).
-        dui add dtext $page $lx $L(toolbar_y0) -tags recent_status -text "" \
-            -font $L(font_caption) -width [expr {$L(content_w)-2*($L(btn_w_std)+$L(sm))}] \
-            -fill $L(text_mut) -anchor nw -justify left
-        set next_x1 [expr {$rx - $L(btn_w_std)}]
-        set prev_x1 [expr {$next_x1 - $L(sm) - $L(btn_w_std)}]
-        dui add dbutton $page $prev_x1 $L(toolbar_y0) [expr {$prev_x1+$L(btn_w_std)}] $L(toolbar_y1) \
-            -tags prev_page -label [translate "[::plugins::ShotHistoryEditor::_u 0x25c0] Prev"] -command {::plugins::ShotHistoryEditor::scroll_cards -1} \
+        # Mode button (single button; see fix note above). v0.18.1 (owner
+        # mockup): toolbar row right, in the card buttons' column, shorter
+        # than a bar button (was in the header, left of the toggle).
+        set sel_y0 [expr {$L(toolbar_mid_y) - $L(sel_btn_h) / 2}]
+        dui add dbutton $page $L(sel_x0) $sel_y0 $L(sel_x1) [expr {$sel_y0+$L(sel_btn_h)}] \
+            -tags mode_btn -label [translate "Select"] -command ::plugins::ShotHistoryEditor::toggle_select_mode \
             -label_font $L(font_button) -style she_btn
-        dui add dbutton $page $next_x1 $L(toolbar_y0) $rx $L(toolbar_y1) \
-            -tags next_page -label [translate "Next [::plugins::ShotHistoryEditor::_u 0x25b6]"] -command {::plugins::ShotHistoryEditor::scroll_cards 1} \
-            -label_font $L(font_button) -style she_btn
+
+        # Toolbar status, centred between the switch and Select (v0.18.1;
+        # the pager lives bottom-right since v0.13.1).
+        dui add dtext $page $cx $L(toolbar_mid_y) -tags recent_status -text "" \
+            -font $L(font_caption) -width $L(toolbar_status_w) \
+            -fill $L(text_mut) -anchor center -justify center
 
         # Card list: exactly one background + 3 text lines + 1 action button per row.
         set btn_x2 [expr {$rx - $L(card_pad_x)}]
@@ -3744,20 +6531,48 @@ namespace eval ::dui::pages::ShotHistoryEditor_settings {
             dui add dtext $page $text_x [expr {$top+$L(card_line3_dy)}] -tags row${i}_line3 -text "" \
                 -font $L(font_caption) -width $text_w -fill $L(text_mut) -anchor w -justify left
 
+            # v0.16.0: CLEANING pill at the right end of line 1, an xl gap
+            # short of the card button; hidden until the row is a cleaning run.
+            set px2 [expr {$btn_x1 - $L(xl)}]
+            set px1 [expr {$px2 - $L(clean_pill_w)}]
+            set py1 [expr {$top + $L(card_line1_dy) - $L(clean_pill_h)/2}]
+            ::plugins::ShotHistoryEditor::rounded_rect $page $px1 $py1 $px2 [expr {$py1+$L(clean_pill_h)}] \
+                [expr {$L(clean_pill_h)/2}] -fill $L(clean_pill_bg) -outline $L(clean_pill_bg) -width 0 \
+                -tags row${i}_clean_bg -initial_state hidden
+            dui add dtext $page [expr {($px1+$px2)/2}] [expr {$top+$L(card_line1_dy)}] -tags row${i}_clean_txt \
+                -text [translate "CLEANING"] -font $L(font_caption) -fill $L(clean_pill_text) -anchor center \
+                -initial_state hidden
+
             set btn_y1 [expr {$top + int(($L(card_h)-$L(card_btn_h))/2)}]
             set btn_y2 [expr {$btn_y1 + $L(card_btn_h)}]
             dui add dbutton $page $btn_x1 $btn_y1 $btn_x2 $btn_y2 -tags row${i}_btn \
                 -label [translate "[::plugins::ShotHistoryEditor::_u 0x270e] Edit"] -command "::plugins::ShotHistoryEditor::card_btn_click $i" \
                 -label_font $L(font_button) -style she_btn
+            # v0.15.0 (F12): in Select mode the whole card toggles. A
+            # shape-less, label-less dbutton is the core's own invisible
+            # tap rect (MaintenanceTracker's card-open zone): over the text
+            # area, created after the lines so it sits above them, ending an
+            # xl gap short of the card button -- the two never overlap. No
+            # style, so no press fill. Does nothing outside Select mode.
+            # The she_ prefix (review): dui's press flash repaints every
+            # canvas item named like the pressed button's tag, across all
+            # plugins, and on an invisible rect that paint would stick.
+            dui add dbutton $page $lx $top [expr {$btn_x1 - $L(xl)}] $bottom -tags she_row${i}_tap \
+                -command "::plugins::ShotHistoryEditor::card_tap_click $i"
         }
 
-        # Bottom bar: one row, left/right slots. Single dispatcher per slot (see fix note).
+        # Bottom bar: one row. Single dispatcher per slot (see fix note).
+        # v0.13.1: the two action slots sit side by side on the left and
+        # the pager takes the bottom-right corner (owner: easier to reach).
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx+$L(btn_w_std)}] $L(bar_y1) \
             -tags bar_left -label [translate "Done"] -command ::plugins::ShotHistoryEditor::bar_left_click \
             -label_font $L(font_button) -style she_btn
-        dui add dbutton $page [expr {$rx-$L(btn_w_std)}] $L(bar_y0) $rx $L(bar_y1) \
+        set bar2_x1 [expr {$lx+$L(btn_w_std)+$L(sm)}]
+        dui add dbutton $page $bar2_x1 $L(bar_y0) [expr {$bar2_x1+$L(btn_w_std)}] $L(bar_y1) \
             -tags bar_right -label [translate "Advanced"] -command ::plugins::ShotHistoryEditor::bar_right_click \
             -label_font $L(font_button) -style she_btn
+        ::plugins::ShotHistoryEditor::_add_pager $page prev_page next_page \
+            {::plugins::ShotHistoryEditor::scroll_cards -1} {::plugins::ShotHistoryEditor::scroll_cards 1}
     }
 
     proc show {page_to_hide page_to_show} {
@@ -3773,6 +6588,24 @@ namespace eval ::dui::pages::ShotHistoryEditor_settings {
         ::plugins::ShotHistoryEditor::_capture_return_page $page_to_hide
         ::plugins::ShotHistoryEditor::refresh_main_page $page_to_show
     }
+
+    # v0.15.0 (F12, review): leaving the card page ends Select mode at once.
+    # The show hook resets it too, but dui re-shows this page's items before
+    # that hook runs (after idle), so a return from the delete review
+    # flashed the red "Delete N", the tinted cards and a still-live Select
+    # mode. dui runs this hook after idle with the page already hidden:
+    # configs only, no show or hide, and enable_or_disable leaves hidden
+    # items alone. The delete review works from its own snapshot of the
+    # selection (open_delete_review), taken before the page was left.
+    proc hide {page_to_hide page_to_show} {
+        set ::plugins::ShotHistoryEditor::select_mode 0
+        ::plugins::ShotHistoryEditor::clear_selection_state
+        ::plugins::ShotHistoryEditor::_paint_all_card_sel $page_to_hide
+        ::plugins::ShotHistoryEditor::_refresh_select_bar $page_to_hide
+        catch { dui item config $page_to_hide mode_btn -label [translate "Select"] }
+        catch { dui item config $page_to_hide bar_right -label [translate "Advanced"] }
+        catch { dui item config $page_to_hide recent_status -text "" }
+    }
 }
 
 namespace eval ::dui::pages::ShotHistoryEditor_advanced {
@@ -3782,54 +6615,52 @@ namespace eval ::dui::pages::ShotHistoryEditor_advanced {
         ::plugins::ShotHistoryEditor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
 
-        dui add dtext $page $cx $L(header_title_y) -tags page_title -text [translate "Advanced / Source Inspector"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(text_body) -anchor center -justify center
-        dui add dtext $page $cx $L(header_subtitle_y) -tags subtitle \
-            -text [translate "Optional tools. Not required for normal use."] \
-            -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor center -justify center
+        # v0.15.1 (F13): the shared sub-page header (40 px title).
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Advanced" \
+            "Optional tools. Not required for normal use."
         dui add dtext $page $lx $L(toolbar_y0) -tags deleted_note -text "" \
             -font $L(font_caption) -width $L(content_w) -fill $L(warn) -anchor nw -justify left
 
-        set y $L(list_top)
-        dui add dbutton $page $lx $y $rx [expr {$y+$L(btn_h)}] -tags source_inspector \
-            -label [translate "Source Inspector (Shot Detail)"] -command {::plugins::ShotHistoryEditor::open_page ShotHistoryEditor_recent} \
-            -label_font $L(font_button) -style she_btn
-        incr y [expr {$L(btn_h)+$L(md)}]
-        dui add dbutton $page $lx $y $rx [expr {$y+$L(btn_h)}] -tags diagnostics \
-            -label [translate "Diagnostics"] -command {::plugins::ShotHistoryEditor::open_page ShotHistoryEditor_diagnostics} \
-            -label_font $L(font_button) -style she_btn
-        incr y [expr {$L(btn_h)+$L(md)}]
-        dui add dbutton $page $lx $y $rx [expr {$y+$L(btn_h)}] -tags help_guide \
-            -label [translate "Help / Guide"] -command {::plugins::ShotHistoryEditor::open_page ShotHistoryEditor_help} \
-            -label_font $L(font_button) -style she_btn
-        incr y [expr {$L(btn_h)+$L(md)}]
-        dui add dbutton $page $lx $y $rx [expr {$y+$L(btn_h)}] -tags trash_restore \
-            -label [translate "Trash / Restore"] -command {::plugins::ShotHistoryEditor::open_page ShotHistoryEditor_trash} \
-            -label_font $L(font_button) -style she_btn
-        incr y [expr {$L(btn_h)+$L(md)}]
-        # v0.9.0: read-only reconciliation view (see _reconcile_records).
-        dui add dbutton $page $lx $y $rx [expr {$y+$L(btn_h)}] -tags reconcile \
-            -label [translate "Reconcile hidden shots"] -command {::plugins::ShotHistoryEditor::open_page ShotHistoryEditor_reconcile} \
-            -label_font $L(font_button) -style she_btn
-        incr y [expr {$L(btn_h)+$L(md)}]
-        # v0.13.0: removes only EMPTY folders directly under the plugin trash.
-        dui add dbutton $page $lx $y $rx [expr {$y+$L(btn_h)}] -tags tidy \
-            -label [translate "Tidy empty trash folders"] -command ::plugins::ShotHistoryEditor::tidy_trash_folders \
-            -label_font $L(font_button) -style she_btn
+        # v0.15.2 (F18): grouped by purpose -- two section cards from
+        # list_top (were six full-width buttons). Recover (left) brings
+        # deleted shots back: Trash / Restore, and Reconcile (v0.9.0) with
+        # its Unhide. Inspect (right) holds the read-only views. Same
+        # buttons, tags and commands. Tidy moved to the Trash page, beside
+        # Empty trash..., where it says how many folders it would remove.
+        set col_w $L(sec_col_w)
+        set pitch [expr {$L(btn_h) + $L(md)}]
+        foreach {card x title rows} [list \
+            sec_recover $lx "Recover" {
+                trash_restore "Trash / Restore" ShotHistoryEditor_trash
+                reconcile "Reconcile hidden shots" ShotHistoryEditor_reconcile} \
+            sec_inspect $L(sec_col2_x) "Inspect" {
+                source_inspector "Source Inspector (Shot Detail)" ShotHistoryEditor_recent
+                diagnostics "Diagnostics" ShotHistoryEditor_diagnostics
+                help_guide "Help / Guide" ShotHistoryEditor_help}] {
+            set n [expr {[llength $rows] / 3}]
+            set h [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + $n * $pitch - $L(md)}]
+            set y [::plugins::ShotHistoryEditor::_sec_card $page $card $x $L(list_top) $col_w $h $title]
+            foreach {tag label target} $rows {
+                dui add dbutton $page [expr {$x + $L(sec_pad)}] $y \
+                    [expr {$x + $col_w - $L(sec_pad)}] [expr {$y + $L(btn_h)}] -tags $tag \
+                    -label [translate $label] -command [list ::plugins::ShotHistoryEditor::open_page $target] \
+                    -label_font $L(font_button) -style she_btn
+                incr y $pitch
+            }
+        }
 
         # v0.4.1 bugfix: was open_page (open_dialog on an ancestor already in
         # the stack, same fault class as the delete-flow exits -- see
         # _return_to_page). Advanced is only ever reached from the main
         # settings page, so this call always targets the immediate parent.
-        dui add dbutton $page $lx $L(bar_y0) [expr {$lx+$L(btn_w_std)}] $L(bar_y1) -tags back \
-            -label [translate "Back"] -command {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_settings} \
-            -label_font $L(font_button) -style she_btn
+        # v0.15.1 (F13): drawn by the shared _add_back.
+        ::plugins::ShotHistoryEditor::_add_back $page \
+            {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_settings}
     }
 
     proc show {page_to_hide page_to_show} {
-        # v0.13.0: the note is built by refresh_advanced_page (also called
-        # after Tidy); a Tidy result shows only until the page is next shown.
-        set ::plugins::ShotHistoryEditor::tidy_note ""
+        # v0.13.0: the note is built by refresh_advanced_page. v0.15.2: the
+        # Tidy result moved to the Trash page with the button.
         ::plugins::ShotHistoryEditor::refresh_advanced_page $page_to_show
     }
 }
@@ -3841,8 +6672,8 @@ namespace eval ::dui::pages::ShotHistoryEditor_delete_review {
         ::plugins::ShotHistoryEditor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Delete -- Step 1: Review"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(danger) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Delete -- Step 1: Review" \
+            "Nothing has moved yet. Check the list, then tap Continue." danger
         dui add dtext $page $lx $L(toolbar_y0) -tags review_count_text -text "" \
             -font $L(font_body) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
         dui add dtext $page $lx [expr {$L(toolbar_y0)+$L(lg)}] -tags review_intro \
@@ -3880,8 +6711,8 @@ namespace eval ::dui::pages::ShotHistoryEditor_delete_confirm {
         ::plugins::ShotHistoryEditor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Delete -- Step 2: Confirm"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(danger) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Delete -- Step 2: Confirm" \
+            "The shots move to the plugin trash; Trash / Restore can bring them back." danger
 
         # Typed confirmation input stays in the top half of the screen (Android
         # keyboard covers the bottom).
@@ -3919,8 +6750,8 @@ namespace eval ::dui::pages::ShotHistoryEditor_delete_result {
         ::plugins::ShotHistoryEditor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Delete Result"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(text_body) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Delete Result" \
+            "The outcome of the delete. Moved shots can be restored from Trash / Restore."
         dui add dtext $page $lx $L(list_top) -tags result_text -text "" \
             -font $L(font_body) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
 
@@ -3943,8 +6774,8 @@ namespace eval ::dui::pages::ShotHistoryEditor_edit_confirm {
         ::plugins::ShotHistoryEditor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Save -- Confirm Change"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(danger) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Save -- Confirm Change" \
+            "The file is backed up first, and only this one field changes." danger
 
         dui add dtext $page $lx $L(toolbar_y0) -tags confirm_shot_text -text "" \
             -font $L(font_body) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
@@ -3987,8 +6818,8 @@ namespace eval ::dui::pages::ShotHistoryEditor_edit_result {
         ::plugins::ShotHistoryEditor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Save Result"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(text_body) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Save Result" \
+            "The outcome of the save, and where the backup was written."
         dui add dtext $page $lx $L(list_top) -tags edit_result_text -text "" \
             -font $L(font_body) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
 
@@ -4011,76 +6842,74 @@ namespace eval ::dui::pages::ShotHistoryEditor_trash {
         upvar #0 ::plugins::ShotHistoryEditor::L L
         ::plugins::ShotHistoryEditor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
-        set restore_w $L(btn_w_std)
-        set text_w [expr {$L(content_w)-$restore_w-$L(lg)}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Trash / Restore"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(text_body) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Trash / Restore" \
+            "Deleted shots wait here in batches; Restore puts a batch back."
         dui add dtext $page $lx $L(toolbar_y0) -tags trash_status -text "" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor nw -justify left
 
-        set header_y [expr {$L(toolbar_y1)+$L(sm)}]
-        dui add dtext $page $lx $header_y -tags header \
-            -text "Deleted  |  shots, files  |  batch id" \
-            -font $L(font_caption) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
-
-        set n_rows $::plugins::ShotHistoryEditor::trash_page_size
-        set list_start [expr {$header_y+$L(caption_h)+$L(md)}]
-        set list_end [expr {$L(bar_y0)-$L(md)}]
-        set row_h [expr {double($list_end-$list_start)/$n_rows}]
-        # v0.8.5: each row is a band of row_h; the text line and the button
-        # are both centred in it, and the button takes the design-system
-        # height (btn_h, the 60 px touch minimum) when the band allows, else
-        # the band minus sm. Was a fixed 0.7 x btn_h = 42 physical px.
-        set row_btn_h [expr {min($L(btn_h), $row_h - $L(sm))}]
-        for {set i 0} {$i < $n_rows} {incr i} {
-            set band_top [expr {$list_start + $i*$row_h}]
-            set ty [expr {$band_top + ($row_h - $L(caption_h))/2.0}]
-            set by0 [expr {$band_top + ($row_h - $row_btn_h)/2.0}]
-            dui add dtext $page $lx $ty -tags row${i}_text -text "" \
-                -font $L(font_caption) -width $text_w -fill $L(text_body) -anchor nw -justify left
-            dui add dbutton $page [expr {$rx-$restore_w}] $by0 $rx [expr {$by0+$row_btn_h}] \
+        # v0.14.0 (F6): the house card list -- the main page's geometry and
+        # tokens exactly (list_top, card_h, card_gap, three text lines, one
+        # card action button) -- five batches per page, each card naming its
+        # shot (_trash_card_lines). Restore stays per batch. The old column
+        # header line is gone: the cards say what they are.
+        set btn_x2 [expr {$rx - $L(card_pad_x)}]
+        set btn_x1 [expr {$btn_x2 - $L(card_btn_w)}]
+        set text_x [expr {$lx + $L(card_pad_x)}]
+        set text_w [expr {$L(card_w) - 2*$L(card_pad_x) - $L(card_btn_w) - $L(xl)}]
+        # Every card part starts HIDDEN (-initial_state hidden, the core's
+        # own pattern): page load re-shows items that are not tagged hidden
+        # before show{} runs, so empty slots flashed as blank cards with a
+        # Restore button (review). refresh_trash_page shows the used ones.
+        for {set i 0} {$i < $::plugins::ShotHistoryEditor::trash_page_size} {incr i} {
+            set top [expr {$L(list_top) + $i*($L(card_h)+$L(card_gap))}]
+            set bottom [expr {$top + $L(card_h)}]
+            ::plugins::ShotHistoryEditor::rounded_rect $page $lx $top $rx $bottom $L(card_radius) \
+                -fill $L(card_bg) -outline $L(card_outline) -width 2 -tags row${i}_bg \
+                -initial_state hidden
+            dui add dtext $page $text_x [expr {$top+$L(card_line1_dy)}] -tags row${i}_line1 -text "" \
+                -font $L(font_primary) -width $text_w -fill $L(text_hi) -anchor w -justify left \
+                -initial_state hidden
+            dui add dtext $page $text_x [expr {$top+$L(card_line2_dy)}] -tags row${i}_line2 -text "" \
+                -font $L(font_body) -width $text_w -fill $L(text_body) -anchor w -justify left \
+                -initial_state hidden
+            dui add dtext $page $text_x [expr {$top+$L(card_line3_dy)}] -tags row${i}_line3 -text "" \
+                -font $L(font_caption) -width $text_w -fill $L(text_mut) -anchor w -justify left \
+                -initial_state hidden
+            set btn_y1 [expr {$top + int(($L(card_h)-$L(card_btn_h))/2)}]
+            dui add dbutton $page $btn_x1 $btn_y1 $btn_x2 [expr {$btn_y1 + $L(card_btn_h)}] \
                 -tags row${i}_restore -label [translate "Restore"] \
-                -command "::plugins::ShotHistoryEditor::restore_row $i" -label_font $L(font_button) -style she_btn
+                -command "::plugins::ShotHistoryEditor::restore_row $i" -label_font $L(font_button) -style she_btn \
+                -initial_state hidden
         }
 
-        # v0.6.2: Done leads the row from the far left; Back and the pager
-        # keep their order behind it.
+        # v0.15.1 (F13): one way out -- Back, bottom-left (Done ran the same
+        # return and is gone). Empty trash... (opens the read-only PREVIEW
+        # page, v0.11.0) takes the next slot; the standard pager holds the
+        # bottom-right corner. Trash is only ever reached from Advanced.
         set bw $L(btn_w_std)
-        set x $lx
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags page_done \
-            -label [translate "Done"] -command ::dui::pages::ShotHistoryEditor_trash::page_done \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags back \
-            -label [translate "Back"] -command {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced} \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags trash_prev_page \
-            -label [translate "[::plugins::ShotHistoryEditor::_u 0x25c0] Prev"] -command {::plugins::ShotHistoryEditor::scroll_trash -1} \
-            -label_font $L(font_button) -style she_btn
-        # v0.9.1: Next beside Prev (was missing; see refresh_trash_page).
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags trash_next_page \
-            -label [translate "Next [::plugins::ShotHistoryEditor::_u 0x25b6]"] -command {::plugins::ShotHistoryEditor::scroll_trash 1} \
-            -label_font $L(font_button) -style she_btn
-        # v0.11.0: far right, opens the Empty trash PREVIEW page (read-only).
-        dui add dbutton $page [expr {$rx-$bw}] $L(bar_y0) $rx $L(bar_y1) -tags empty_preview \
+        set x [::plugins::ShotHistoryEditor::_add_back $page \
+            {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced}]
+        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags empty_preview \
             -label [translate "Empty trash..."] -command {::plugins::ShotHistoryEditor::open_page ShotHistoryEditor_empty_preview} \
             -label_font $L(font_button) -style she_btn
+        # v0.15.2 (F18): Tidy moved here from Advanced. It removes only EMPTY
+        # folders directly under the plugin trash (v0.13.0, unchanged) and
+        # now says how many -- "Tidy N empty folders", greyed out at 0
+        # (_refresh_tidy_btn). Wide: its label needs more than btn_w_std.
+        incr x [expr {$bw+$L(sm)}]
+        dui add dbutton $page $x $L(bar_y0) [expr {$x+$L(btn_w_xwide)}] $L(bar_y1) -tags tidy \
+            -label [translate "Tidy empty folders"] -command ::plugins::ShotHistoryEditor::tidy_trash_folders \
+            -label_font $L(font_button) -style she_btn
+        ::plugins::ShotHistoryEditor::_add_pager $page trash_prev_page trash_next_page \
+            {::plugins::ShotHistoryEditor::scroll_trash -1} {::plugins::ShotHistoryEditor::scroll_trash 1}
     }
 
     proc show {page_to_hide page_to_show} {
         set ::plugins::ShotHistoryEditor::trash_offset 0
+        # v0.15.2: a Tidy result shows only until the page is next shown.
+        set ::plugins::ShotHistoryEditor::tidy_note ""
         ::plugins::ShotHistoryEditor::refresh_trash_page $page_to_show
-    }
-
-    # Trash is only ever reached from Advanced, so that is always the real
-    # target (matches this page's own Back button). v0.5.3: routed through
-    # _return_to_page (close_dialog-based unwind) like every other internal
-    # return -- see _return_to_page's note.
-    proc page_done {} {
-        ::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced
     }
 }
 
@@ -4093,8 +6922,8 @@ namespace eval ::dui::pages::ShotHistoryEditor_recent {
         set open_w $L(btn_w_std)
         set text_w [expr {$L(content_w)-$open_w-$L(lg)}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Source Inspector"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(text_body) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Source Inspector" \
+            "The newest shots in SDB. Open one to see its source files."
         dui add dtext $page $lx $L(toolbar_y0) -tags recent_status -text "" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor nw -justify left
         set header_y [expr {$L(toolbar_y1)+$L(sm)}]
@@ -4126,25 +6955,14 @@ namespace eval ::dui::pages::ShotHistoryEditor_recent {
                 -command "::plugins::ShotHistoryEditor::select_recent_row $i" -label_font $L(font_button) -style she_btn
         }
 
-        # v0.6.2: Done at the far left, Back beside it.
-        set bw $L(btn_w_std)
-        dui add dbutton $page $lx $L(bar_y0) [expr {$lx+$bw}] $L(bar_y1) -tags page_done \
-            -label [translate "Done"] -command ::dui::pages::ShotHistoryEditor_recent::page_done \
-            -label_font $L(font_button) -style she_btn
-        set back_x [expr {$lx+$bw+$L(sm)}]
-        dui add dbutton $page $back_x $L(bar_y0) [expr {$back_x+$bw}] $L(bar_y1) -tags back \
-            -label [translate "Back"] -command {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced} \
-            -label_font $L(font_button) -style she_btn
+        # v0.15.1 (F13): one way out -- Back, bottom-left (Done ran the same
+        # return and is gone). Only ever reached from Advanced.
+        ::plugins::ShotHistoryEditor::_add_back $page \
+            {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced}
     }
 
     proc show {page_to_hide page_to_show} {
         ::plugins::ShotHistoryEditor::refresh_recent_page $page_to_show
-    }
-
-    # Recent (Source Inspector) is only ever reached from Advanced. v0.5.3:
-    # routed through _return_to_page like every other internal return.
-    proc page_done {} {
-        ::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced
     }
 }
 
@@ -4155,49 +6973,31 @@ namespace eval ::dui::pages::ShotHistoryEditor_detail {
         ::plugins::ShotHistoryEditor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Shot Detail"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(text_body) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Shot Detail" \
+            "This shot's saved details. Edit Metadata Preview changes one field."
         dui add dtext $page $lx $L(toolbar_y0) -tags detail_page_status -text "" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor nw -justify left
         dui add dtext $page $lx $L(list_top) -tags detail_text -text "" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
 
-        set bw $L(btn_w_std)
-        # v0.6.2: Done leads, then Back / Prev / Next in their existing order,
-        # and Edit Metadata Preview still fills the rest of the bar. Every
-        # button keeps the width it had -- the wide one included, since it
-        # gains on the right exactly what the row lost on the left.
-        set x $lx
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags page_done \
-            -label [translate "Done"] -command ::dui::pages::ShotHistoryEditor_detail::page_done \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags back \
-            -label [translate "Back"] -command {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_recent} \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags prev_page \
-            -label [translate "Prev"] -command {::plugins::ShotHistoryEditor::scroll_page detail -1 ShotHistoryEditor_detail} \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags next_page \
-            -label [translate "Next"] -command {::plugins::ShotHistoryEditor::scroll_page detail 1 ShotHistoryEditor_detail} \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) $rx $L(bar_y1) -tags edit_preview \
+        # v0.15.1 (F13): one way out -- Back, bottom-left (Done ran the same
+        # return and is gone); Edit Metadata Preview takes the next slot
+        # (wide: 300 ref, its label needs more than btn_w_std) and the
+        # standard pager holds the bottom-right corner. Shot Detail is only
+        # ever reached from Source Inspector.
+        set x [::plugins::ShotHistoryEditor::_add_back $page \
+            {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_recent}]
+        dui add dbutton $page $x $L(bar_y0) [expr {$x+$L(btn_w_xwide)}] $L(bar_y1) -tags edit_preview \
             -label [translate "Edit Metadata Preview"] -command {::plugins::ShotHistoryEditor::open_edit_preview ShotHistoryEditor_detail} \
             -label_font $L(font_button) -style she_btn
+        ::plugins::ShotHistoryEditor::_add_pager $page prev_page next_page \
+            {::plugins::ShotHistoryEditor::scroll_page detail -1 ShotHistoryEditor_detail} \
+            {::plugins::ShotHistoryEditor::scroll_page detail 1 ShotHistoryEditor_detail}
     }
 
     proc show {page_to_hide page_to_show} {
         set ::plugins::ShotHistoryEditor::detail_page_index 0
         ::plugins::ShotHistoryEditor::scroll_page detail 0 $page_to_show
-    }
-
-    # Shot Detail is only ever reached from Recent, matching its Back button.
-    # v0.5.3: routed through _return_to_page like every other internal return.
-    proc page_done {} {
-        ::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_recent
     }
 }
 
@@ -4209,8 +7009,8 @@ namespace eval ::dui::pages::ShotHistoryEditor_edit_preview {
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
         set vx $L(value_x)
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Edit Preview"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(text_body) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Edit Preview" \
+            "Pick a field and a new value. Nothing is saved until you confirm."
         dui add dtext $page $lx $L(toolbar_y0) -tags selected_shot -text "" \
             -font $L(font_body) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
         dui add dtext $page $lx [expr {$L(toolbar_y0)+$L(lg)}] -tags editable_source -text "" \
@@ -4256,38 +7056,15 @@ namespace eval ::dui::pages::ShotHistoryEditor_edit_preview {
         dui add dtext $page $lx [expr {$status_y+$L(xl)}] -tags preview_text -text "" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
 
-        # v0.6.1, owner request: Done sits at the FAR LEFT on this page, not
-        # the far right.
-        #
-        # This page's Done returns to the card list, whose own Done is the
-        # bar's left button (bar_left, and the design system's "Done left /
-        # Advanced right"). With Done here on the right, leaving the editor
-        # meant tapping the bottom-right corner and then the bottom-LEFT one.
-        # Aligned, it is the same spot twice.
-        #
-        # Back keeps its place beside Done rather than moving to the far
-        # right: on this page the two run the identical command
-        # (page_done reuses back_from_edit_preview), so separating them across
-        # the bar would suggest a difference that does not exist.
-        set done_x1 $lx
-        set back_x1 [expr {$done_x1+$L(btn_w_std)+$L(sm)}]
-        dui add dbutton $page $done_x1 $L(bar_y0) [expr {$done_x1+$L(btn_w_std)}] $L(bar_y1) -tags page_done \
-            -label [translate "Done"] -command ::dui::pages::ShotHistoryEditor_edit_preview::page_done \
-            -label_font $L(font_button) -style she_btn
-        dui add dbutton $page $back_x1 $L(bar_y0) [expr {$back_x1+$L(btn_w_std)}] $L(bar_y1) -tags back \
-            -label [translate "Back"] -command ::plugins::ShotHistoryEditor::back_from_edit_preview \
-            -label_font $L(font_button) -style she_btn
+        # v0.15.1 (F13): one way out -- Back, bottom-left, the same corner
+        # as the card list's own Done (v0.6.1 owner request). Done ran the
+        # identical command (back_from_edit_preview, to the real caller in
+        # edit_return_page) and is gone.
+        ::plugins::ShotHistoryEditor::_add_back $page ::plugins::ShotHistoryEditor::back_from_edit_preview
     }
 
     proc show {page_to_hide page_to_show} {
         ::plugins::ShotHistoryEditor::refresh_edit_preview_page $page_to_show
-    }
-
-    # v0.5.2: was a raw dui page close_dialog -- see _navigate_done's note.
-    # Reuses back_from_edit_preview so Done and Back agree on the same real
-    # target (edit_return_page), same as before this fix in the normal case.
-    proc page_done {} {
-        ::plugins::ShotHistoryEditor::back_from_edit_preview
     }
 }
 
@@ -4298,45 +7075,26 @@ namespace eval ::dui::pages::ShotHistoryEditor_diagnostics {
         ::plugins::ShotHistoryEditor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Diagnostics"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(text_body) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Diagnostics" \
+            "What the plugin found: the SDB database, its tables, your shot folders."
         dui add dtext $page $lx $L(toolbar_y0) -tags diagnostics_page_status -text "" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor nw -justify left
         dui add dtext $page $lx $L(list_top) -tags diagnostics_text -text "" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
 
-        # v0.6.2: the row starts one slot in, because Done now occupies the
-        # far-left slot (added at the end of this block).
-        set bw $L(btn_w_std)
-        set x [expr {$lx+$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags back \
-            -label [translate "Back"] -command {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced} \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags prev_page \
-            -label [translate "Prev"] -command {::plugins::ShotHistoryEditor::scroll_page diagnostics -1 ShotHistoryEditor_diagnostics} \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags next_page \
-            -label [translate "Next"] -command {::plugins::ShotHistoryEditor::scroll_page diagnostics 1 ShotHistoryEditor_diagnostics} \
-            -label_font $L(font_button) -style she_btn
-        # v0.6.2: Done moved from the far right to the far left. It is added
-        # last but positioned first, so Back/Prev/Next keep the x values they
-        # already had and only Done changes place.
-        dui add dbutton $page $lx $L(bar_y0) [expr {$lx+$bw}] $L(bar_y1) -tags page_done \
-            -label [translate "Done"] -command ::dui::pages::ShotHistoryEditor_diagnostics::page_done \
-            -label_font $L(font_button) -style she_btn
+        # v0.15.1 (F13): one way out -- Back, bottom-left (Done ran the same
+        # return and is gone); the standard pager, bottom-right. Only ever
+        # reached from Advanced.
+        ::plugins::ShotHistoryEditor::_add_back $page \
+            {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced}
+        ::plugins::ShotHistoryEditor::_add_pager $page prev_page next_page \
+            {::plugins::ShotHistoryEditor::scroll_page diagnostics -1 ShotHistoryEditor_diagnostics} \
+            {::plugins::ShotHistoryEditor::scroll_page diagnostics 1 ShotHistoryEditor_diagnostics}
     }
 
     proc show {page_to_hide page_to_show} {
         set ::plugins::ShotHistoryEditor::diagnostics_page_index 0
         ::plugins::ShotHistoryEditor::scroll_page diagnostics 0 $page_to_show
-    }
-
-    # Diagnostics is only ever reached from Advanced, matching its Back button.
-    # v0.5.3: routed through _return_to_page like every other internal return.
-    proc page_done {} {
-        ::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced
     }
 }
 
@@ -4347,45 +7105,27 @@ namespace eval ::dui::pages::ShotHistoryEditor_help {
         ::plugins::ShotHistoryEditor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Help / Guide"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(text_body) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Help / Guide" \
+            "How browsing, editing, deleting and restoring work."
 
         dui add dtext $page $lx $L(toolbar_y0) -tags help_page_status -text "" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor nw -justify left
         dui add dtext $page $lx $L(list_top) -tags help_text -text "" \
             -font $L(font_body) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
 
-        # v0.6.2: the row starts one slot in, because Done now occupies the
-        # far-left slot (added at the end of this block).
-        set bw $L(btn_w_std)
-        set x [expr {$lx+$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags back \
-            -label [translate "Back"] -command {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced} \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags prev_page \
-            -label [translate "Prev"] -command {::plugins::ShotHistoryEditor::scroll_page help -1 ShotHistoryEditor_help} \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags next_page \
-            -label [translate "Next"] -command {::plugins::ShotHistoryEditor::scroll_page help 1 ShotHistoryEditor_help} \
-            -label_font $L(font_button) -style she_btn
-        # v0.6.2: Done moved from the far right to the far left. Added last,
-        # positioned first, so the other three keep their existing x values.
-        dui add dbutton $page $lx $L(bar_y0) [expr {$lx+$bw}] $L(bar_y1) -tags page_done \
-            -label [translate "Done"] -command ::dui::pages::ShotHistoryEditor_help::page_done \
-            -label_font $L(font_button) -style she_btn
+        # v0.15.1 (F13): one way out -- Back, bottom-left (Done ran the same
+        # return and is gone); the standard pager, bottom-right. Only ever
+        # reached from Advanced.
+        ::plugins::ShotHistoryEditor::_add_back $page \
+            {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced}
+        ::plugins::ShotHistoryEditor::_add_pager $page prev_page next_page \
+            {::plugins::ShotHistoryEditor::scroll_page help -1 ShotHistoryEditor_help} \
+            {::plugins::ShotHistoryEditor::scroll_page help 1 ShotHistoryEditor_help}
     }
 
     proc show {page_to_hide page_to_show} {
         set ::plugins::ShotHistoryEditor::help_page_index 0
         ::plugins::ShotHistoryEditor::scroll_page help 0 $page_to_show
-    }
-
-    # Help is only ever reached from Advanced, matching its Back button.
-    # v0.5.3: routed through _return_to_page like every other internal return.
-    proc page_done {} {
-        ::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced
     }
 }
 
@@ -4401,8 +7141,8 @@ namespace eval ::dui::pages::ShotHistoryEditor_reconcile {
         set unhide_w $L(btn_w_std)
         set text_w [expr {$L(content_w)-$unhide_w-$L(lg)}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Reconcile hidden shots"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(text_body) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Reconcile hidden shots" \
+            "Trashed shots whose files are back in history/. Unhide lists them again."
         dui add dtext $page $lx $L(toolbar_y0) -tags reconcile_status -text "" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor nw -justify left
 
@@ -4429,23 +7169,13 @@ namespace eval ::dui::pages::ShotHistoryEditor_reconcile {
                 -command "::plugins::ShotHistoryEditor::unhide_row $i" -label_font $L(font_button) -style she_btn
         }
 
-        set bw $L(btn_w_std)
-        set x $lx
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags page_done \
-            -label [translate "Done"] -command ::dui::pages::ShotHistoryEditor_reconcile::page_done \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags back \
-            -label [translate "Back"] -command {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced} \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags reconcile_prev_page \
-            -label [translate "[::plugins::ShotHistoryEditor::_u 0x25c0] Prev"] -command {::plugins::ShotHistoryEditor::scroll_reconcile -1} \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags reconcile_next_page \
-            -label [translate "Next [::plugins::ShotHistoryEditor::_u 0x25b6]"] -command {::plugins::ShotHistoryEditor::scroll_reconcile 1} \
-            -label_font $L(font_button) -style she_btn
+        # v0.15.1 (F13): one way out -- Back, bottom-left (Done ran the same
+        # return and is gone). Only ever reached from Advanced.
+        ::plugins::ShotHistoryEditor::_add_back $page \
+            {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced}
+        # v0.13.1: the standard pager, bottom-right.
+        ::plugins::ShotHistoryEditor::_add_pager $page reconcile_prev_page reconcile_next_page \
+            {::plugins::ShotHistoryEditor::scroll_reconcile -1} {::plugins::ShotHistoryEditor::scroll_reconcile 1}
     }
 
     proc show {page_to_hide page_to_show} {
@@ -4453,14 +7183,9 @@ namespace eval ::dui::pages::ShotHistoryEditor_reconcile {
         set ::plugins::ShotHistoryEditor::reconcile_note ""
         ::plugins::ShotHistoryEditor::refresh_reconcile_page $page_to_show
     }
-
-    # Only ever reached from Advanced, matching its Back button.
-    proc page_done {} {
-        ::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_advanced
-    }
 }
 
-# v0.11.0: Empty trash PREVIEW. Diagnostics skeleton (paged text, Done / Back /
+# v0.11.0: Empty trash PREVIEW. Diagnostics skeleton (paged text, Back /
 # Prev / Next); content from empty_trash_preview_text; reached from the Trash
 # page and returns there. Nothing on this page deletes anything.
 namespace eval ::dui::pages::ShotHistoryEditor_empty_preview {
@@ -4470,35 +7195,32 @@ namespace eval ::dui::pages::ShotHistoryEditor_empty_preview {
         ::plugins::ShotHistoryEditor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Empty trash - preview"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(text_body) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Empty trash - preview" \
+            "What Empty trash would remove for good. Nothing is removed on this page."
         dui add dtext $page $lx $L(toolbar_y0) -tags empty_preview_page_status -text "" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor nw -justify left
         dui add dtext $page $lx $L(list_top) -tags empty_preview_text -text "" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
 
+        # v0.15.1 (F13): one way out -- Back, bottom-left (Done ran the same
+        # return and is gone). Only ever reached from the Trash page.
         set bw $L(btn_w_std)
-        set x [expr {$lx+$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags back \
-            -label [translate "Back"] -command {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_trash} \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags prev_page \
-            -label [translate "Prev"] -command {::plugins::ShotHistoryEditor::scroll_page empty_preview -1 ShotHistoryEditor_empty_preview} \
-            -label_font $L(font_button) -style she_btn
-        incr x [expr {$bw+$L(sm)}]
-        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags next_page \
-            -label [translate "Next"] -command {::plugins::ShotHistoryEditor::scroll_page empty_preview 1 ShotHistoryEditor_empty_preview} \
-            -label_font $L(font_button) -style she_btn
-        dui add dbutton $page $lx $L(bar_y0) [expr {$lx+$bw}] $L(bar_y1) -tags page_done \
-            -label [translate "Done"] -command ::dui::pages::ShotHistoryEditor_empty_preview::page_done \
-            -label_font $L(font_button) -style she_btn
-        # v0.12.0: the real action, far right, danger label; hidden while the
-        # trash is empty. Opens the typed confirmation; deletes nothing itself.
-        dui add dbutton $page [expr {$rx-$bw}] $L(bar_y0) $rx $L(bar_y1) -tags empty_now \
+        ::plugins::ShotHistoryEditor::_add_back $page \
+            {::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_trash}
+        # v0.12.0: the real action, danger label; hidden while the trash is
+        # empty. Opens the typed confirmation; deletes nothing itself.
+        # v0.15.1 (review): in the RIGHT group, an sm gap left of Prev -- never
+        # in the slot beside Back, where a thumb tapping its way out lands
+        # (with Done gone that slot was Back's old place).
+        set prev_x0 [expr {$L(right_x) - 2*$bw - $L(sm)}]
+        set x [expr {$prev_x0 - $L(sm) - $bw}]
+        dui add dbutton $page $x $L(bar_y0) [expr {$x+$bw}] $L(bar_y1) -tags empty_now \
             -label [translate "Empty trash"] -label_fill $L(danger) \
             -command ::plugins::ShotHistoryEditor::open_purge_confirm \
             -label_font $L(font_button) -style she_btn
+        ::plugins::ShotHistoryEditor::_add_pager $page prev_page next_page \
+            {::plugins::ShotHistoryEditor::scroll_page empty_preview -1 ShotHistoryEditor_empty_preview} \
+            {::plugins::ShotHistoryEditor::scroll_page empty_preview 1 ShotHistoryEditor_empty_preview}
     }
 
     proc show {page_to_hide page_to_show} {
@@ -4509,11 +7231,6 @@ namespace eval ::dui::pages::ShotHistoryEditor_empty_preview {
         } else {
             catch { dui item hide $page_to_show empty_now* -initial 1 }
         }
-    }
-
-    # Only ever reached from the Trash page, matching its Back button.
-    proc page_done {} {
-        ::plugins::ShotHistoryEditor::_return_to_page ShotHistoryEditor_trash
     }
 }
 
@@ -4526,8 +7243,8 @@ namespace eval ::dui::pages::ShotHistoryEditor_purge_confirm {
         ::plugins::ShotHistoryEditor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Empty trash -- Confirm (permanent)"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(danger) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Empty trash -- Confirm (permanent)" \
+            "Removes the plugin trash for good. history/ is never touched." danger
         dui add dtext $page $lx $L(toolbar_y0) -tags purge_instructions -text "" \
             -font $L(font_body) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
         dui add entry $page $lx [expr {$L(toolbar_y0)+3*$L(lg)}] -tags purge_entry \
@@ -4559,8 +7276,8 @@ namespace eval ::dui::pages::ShotHistoryEditor_purge_result {
         ::plugins::ShotHistoryEditor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
 
-        dui add dtext $page $cx $L(header_solo_title_y) -tags page_title -text [translate "Empty trash - result"] \
-            -font $L(font_section) -width $L(content_w) -fill $L(text_body) -anchor center -justify center
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Empty trash - result" \
+            "The outcome of Empty trash. purge_log.txt lists every removed file."
         dui add dtext $page $lx $L(list_top) -tags purge_result_text -text "" \
             -font $L(font_body) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
 
@@ -4571,5 +7288,396 @@ namespace eval ::dui::pages::ShotHistoryEditor_purge_result {
 
     proc show {page_to_hide page_to_show} {
         ::plugins::ShotHistoryEditor::refresh_purge_result_page $page_to_show
+    }
+}
+
+# ---------------------------------------------------------------------------
+# v0.16.0 -- the Bags pages. Bags is the main page's second tab (same header,
+# Shots / Bags tabs top-left, theme toggle top-right, Done exits the plugin);
+# Edit bag and Review are its sub-pages with one Back each (F13 helpers, so
+# _retheme_all repaints their headers, Backs, pagers and backgrounds). Layout
+# comes from the L tokens (_init_layout, _init_bag_layout) only.
+# ---------------------------------------------------------------------------
+
+namespace eval ::dui::pages::ShotHistoryEditor_bags {
+    proc setup {} {
+        set page [namespace tail [namespace current]]
+        upvar #0 ::plugins::ShotHistoryEditor::L L
+        ::plugins::ShotHistoryEditor::_page_bg $page
+        set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
+
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Shot History Editor" \
+            "A bag is every shot with the same roaster and bag name."
+        ::plugins::ShotHistoryEditor::_add_view_tabs $page bags
+        dui add dbutton $page [expr {$rx-$L(btn_h)}] $L(top_btn_y) $rx [expr {$L(top_btn_y)+$L(btn_h)}] \
+            -tags btn_theme -label [::plugins::ShotHistoryEditor::_theme_button_face] \
+            -command ::plugins::ShotHistoryEditor::toggle_theme \
+            -label_font [expr {$L(have_icons) ? $L(font_icon) : $L(font_button)}] \
+            -style she_btn
+
+        # v0.18.1: centred in the toolbar row, as on the Shots tab.
+        dui add dtext $page $cx $L(toolbar_mid_y) -tags bags_status -text "" \
+            -font $L(font_caption) -width $L(toolbar_status_w) -fill $L(text_mut) -anchor center -justify center
+
+        # Six tiles, 3 x 2. Every part starts hidden (the page-show flash
+        # trap); _paint_bags_page shows the used ones.
+        lassign [::plugins::ShotHistoryEditor::_bag_tile_widths] w_line w_roaster w_footer
+        set pad $L(card_pad_x)
+        for {set i 0} {$i < $::plugins::ShotHistoryEditor::bag_page_size} {incr i} {
+            lassign [::plugins::ShotHistoryEditor::_bag_tile_box $i] x0 y0 x1 y1
+            set p bag${i}_
+            set tx [expr {$x0 + $pad}]
+            ::plugins::ShotHistoryEditor::rounded_rect $page $x0 $y0 $x1 $y1 $L(card_radius) \
+                -fill $L(card_bg) -outline $L(card_outline) -width 2 -tags ${p}bg -initial_state hidden
+            dui add dtext $page $tx [expr {$y0+$L(bag_roaster_dy)}] -tags ${p}roaster -text "" \
+                -font $L(font_caption) -width $w_roaster -fill $L(text_mut) -anchor nw -justify left \
+                -initial_state hidden
+            set px1 [expr {$x1 - $pad}]
+            set px0 [expr {$px1 - $L(bag_pill_w)}]
+            set py0 [expr {$y0 + $L(bag_pill_dy)}]
+            set py1 [expr {$py0 + $L(bag_pill_h)}]
+            ::plugins::ShotHistoryEditor::rounded_rect $page $px0 $py0 $px1 $py1 [expr {$L(bag_pill_h)/2}] \
+                -fill $L(inuse_bg) -outline $L(inuse_bg) -width 0 -tags ${p}pill_bg -initial_state hidden
+            dui add dtext $page [expr {($px0+$px1)/2}] [expr {($py0+$py1)/2}] -tags ${p}pill_txt \
+                -text [translate "IN USE"] -font $L(font_caption) -fill $L(inuse_text) -anchor center \
+                -initial_state hidden
+            dui add dtext $page $tx [expr {$y0+$L(bag_name_dy)}] -tags ${p}name -text "" \
+                -font $L(font_section) -width $w_line -fill $L(text_hi) -anchor nw -justify left \
+                -initial_state hidden
+
+            set cy0 [expr {$y0 + $L(bag_chip_dy)}]
+            set cy1 [expr {$cy0 + $L(bag_chip_h)}]
+            set cym [expr {($cy0 + $cy1) / 2}]
+            set lx1 [expr {$tx + $L(bag_lvl_chip_w)}]
+            ::plugins::ShotHistoryEditor::rounded_rect $page $tx $cy0 $lx1 $cy1 [expr {$L(bag_chip_h)/2}] \
+                -fill $L(chip_bg) -outline $L(chip_bg) -width 2 -tags ${p}lvl_bg -initial_state hidden
+            set dx [expr {$tx + $L(bag_dot_dx)}]
+            dui add canvas_item oval $page $dx [expr {$cym-$L(bag_dot_r)}] [expr {$dx+2*$L(bag_dot_r)}] \
+                [expr {$cym+$L(bag_dot_r)}] -fill $L(dot_unknown) -outline $L(dot_outline) -width 2 \
+                -tags ${p}lvl_dot -initial_state hidden
+            dui add dtext $page [expr {($tx+$lx1)/2 + $L(bag_dot_r)}] $cym -tags ${p}lvl_txt -text "" \
+                -font $L(font_caption) -fill $L(text_hi) -anchor center -initial_state hidden
+            set dx0 [expr {$lx1 + $L(md)}]
+            set dx1 [expr {$dx0 + $L(bag_date_chip_w)}]
+            ::plugins::ShotHistoryEditor::rounded_rect $page $dx0 $cy0 $dx1 $cy1 [expr {$L(bag_chip_h)/2}] \
+                -fill $L(chip_bg) -outline $L(chip_bg) -width 2 -tags ${p}date_bg -initial_state hidden
+            dui add dtext $page [expr {($dx0+$dx1)/2}] $cym -tags ${p}date_txt -text "" \
+                -font $L(font_caption) -fill $L(text_hi) -anchor center -initial_state hidden
+
+            dui add dtext $page $tx [expr {$y0+$L(bag_notes_dy)}] -tags ${p}notes -text "" \
+                -font $L(font_caption) -width $w_line -fill $L(text_body) -anchor nw -justify left \
+                -initial_state hidden
+
+            set bx1 [expr {$x1 - $pad}]
+            set bx0 [expr {$bx1 - $L(bag_btn_w)}]
+            set by1 [expr {$y1 - $pad}]
+            set by0 [expr {$by1 - $L(card_btn_h)}]
+            # Footer lines left of the button: shots, date span, cleaning runs.
+            set fy [expr {$y0 + $L(bag_footer_dy)}]
+            dui add dtext $page $tx $fy -tags ${p}count -text "" \
+                -font $L(font_body) -width $w_footer -fill $L(text_body) -anchor nw -justify left \
+                -initial_state hidden
+            dui add dtext $page $tx [expr {$fy+$L(body_h)}] -tags ${p}span -text "" \
+                -font $L(font_caption) -width $w_footer -fill $L(text_mut) -anchor nw -justify left \
+                -initial_state hidden
+            dui add dtext $page $tx [expr {$fy+$L(body_h)+$L(caption_h)}] -tags ${p}clean -text "" \
+                -font $L(font_caption) -width $w_footer -fill $L(clean_text) -anchor nw -justify left \
+                -initial_state hidden
+            dui add dbutton $page $bx0 $by0 $bx1 $by1 -tags ${p}edit \
+                -label [translate "[::plugins::ShotHistoryEditor::_u 0x270e] Edit bag"] \
+                -command "::plugins::ShotHistoryEditor::bag_edit_open $i" \
+                -label_font $L(font_button) -style she_btn -initial_state hidden
+        }
+
+        # Done exits the plugin, as on the Shots tab; the pager holds the
+        # bottom-right corner.
+        dui add dbutton $page $lx $L(bar_y0) [expr {$lx+$L(btn_w_std)}] $L(bar_y1) -tags bags_done \
+            -label [translate "Done"] -command ::plugins::ShotHistoryEditor::bags_done \
+            -label_font $L(font_button) -style she_btn
+        ::plugins::ShotHistoryEditor::_add_pager $page bags_prev bags_next \
+            {::plugins::ShotHistoryEditor::scroll_bags -1} {::plugins::ShotHistoryEditor::scroll_bags 1}
+    }
+
+    proc show {page_to_hide page_to_show} {
+        if {![::plugins::ShotHistoryEditor::_page_is_current $page_to_show]} { return }
+        ::plugins::ShotHistoryEditor::refresh_bags_page $page_to_show
+    }
+}
+
+namespace eval ::dui::pages::ShotHistoryEditor_bag_edit {
+    proc setup {} {
+        set page [namespace tail [namespace current]]
+        upvar #0 ::plugins::ShotHistoryEditor::L L
+        ::plugins::ShotHistoryEditor::_page_bg $page
+        set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
+        set NS ::plugins::ShotHistoryEditor
+
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Edit bag" ""
+
+        # Text fields sit in the top half (y < 800 virtual): the Android
+        # keyboard covers the bottom. Each has a caption label and, right
+        # aligned on the same line, its state note (Changed / differs).
+        set col_w [expr {($L(content_w) - $L(be_col_gap)) / 2}]
+        set xB [expr {$lx + $col_w + $L(be_col_gap)}]
+        set ent_opts [list -font $L(font_body) -borderwidth 1 -relief flat \
+            -bg $L(entry_bg) -foreground $L(text_hi) -insertbackground $L(text_hi)]
+        foreach {key x w y label var} [list \
+            roaster $lx $col_w $L(be_rowA_y) "Roaster" bag_edit_roaster \
+            name $xB $col_w $L(be_rowA_y) "Bag name" bag_edit_name] {
+            dui add dtext $page $x $y -tags bag_lbl_$key -text [translate $label] \
+                -font $L(font_caption) -fill $L(text_mut) -anchor nw -justify left
+            dui add dtext $page [expr {$x+$w}] $y -tags bag_st_$key -text "" \
+                -font $L(font_caption) -fill $L(value_blue) -anchor ne -justify right
+            dui add entry $page $x [expr {$y+$L(be_label_h)}] -tags bag_ent_$key \
+                -textvariable ${NS}::$var -canvas_width $w -canvas_height $L(be_entry_h) {*}$ent_opts
+        }
+
+        set y $L(be_rowB_y)
+        dui add dtext $page $lx $y -tags bag_lbl_notes -text [translate "Notes"] \
+            -font $L(font_caption) -fill $L(text_mut) -anchor nw -justify left
+        dui add dtext $page $rx $y -tags bag_st_notes -text "" \
+            -font $L(font_caption) -fill $L(value_blue) -anchor ne -justify right
+        set w [dui add multiline_entry $page $lx [expr {$y+$L(be_label_h)}] -tags bag_ent_notes \
+            -textvariable ${NS}::bag_edit_notes -canvas_width $L(content_w) -canvas_height $L(be_notes_h) \
+            -wrap word {*}$ent_opts]
+        set ${NS}::bag_notes_widget $w
+        # The notes box writes its variable only when read, so typing there
+        # refreshes the page through a key binding; the entries through traces.
+        if {$w ne "" && [llength [info commands $w]]} {
+            catch { bind [$w getTextWidget] <KeyRelease> [list +${NS}::_bag_edit_trace] }
+        }
+        foreach var {bag_edit_roaster bag_edit_name bag_edit_date} {
+            trace add variable ${NS}::$var write ${NS}::_bag_edit_trace
+        }
+
+        set y $L(be_rowC_y)
+        dui add dtext $page $lx $y -tags bag_lbl_date -text [translate "Roast date"] \
+            -font $L(font_caption) -fill $L(text_mut) -anchor nw -justify left
+        # The date field is narrow: its note starts past the field's right
+        # edge on the label line, clear of the label, hint and button.
+        dui add dtext $page [expr {$lx+$L(be_date_w)+$L(lg)}] $y -tags bag_st_date -text "" \
+            -font $L(font_caption) -fill $L(value_blue) -anchor nw -justify left
+        set ey0 [expr {$y+$L(be_label_h)}]
+        dui add entry $page $lx $ey0 -tags bag_ent_date -textvariable ${NS}::bag_edit_date \
+            -canvas_width $L(be_date_w) -canvas_height $L(be_entry_h) {*}$ent_opts
+        dui add dtext $page [expr {$lx+$L(be_date_w)+$L(lg)}] [expr {$ey0+$L(be_entry_h)/2}] -tags bag_hint_date \
+            -text [translate "YYYY-MM-DD"] -font $L(font_caption) -fill $L(text_mut) -anchor w
+        # Keyboard-safe way out of typing, beside the last field.
+        set hy0 [expr {$ey0 + ($L(be_entry_h) - $L(btn_h))/2}]
+        dui add dbutton $page [expr {$rx-$L(btn_w_wide)}] $hy0 $rx [expr {$hy0+$L(btn_h)}] -tags bag_hidekb \
+            -label [translate "Hide keyboard"] -command ${NS}::bag_hide_keyboard \
+            -label_font $L(font_button) -style she_btn
+
+        # Roast level: one choice per button (no keyboard), lower half.
+        set y $L(be_rowD_y)
+        dui add dtext $page $lx $y -tags bag_lbl_level -text [translate "Roast level"] \
+            -font $L(font_caption) -fill $L(text_mut) -anchor nw -justify left
+        dui add dtext $page $rx $y -tags bag_st_level -text "" \
+            -font $L(font_caption) -fill $L(value_blue) -anchor ne -justify right
+        set n [llength [set ${NS}::bag_levels]]
+        set gap $L(md)
+        set bw [expr {($L(content_w) - ($n-1)*$gap) / $n}]
+        set by0 [expr {$y+$L(be_label_h)}]
+        set k 0
+        foreach lv [set ${NS}::bag_levels] {
+            set bx0 [expr {$lx + $k*($bw+$gap)}]
+            dui add dbutton $page $bx0 $by0 [expr {$bx0+$bw}] [expr {$by0+$L(card_btn_h)}] -tags bag_lvl$k \
+                -label [translate [::plugins::ShotHistoryEditor::_pick [expr {$lv eq ""}] None $lv]] -command "${NS}::bag_pick_level $k" \
+                -label_font $L(font_button) -style she_btn
+            incr k
+        }
+
+        # What the edit touches: three columns on one panel.
+        set py0 $L(be_panel_y0)
+        set py1 $L(be_panel_y1)
+        ::plugins::ShotHistoryEditor::rounded_rect $page $lx $py0 $rx $py1 $L(card_radius) \
+            -fill $L(card_bg) -outline $L(card_outline) -width 2 -tags bag_info_bg
+        set colw3 [expr {$L(content_w) / 3}]
+        set tw [expr {$colw3 - 2*$L(card_pad_x)}]
+        foreach k {0 1 2} head {"APPLIES TO" "ALSO UPDATED" "NEVER CHANGED HERE"} role {text_mut clean_text text_mut} {
+            set tx [expr {$lx + $k*$colw3 + $L(card_pad_x)}]
+            if {$k > 0} {
+                set dvx [expr {$lx + $k*$colw3}]
+                dui add canvas_item rect $page $dvx [expr {$py0+$L(md)}] [expr {$dvx+$L(be_div_w)}] [expr {$py1-$L(md)}] \
+                    -fill $L(card_outline) -outline $L(card_outline) -width 0 -tags bag_info_div$k
+            }
+            set hy [expr {$py0+$L(card_pad_y)}]
+            set vy [expr {$hy+$L(caption_h)+$L(sm)}]
+            set dy [expr {$vy+$L(section_h)+$L(sm)}]
+            dui add dtext $page $tx $hy -tags bag_info_h$k -text [translate $head] \
+                -font $L(font_caption) -width $tw -fill $L($role) -anchor nw -justify left
+            dui add dtext $page $tx $vy -tags bag_info_v$k -text "" \
+                -font $L(font_section) -width $tw -fill $L(text_hi) -anchor nw -justify left
+            dui add dtext $page $tx $dy -tags bag_info_d$k -text "" \
+                -font $L(font_caption) -width $tw -fill $L(text_mut) -anchor nw -justify left
+        }
+
+        # One exit (Back to Bags); Review on the right, disabled until a
+        # field changes.
+        ::plugins::ShotHistoryEditor::_add_back $page ${NS}::bag_edit_back
+        dui add dbutton $page [expr {$rx-$L(btn_w_wide)}] $L(bar_y0) $rx $L(bar_y1) -tags bag_edit_review \
+            -label [translate "Review changes"] -command ${NS}::bag_review_open \
+            -label_font $L(font_button) -style she_btn
+        catch { dui item enable_or_disable 0 $page bag_edit_review* -initial 1 }
+    }
+
+    proc show {page_to_hide page_to_show} {
+        if {![::plugins::ShotHistoryEditor::_page_is_current $page_to_show]} { return }
+        ::plugins::ShotHistoryEditor::_bag_default_pick
+        ::plugins::ShotHistoryEditor::_paint_bag_edit $page_to_show
+    }
+}
+
+namespace eval ::dui::pages::ShotHistoryEditor_bag_review {
+    proc setup {} {
+        set page [namespace tail [namespace current]]
+        upvar #0 ::plugins::ShotHistoryEditor::L L
+        ::plugins::ShotHistoryEditor::_page_bg $page
+        set lx $L(left_x); set rx $L(right_x); set cx [expr {($lx+$rx)/2}]
+        set NS ::plugins::ShotHistoryEditor
+
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Review bag changes" ""
+
+        # One row per bag field: field, now (over every file), after Save.
+        set fx [expr {$lx + $L(card_pad_x)}]
+        set nx [expr {$lx + $L(rv_x_now)}]
+        set ax [expr {$lx + $L(rv_x_after)}]
+        set y $L(rv_head_y)
+        foreach {tag x text} [list rv_h_field $fx "FIELD" rv_h_now $nx "NOW" rv_h_after $ax "AFTER SAVE"] {
+            dui add dtext $page $x $y -tags $tag -text [translate $text] \
+                -font $L(font_caption) -fill $L(text_mut) -anchor nw -justify left
+        }
+        set dy [expr {$L(rv_row_y0) - $L(sm)}]
+        dui add canvas_item rect $page $lx $dy $rx [expr {$dy+$L(be_div_w)}] \
+            -fill $L(card_outline) -outline $L(card_outline) -width 0 -tags rv_div_head
+        for {set k 0} {$k < 5} {incr k} {
+            set y0 [expr {$L(rv_row_y0) + $k*$L(rv_row_h)}]
+            set ym [expr {$y0 + $L(rv_row_h)/2}]
+            dui add dtext $page $fx $ym -tags rv_f$k -text "" -font $L(font_primary) \
+                -fill $L(text_hi) -anchor w -justify left -initial_state hidden
+            dui add dtext $page $nx $ym -tags rv_n$k -text "" -font $L(font_body) \
+                -fill $L(text_body) -anchor w -justify left -initial_state hidden
+            dui add dtext $page $ax $ym -tags rv_a$k -text "" -font $L(font_body) \
+                -fill $L(value_blue) -anchor w -justify left -initial_state hidden
+            set ly [expr {$y0 + $L(rv_row_h) - $L(be_div_w)}]
+            dui add canvas_item rect $page $lx $ly $rx [expr {$ly+$L(be_div_w)}] \
+                -fill $L(card_outline) -outline $L(card_outline) -width 0 -tags rv_d$k -initial_state hidden
+        }
+        dui add dtext $page $lx $L(rv_warn_y) -tags rv_warn -text "" \
+            -font $L(font_caption) -width $L(content_w) -fill $L(warn) -anchor nw -justify left
+
+        # Two panels: what Save will do, and the files.
+        set pw [expr {($L(content_w) - $L(md)) / 2}]
+        set py0 $L(rv_panel_y0)
+        set py1 $L(rv_panel_y1)
+        foreach {bgtag ttag btag ntag x} [list rv_do_bg rv_do_title rv_do_text rv_do_note $lx \
+                                               rv_fl_bg rv_fl_title rv_fl_text rv_fl_more [expr {$lx+$pw+$L(md)}]] {
+            set tx [expr {$x + $L(card_pad_x)}]
+            set tw [expr {$pw - 2*$L(card_pad_x)}]
+            ::plugins::ShotHistoryEditor::rounded_rect $page $x $py0 [expr {$x+$pw}] $py1 $L(card_radius) \
+                -fill $L(card_bg) -outline $L(card_outline) -width 2 -tags $bgtag
+            dui add dtext $page $tx [expr {$py0+$L(card_pad_y)}] -tags $ttag -text "" \
+                -font $L(font_section) -width $tw -fill $L(text_hi) -anchor nw -justify left
+            dui add dtext $page $tx $L(rv_body_y) -tags $btag -text "" \
+                -font $L(font_body) -width $tw -fill $L(text_body) -anchor nw -justify left
+            dui add dtext $page $tx $L(rv_note_y) -tags $ntag -text "" \
+                -font $L(font_caption) -width $tw -fill $L(text_mut) -anchor nw -justify left
+        }
+        dui item config $page rv_do_title -text [translate "What Save will do"]
+
+        ::plugins::ShotHistoryEditor::_add_back $page ${NS}::bag_review_back
+        # Save opens the typed confirmation; enabled only by the snapshot.
+        dui add dbutton $page [expr {$rx-$L(btn_w_wide)}] $L(bar_y0) $rx $L(bar_y1) -tags rv_save \
+            -label [translate "Save"] -command ${NS}::bag_save_open \
+            -label_font $L(font_button) -style she_btn
+        catch { dui item enable_or_disable 0 $page rv_save* -initial 1 }
+    }
+
+    # Painted before every forward open and Back; this only catches a direct
+    # load (DevBridge): the newest bag, its snapshot built here.
+    proc show {page_to_hide page_to_show} {
+        if {![::plugins::ShotHistoryEditor::_page_is_current $page_to_show]} { return }
+        if {$::plugins::ShotHistoryEditor::bag_cur eq ""} {
+            ::plugins::ShotHistoryEditor::_bag_default_pick
+        }
+        if {$::plugins::ShotHistoryEditor::bag_cur ne "" && ![::plugins::ShotHistoryEditor::_bag_plan_matches]} {
+            ::plugins::ShotHistoryEditor::_bag_plan_build
+        }
+        ::plugins::ShotHistoryEditor::_paint_bag_review $page_to_show
+    }
+}
+
+namespace eval ::dui::pages::ShotHistoryEditor_bag_confirm {
+    proc setup {} {
+        set page [namespace tail [namespace current]]
+        upvar #0 ::plugins::ShotHistoryEditor::L L
+        ::plugins::ShotHistoryEditor::_page_bg $page
+        set lx $L(left_x); set rx $L(right_x)
+        set NS ::plugins::ShotHistoryEditor
+
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Save bag changes" "" danger
+        dui add dtext $page $lx $L(bc_changes_y) -tags bc_changes -text "" \
+            -font $L(font_caption) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
+        dui add dtext $page $lx $L(bc_warn_y) -tags bc_warn -text "" \
+            -font $L(font_caption) -width $L(content_w) -fill $L(warn) -anchor nw -justify left
+        dui add dtext $page $lx $L(bc_instr_y) -tags bc_instr -text "" \
+            -font $L(font_body) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
+        # The typed count and a keyboard-safe way out of typing, top half.
+        dui add entry $page $lx $L(bc_entry_y) -tags bc_entry \
+            -textvariable ${NS}::bag_confirm_input \
+            -canvas_width $L(be_date_w) -canvas_height $L(be_entry_h) \
+            -font $L(font_primary) -borderwidth 1 -relief flat \
+            -bg $L(entry_danger_bg) -foreground $L(danger) -insertbackground $L(danger)
+        set hy0 [expr {$L(bc_entry_y) + ($L(be_entry_h) - $L(btn_h))/2}]
+        dui add dbutton $page [expr {$rx-$L(btn_w_wide)}] $hy0 $rx [expr {$hy0+$L(btn_h)}] -tags bc_hidekb \
+            -label [translate "Hide keyboard"] -command ${NS}::bag_hide_keyboard \
+            -label_font $L(font_button) -style she_btn
+        dui add dtext $page $lx $L(bc_error_y) -tags bc_error -text "" \
+            -font $L(font_caption) -width $L(content_w) -fill $L(danger) -anchor nw -justify left
+        # What happens, lower half.
+        set py0 $L(bc_panel_y0)
+        set py1 [expr {$L(bar_y0) - $L(md)}]
+        ::plugins::ShotHistoryEditor::rounded_rect $page $lx $py0 $rx $py1 $L(card_radius) \
+            -fill $L(card_bg) -outline $L(card_outline) -width 2 -tags bc_panel_bg
+        dui add dtext $page [expr {$lx+$L(card_pad_x)}] [expr {$py0+$L(card_pad_y)}] -tags bc_files -text "" \
+            -font $L(font_body) -width [expr {$L(content_w)-2*$L(card_pad_x)}] -fill $L(text_body) \
+            -anchor nw -justify left
+
+        # A confirm page keeps Cancel at left_x; the Save is on the far right.
+        dui add dbutton $page $lx $L(bar_y0) [expr {$lx+$L(btn_w_std)}] $L(bar_y1) -tags bc_cancel \
+            -label [translate "Cancel"] -command ${NS}::bag_confirm_cancel \
+            -label_font $L(font_button) -style she_btn
+        dui add dbutton $page [expr {$rx-$L(btn_w_wide)}] $L(bar_y0) $rx $L(bar_y1) -tags bc_save \
+            -label [translate "Save"] -label_fill $L(danger) -command ${NS}::bag_confirm_submit \
+            -label_font $L(font_button) -style she_btn
+        catch { dui item enable_or_disable 0 $page bc_save* -initial 1 }
+    }
+
+    # Painted by bag_save_open before it loads; this only repaints from the
+    # snapshot (never reads a file), and only while the page is on screen.
+    proc show {page_to_hide page_to_show} {
+        if {![::plugins::ShotHistoryEditor::_page_is_current $page_to_show]} { return }
+        ::plugins::ShotHistoryEditor::_paint_bag_confirm $page_to_show
+    }
+}
+
+namespace eval ::dui::pages::ShotHistoryEditor_bag_result {
+    proc setup {} {
+        set page [namespace tail [namespace current]]
+        upvar #0 ::plugins::ShotHistoryEditor::L L
+        ::plugins::ShotHistoryEditor::_page_bg $page
+        set lx $L(left_x)
+        ::plugins::ShotHistoryEditor::_subpage_header $page "Bag save result" ""
+        dui add dtext $page $lx $L(toolbar_y0) -tags br_text -text "" \
+            -font $L(font_body) -width $L(content_w) -fill $L(text_body) -anchor nw -justify left
+        # Done ends the flow (result pages keep Done).
+        dui add dbutton $page $lx $L(bar_y0) [expr {$lx+$L(btn_w_std)}] $L(bar_y1) -tags br_done \
+            -label [translate "Done"] -command ::plugins::ShotHistoryEditor::bag_result_done \
+            -label_font $L(font_button) -style she_btn
+    }
+
+    proc show {page_to_hide page_to_show} {
+        if {![::plugins::ShotHistoryEditor::_page_is_current $page_to_show]} { return }
+        ::plugins::ShotHistoryEditor::_paint_bag_result $page_to_show
     }
 }

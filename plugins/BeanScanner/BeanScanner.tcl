@@ -101,6 +101,12 @@ namespace eval ::plugins::BeanScanner {
             }
         }
         unset -nocomplain settings(flash_enabled)
+        # v0.10.0: exposure metering. "screen" = the camera judges
+        # brightness on the part of the frame the screen shows; "camera" =
+        # the camera's factory metering, untouched (the v0.9.12 state).
+        if {![info exists settings(metering)] || $settings(metering) ni {screen camera}} {
+            set settings(metering) screen
+        }
         # v0.8.3: the shipped capture_size default rose to 1600x1200 for
         # label detail; an install still sitting on the old 1280x960
         # default is lifted once. Any other explicit choice is kept.
@@ -186,25 +192,61 @@ namespace eval ::plugins::BeanScanner {
     #  The sun-moon toggle on the settings page flips light<->dark based
     #  on the EFFECTIVE darkness (page_bg luminance), so it also works
     #  when the starting point is an adopted skin palette.
+    #  v0.9.14: muted text, the dark button label and the light value
+    #  blue take the plugin family's shared contrast values (the same as
+    #  GrindAdvisor, ShotHistoryEditor and MaintenanceTracker), so every
+    #  label reaches WCAG AA at its rendered size in both palettes. The
+    #  API key entry's text has its own token, entry_fg: its box
+    #  (entry_bg) is never adopted from a skin, so its text is not either
+    #  (a skin accent on the near-white box fell as low as 1.2:1).
     # ------------------------------------------------------------------
+
+    # v0.11.0 (design review F21): the four status roles shared by every
+    # owner plugin and Lumen, copied from GrindAdvisor 3.23.0. Text
+    # colours, >= 4.5:1 on every surface they reach; never on a button
+    # label. BeanScanner uses warn ("will be cleared" on the review page).
+    proc _status_roles {dark} {
+        if {$dark} {
+            return [dict create ok "#2FD3A4" warn "#E8B34C" danger "#ff8a80" info "#8ab4ff"]
+        }
+        return [dict create ok "#086750" warn "#7a4b00" danger "#962219" info "#2753bb"]
+    }
+
+    # Picks a string without expr ?: (which canonicalises numeric-looking
+    # text: "1.50" -> "1.5"). ShotHistoryEditor's _pick.
+    proc _pick {cond a b} {
+        if {$cond} { return $a }
+        return $b
+    }
+
+    # F21 counts (shared, MaintenanceTracker's _plural verbatim).
+    proc _plural {n one {many ""}} {
+        if {$many eq ""} { set many "${one}s" }
+        if {$n == 1} { return "$n $one" }
+        return "$n $many"
+    }
 
     proc _apply_palette {} {
         variable L
         variable settings
         set theme ""
         catch { set theme $settings(theme) }
+        # v0.11.0 (F21): L(ok) L(warn) L(danger) L(info); fg_warn IS warn,
+        # unless the adopted skin brings its own (below).
+        dict for {role c} [_status_roles [expr {$theme eq "dark"}]] { set L($role) $c }
         # DEFAULTS: the stock light settings-page look, used on every skin.
         set L(sec_fill) "#FFFFFF"
         set L(sec_outline) "#dcdcdc"
         set L(page_bg)  "#d5d6e3"   ;# matches the stock settings-page grey
         set L(fg_title) "#2b2b2b"
         set L(fg_body)  "#2b2b2b"
-        set L(fg_muted) "#666666"
-        set L(fg_warn)  "#a33a00"   ;# "will be cleared" on the review page
+        set L(fg_muted) "#595959"   ;# v0.9.14: was #666666 (3.98:1 on the page)
+        set L(fg_warn)  $L(warn)    ;# v0.11.0 (F21): was #a33a00
         set L(on_card_title) "#2b2b2b"   ;# on a white section card
         set L(on_card_label) "#444444"
-        set L(on_card_value) "#4e85f4"
+        set L(on_card_value) "#2753bb"   ;# v0.9.14: was #4e85f4 (3.51:1 on the white cards)
         set L(entry_bg) "#fbfaff"
+        set L(entry_fg) "#2753bb"        ;# v0.9.14: key entry text, never adopted
         set L(btn_fill) "#c0c5e3"        ;# matches the stock dbutton default
         set L(btn_disabled_fill) "#dddddd"
         set L(btn_label_fill) "#2b2b2b"
@@ -214,20 +256,39 @@ namespace eval ::plugins::BeanScanner {
             set L(page_bg)  "#23252e"
             set L(fg_title) "#e8e9ee"
             set L(fg_body)  "#d0d3db"
-            set L(fg_muted) "#8d92a0"
-            set L(fg_warn)  "#ff9e6b"
+            set L(fg_muted) "#9aa0ad"   ;# v0.9.14: was #8d92a0
+            set L(fg_warn)  $L(warn)    ;# v0.11.0 (F21): was #ff9e6b
             set L(on_card_title) "#e8e9ee"
             set L(on_card_label) "#c2c5cf"
             set L(on_card_value) "#8ab4ff"
             set L(entry_bg) "#3a3e4a"
+            set L(entry_fg) "#8ab4ff"
             set L(btn_fill) "#4a5473"
             set L(btn_disabled_fill) "#3a3e4a"
-            set L(btn_label_fill) "#e8e9ee"
+            set L(btn_label_fill) "#ffffff"   ;# v0.9.14: was #e8e9ee
         } elseif {$theme ne "light"} {
             # No explicit choice yet: follow the active skin's palette
             # when it publishes one (the pre-v0.5.0 behavior).
             _adopt_skin_palette
         }
+        # v0.11.0 (F9): the press tone, GrindAdvisor 3.22.0's values -- a
+        # step lighter than the dark slate (white label 5.35:1), a step
+        # darker than the light periwinkle (#2b2b2b label 6.37:1). An
+        # adopted skin palette gets the one matching its page.
+        if {[_is_dark_color $L(page_bg)]} {
+            set L(btn_press_fill) "#5f6a8c"
+        } else {
+            set L(btn_press_fill) "#a6acd1"
+        }
+        # v0.11.0 (F10): the one primary action per page, MaintenanceTracker's
+        # green with a white label in both themes (5.30:1), pressed darker.
+        # BeanScanner deletes nothing, so there is no danger button face.
+        set L(btn_primary_fill)  "#0a7a5f"
+        set L(btn_primary_label) "#ffffff"
+        set L(btn_primary_press) "#075c48"
+        # How long a pressed button keeps its press tone after its command
+        # returns (DrinkMenu's 120 ms).
+        set L(press_ms) 120
     }
 
     # Perceived luminance below mid-grey = dark. Guards return 0 (light)
@@ -262,15 +323,15 @@ namespace eval ::plugins::BeanScanner {
         variable L
         set dark [_effective_dark]
         if {[info exists L(have_icons)] && $L(have_icons)} {
-            set g [_glyph_for [expr {$dark ? "sun-bright" : "moon"}]]
+            set g [_glyph_for [_pick $dark "sun-bright" "moon"]]
             if {$g ne ""} { return $g }
         }
-        return [expr {$dark ? [translate "Light"] : [translate "Dark"]}]
+        return [_pick $dark [translate "Light"] [translate "Dark"]]
     }
 
     proc toggle_theme {} {
         variable settings
-        set settings(theme) [expr {[_effective_dark] ? "light" : "dark"}]
+        set settings(theme) [_pick [_effective_dark] "light" "dark"]
         save_settings
         _apply_palette
         _retheme_all
@@ -309,7 +370,7 @@ namespace eval ::plugins::BeanScanner {
         catch { dui item config BeanScanner_apikey provider_label -fill $L(fg_body) }
         catch { dui item config BeanScanner_apikey key_help -fill $L(fg_muted) }
         catch { dui item config BeanScanner_apikey key_entry \
-            -bg $L(entry_bg) -foreground $L(on_card_value) }
+            -bg $L(entry_bg) -foreground $L(entry_fg) }
         # Review / diagnostics / help texts.
         foreach t {roaster_value_label bean_value_label date_value_label level_value_label notes_label} {
             catch { dui item config BeanScanner_review $t -fill $L(fg_muted) }
@@ -320,7 +381,9 @@ namespace eval ::plugins::BeanScanner {
         catch { dui item config BeanScanner_review notes_value -fill $L(fg_body) }
         catch { dui item config BeanScanner_diagnostics diag_text -fill $L(fg_body) }
         catch { dui item config BeanScanner_help help_text -fill $L(fg_body) }
-        # Buttons: shape + label, both theme-dependent here.
+        # Buttons: shape + label, both theme-dependent here. v0.11.0 (F10):
+        # by role (Scan Bean Bag and Accept are primary), through the same
+        # painter the press restore uses.
         foreach {p tags} {
             BeanScanner_settings {scan_bean_bag use_latest_photo last_result
                                   notes_btn overwrite_btn provider_btn apikey_btn
@@ -332,12 +395,119 @@ namespace eval ::plugins::BeanScanner {
             BeanScanner_help {page_done}
         } {
             foreach t $tags {
-                catch { dui item config $p ${t}-btn \
-                    -fill $L(btn_fill) -outline $L(btn_fill) \
-                    -disabledfill $L(btn_disabled_fill) -disabledoutline $L(btn_disabled_fill) }
-                catch { dui item config $p ${t}-lbl -fill $L(btn_label_fill) }
+                catch { _paint_btn $p $t }
             }
         }
+    }
+
+    # ------------------------------------------------------------------
+    #  v0.11.0 (design review F9 / F10): press feedback and button roles,
+    #  copied from GrindAdvisor 3.22.0.
+    #
+    #  dui runs a dbutton's -command at touch-down, synchronously, and Tk
+    #  repaints only after it returns, so a slow command (opening the
+    #  camera, a page load, a capture) looked like a missed tap. Every
+    #  BeanScanner button is created with -command [list
+    #  ::plugins::BeanScanner::_tap $page $tag <cmd>]: _tap tints THIS
+    #  page's face (<tag>-btn, page-scoped through dui item config) to the
+    #  role's press tone, paints it now (update idletasks, never a full
+    #  update), arms the restore BEFORE running the command (an error
+    #  cannot strand the tint), then runs it. The restore repaints through
+    #  _paint_btn from the palette and role AT RESTORE TIME, so a tap that
+    #  switches the theme restores in the new one. The core's -pressfill
+    #  is never used: it restores the creation fill and recolours
+    #  same-named buttons in other plugins (page_done, btn_theme ...).
+    #
+    #  Roles (F10): neutral everywhere, one primary per page at most --
+    #  Scan Bean Bag (settings) and Accept (review). The camera page keeps
+    #  its fixed dark chrome (cam, cam_shutter, cam_send): only the face
+    #  fill is tinted there; label colours (flash, sun) follow state.
+    # ------------------------------------------------------------------
+    variable btn_roles
+    array set btn_roles {
+        BeanScanner_settings,scan_bean_bag primary
+        BeanScanner_review,accept_btn      primary
+        BeanScanner_capture,page_done      cam
+        BeanScanner_capture,flash_btn      cam
+        BeanScanner_capture,bsc_meter_btn  cam
+        BeanScanner_capture,cam_btn        cam
+        BeanScanner_capture,clear_btn      cam
+        BeanScanner_capture,capture_btn    cam_shutter
+        BeanScanner_capture,send_btn       cam_send
+    }
+    variable press_after
+    array set press_after {}
+
+    proc _btn_role {page tag} {
+        variable btn_roles
+        if {[info exists btn_roles($page,$tag)]} { return $btn_roles($page,$tag) }
+        return neutral
+    }
+
+    # The one writer of a button's colours after creation: the theme
+    # repaint and the press restore. Camera-page ovals get -fill only
+    # (dui draws them with Tk's own outline); the round Send pill is
+    # segments, so -fill and -outline as for every palette button.
+    proc _paint_btn {page tag} {
+        variable L
+        switch -- [_btn_role $page $tag] {
+            cam {
+                dui item config $page ${tag}-btn -fill $L(cam_circle)
+                return
+            }
+            cam_shutter {
+                dui item config $page ${tag}-btn -fill $L(cam_shutter_fill)
+                return
+            }
+            cam_send {
+                dui item config $page ${tag}-btn -fill $L(cam_send_fill) -outline $L(cam_send_fill)
+                return
+            }
+            primary {
+                set f $L(btn_primary_fill)
+                set ink $L(btn_primary_label)
+            }
+            default {
+                set f $L(btn_fill)
+                set ink $L(btn_label_fill)
+            }
+        }
+        dui item config $page ${tag}-btn -fill $f -outline $f \
+            -disabledfill $L(btn_disabled_fill) -disabledoutline $L(btn_disabled_fill)
+        dui item config $page ${tag}-lbl -fill $ink
+    }
+
+    proc _press_tone {page tag} {
+        variable L
+        switch -- [_btn_role $page $tag] {
+            primary     { return $L(btn_primary_press) }
+            cam         { return $L(cam_circle_press) }
+            cam_shutter { return $L(cam_shutter_press) }
+            cam_send    { return $L(cam_send_press) }
+        }
+        return $L(btn_press_fill)
+    }
+
+    proc _tap {page tag cmd} {
+        variable L
+        variable press_after
+        set key $page,$tag
+        if {[info exists press_after($key)]} { after cancel $press_after($key) }
+        set p [_press_tone $page $tag]
+        if {[_btn_role $page $tag] in {cam cam_shutter}} {
+            dui item config $page ${tag}-btn -fill $p
+        } else {
+            dui item config $page ${tag}-btn -fill $p -outline $p
+        }
+        update idletasks
+        set press_after($key) [after $L(press_ms) [list ::plugins::BeanScanner::_tap_restore $page $tag]]
+        uplevel #0 $cmd
+    }
+
+    proc _tap_restore {page tag} {
+        variable press_after
+        unset -nocomplain press_after($page,$tag)
+        _paint_btn $page $tag
     }
 
     proc _init_layout {} {
@@ -349,12 +519,19 @@ namespace eval ::plugins::BeanScanner {
         set sh 1600
         set scale [expr {double($sh) / 800.0}]
 
+        # v0.11.0 (F8): ONE scale source with the coordinates -- the canvas
+        # size the core rescales to (dui cget screen_size_width/height,
+        # 1340x800 on the tablet), as GrindAdvisor 3.23.0. Never `winfo
+        # screenheight`: 736 there, so every font drew at 92% and vpx_y was
+        # 8.7% off. No dui (offline) or no number: 1340x800.
         set psw 1340
         set psh 800
-        catch { set psw [winfo screenwidth .] }
-        catch { set psh [winfo screenheight .] }
-        if {$psw <= 1} { set psw 1340 }
-        if {$psh <= 1} { set psh 800 }
+        if {[llength [info commands ::dui::cget]]} {
+            set v [::dui::cget screen_size_width]
+            if {[string is double -strict $v] && $v > 1} { set psw $v }
+            set v [::dui::cget screen_size_height]
+            if {[string is double -strict $v] && $v > 1} { set psh $v }
+        }
         set font_scale [expr {double($psh) / 800.0}]
 
         set L(screen_w) $sw
@@ -424,6 +601,12 @@ namespace eval ::plugins::BeanScanner {
         set L(cam_flash_on)  "#ffd60a"   ;# yellow bolt (on / auto)
         set L(cam_send_fill) "#f2f2f4"
         set L(cam_send_text) "#17181c"
+        set L(cam_shutter_fill) "#ffffff"
+        # v0.11.0 (F9): press tones for the camera chrome -- a visible step
+        # from each face, the label/icon on it still well above 4.5:1.
+        set L(cam_circle_press)  "#4a4b55"
+        set L(cam_shutter_press) "#b9bac2"
+        set L(cam_send_press)    "#c9cad3"
         set L(cam_margin)    60          ;# edge inset for floating controls
         set L(cam_circle_d)  128         ;# small circles (cancel/flash/clear)
         set L(cam_flip_d)    152         ;# camera-flip circle
@@ -434,6 +617,15 @@ namespace eval ::plugins::BeanScanner {
         set L(cam_pill_h)    72          ;# status pill height (slim, per mock)
         set L(cam_send_w)    360
         set L(cam_badge_d)   88          ;# count badge inside the Send pill
+        # v0.9.15: bottom row mirrored for two thumbs -- shutter in the
+        # bottom-left corner with flip beside it, Send in the bottom-right
+        # corner with the trash beside it.
+        set L(cam_side_inset)  154       ;# shutter ring / Send pill outer edge from the screen edge
+        set L(cam_ctrl_gap)    $L(xxl)   ;# ring -> flip and trash -> Send (tap rect to tap rect)
+        set L(cam_shutter_pad) 24        ;# tap pad: the whole ring takes the picture, not just the disc
+        set L(cam_ring_w)      5         ;# shutter ring outline width
+        set L(cam_badge_inset) 24        ;# count badge, from the Send pill's left end
+        set L(cam_plane_dx)    66        ;# paper plane centre, from the Send pill's right end
 
         set L(header_title_y) [expr {int(round(28 * $scale))}]
         set L(header_subtitle_y) [expr {int(round(72 * $scale))}]
@@ -513,6 +705,13 @@ namespace eval ::plugins::BeanScanner {
                 fill $L(btn_fill) disabledfill $L(btn_disabled_fill)]
             dui aspect set -theme default -type dbutton_label -style bsc_btn [list \
                 fill $L(btn_label_fill) disabledfill "#999999"]
+            # v0.11.0 (F10): the primary role (GrindAdvisor's ga_btn_primary).
+            # No pressfill on any style: _tap does the press instead.
+            dui aspect set -theme default -type dbutton -style bsc_btn_primary [list \
+                shape round radius $L(btn_radius) \
+                fill $L(btn_primary_fill) disabledfill $L(btn_disabled_fill)]
+            dui aspect set -theme default -type dbutton_label -style bsc_btn_primary [list \
+                fill $L(btn_primary_label) disabledfill "#999999"]
         }
     }
 
@@ -562,8 +761,10 @@ namespace eval ::plugins::BeanScanner {
     proc preload_settings_page {} {
         package require de1_dui 1.0
         catch { plugins load_settings BeanScanner }
+        # No save here (CLAUDE.md: no save_settings in preload). The
+        # migrations in apply_defaults run in memory on every start and
+        # persist with the next settings change.
         apply_defaults
-        catch { plugins save_settings BeanScanner }
         _init_layout
         foreach p {BeanScanner_settings BeanScanner_apikey BeanScanner_capture \
                    BeanScanner_review BeanScanner_diagnostics BeanScanner_help} {
@@ -581,6 +782,33 @@ namespace eval ::plugins::BeanScanner {
         }
         catch { msg "BeanScanner: could not open page $page" }
         return 0
+    }
+
+    # v0.10.1 (F22): show hooks run after idle, so one queued for a page the
+    # user has already left must not repaint it. Copied verbatim from
+    # GrindAdvisor 3.17.4 (itself from MaintenanceTracker's _page_is_current).
+    proc _page_is_current {page} {
+        set cur ""
+        catch { set cur [dui page current] }
+        return [expr {$cur eq $page}]
+    }
+
+    # v0.10.1 (F22): a page's load hook, copied from GrindAdvisor 3.17.4.
+    # dui page load runs it synchronously BEFORE the page appears (dui.tcl
+    # ~6448); show runs after idle, when the last visit's content is already
+    # on screen. So the refresh goes here. Rules (dui.tcl ~6449-6458,
+    # 6618): skip until the page is set up (a late-enabled plugin loads
+    # before its setup); never let an error escape (open_page's cascade
+    # would fall back to `dui page show`, which skips load, and hide the
+    # error); ALWAYS return 1 -- a body ending in a caught catch returns 0,
+    # and 0 cancels the open. The page's items are hidden during load: no
+    # -state here (show re-applies state).
+    proc _page_load {what page script} {
+        if {![dui page is_setup $page]} { return 1 }
+        if {[catch { uplevel 1 $script } err]} {
+            catch { msg -ERROR "BeanScanner: $what load refresh failed: $err" }
+        }
+        return 1
     }
 
     # ==================================================================
@@ -620,6 +848,8 @@ namespace eval ::plugins::BeanScanner {
         # Maps skin token -> our token. Text tokens must come from the skin's
         # "on dark/light panel" inks, not its page inks, because our body
         # text sits on the section cards rather than the page.
+        # entry_bg and entry_fg are left out on purpose: the API key entry
+        # keeps its own box and text in every mode (v0.9.14).
         foreach { ours theirs } {
             page_bg        bg
             sec_fill       glass
@@ -810,7 +1040,16 @@ namespace eval ::plugins::BeanScanner {
                 break
             }
         }
-        catch { msg "BeanScanner: camera $idx flash modes {$cam(flash_modes)} using [expr {$cam(flash_hw) eq {} ? {screen flash} : $cam(flash_hw)}]" }
+        catch { msg "BeanScanner: camera $idx flash modes {$cam(flash_modes)} using [_pick [expr {$cam(flash_hw) eq {}}] {screen flash} $cam(flash_hw)]" }
+
+        # v0.10.0: how many metering areas this camera accepts (the Tab A9
+        # reports 1 on both cameras). Empty = not reported; then the write
+        # is still tried and its read-back decides.
+        set cam(meter_max) ""
+        set cam(meter_actual) ""
+        if {[info exists __cp(max-num-metering-areas)]} {
+            set cam(meter_max) $__cp(max-num-metering-areas)
+        }
 
         # Preview and capture resolution, set BEFORE the preview starts.
         # v0.8.0: the preview fills the screen, so pick the largest size
@@ -844,14 +1083,15 @@ namespace eval ::plugins::BeanScanner {
         if {[catch { borg camera parameters picture-size $csize } err]} {
             catch { msg "BeanScanner: picture-size $csize rejected: $err" }
         }
-        # v0.9.11: NO 3A parameter writes at all. Ten rounds of the
+        # v0.9.11: no 3A parameter writes here. Ten rounds of the
         # back-camera freeze saga (fps pin, focus modes, scene, anti-
         # banding, stabilization, AF boxes -- each dump-verified applied,
         # none curative, some suspect) taught the workspace lesson the
-        # hard way: converge on the proven mechanism. The proven state
-        # is v0.9.0's -- the camera's factory automatics untouched; the
-        # plugin sets only what the user actually controls (sizes,
-        # flash) below.
+        # hard way: converge on the proven mechanism. The camera's
+        # factory automatics stay untouched; the plugin sets what the
+        # user controls (sizes, flash) and -- v0.10.0, owner-approved,
+        # switchable back to factory on the capture page -- ONE metering
+        # area matching the visible screen (_metering_apply, after start).
 
         # What the camera ACTUALLY accepted is authoritative -- a
         # rejected size silently keeps the camera's own default, and the
@@ -877,6 +1117,7 @@ namespace eval ::plugins::BeanScanner {
             if {$__pw * 4 <= $__sw * 3} { set cam(zoom) {2 1} }
         }
         catch { msg "BeanScanner: display scale [join $cam(zoom) /] for $psize" }
+        set cam(meter_box) [_metering_box $psize]
 
         if {[catch { borg camera start } err]} {
             set_error "Camera start failed: $err"
@@ -885,6 +1126,7 @@ namespace eval ::plugins::BeanScanner {
         }
         set cam(started) 1
         _flash_apply
+        _metering_apply
         return 1
     }
 
@@ -979,6 +1221,129 @@ namespace eval ::plugins::BeanScanner {
     # clean camera configuration -- a device/HAL behavior below what
     # Camera1 parameters or AndroWish can reach. It does not occur in
     # normal scanning conditions, and captures are unaffected.)
+
+    # ==================================================================
+    #  Exposure metering (v0.10.0)
+    # ==================================================================
+
+    # The preview is shown 1:1 (or integer-zoomed) and centre-cropped by
+    # the screen. Left alone, the camera meters its WHOLE frame -- on the
+    # Tab A9 about 44% of the front camera's view never reaches the
+    # screen -- so a bag that fills the screen still sits in darker
+    # surroundings the user cannot see: exposure rises and the label
+    # clips. Camera1 area coordinates run -1000..1000 across the preview
+    # frame, centred, so the visible part is +-1000 x (visible/displayed)
+    # on each axis. The box is symmetric, so front-camera mirroring
+    # cannot move it. "" when the whole frame is on screen.
+    proc _metering_box {psize} {
+        variable cam
+        if {![regexp {^(\d+)x(\d+)$} $psize -> pw ph]} { return "" }
+        lassign $cam(zoom) z s
+        set dw [expr {double($pw) * $z / $s}]
+        set dh [expr {double($ph) * $z / $s}]
+        lassign [_canvas_size] cw ch
+        set fx [expr {min(1.0, $cw / $dw)}]
+        set fy [expr {min(1.0, $ch / $dh)}]
+        if {$fx >= 0.98 && $fy >= 0.98} { return "" }
+        set ax [expr {int(round(1000 * $fx))}]
+        set ay [expr {int(round(1000 * $fy))}]
+        return "(-$ax,-$ay,$ax,$ay,1000)"
+    }
+
+    # The canvas's real physical size. Not winfo screenheight: on the Tab
+    # A9 that reports 736 (800 minus the Android bar) while the app's
+    # canvas is a full 1340x800.
+    proc _canvas_size {} {
+        variable L
+        set w $L(phys_w)
+        set h $L(phys_h)
+        set c [dui canvas]
+        if {[winfo exists $c]} {
+            set cw [winfo width $c]
+            set ch [winfo height $c]
+            if {$cw > 1 && $ch > 1} {
+                set w $cw
+                set h $ch
+            }
+        }
+        return [list $w $h]
+    }
+
+    # Applies the metering setting to the running camera, after EVERY
+    # preview start (open, and the restart after each capture): a HAL may
+    # re-seed its own areas when the preview starts (the back camera
+    # reported a stray box after start in v0.9.2). With "camera" nothing
+    # is written, except restore=1 -- the capture-page toggle switching
+    # back -- which puts the factory "(0,0,0,0,0)" back over our box.
+    proc _metering_apply {{restore 0}} {
+        variable cam
+        if {!$cam(started)} { return }
+        if {[_setting metering screen] ne "screen"} {
+            if {$restore} { _metering_set "(0,0,0,0,0)" }
+            return
+        }
+        if {$cam(meter_box) eq ""} { return }
+        if {[string is integer -strict $cam(meter_max)] && $cam(meter_max) < 1} {
+            set cam(meter_actual) "not supported"
+            return
+        }
+        _metering_set $cam(meter_box)
+    }
+
+    # One key per call (Camera1 validates a parameter set all-or-nothing,
+    # so one bad key would drop the others), then read back: a rejected
+    # value can be silent. Logged when the read-back changes.
+    proc _metering_set {box} {
+        variable cam
+        if {[catch { borg camera parameters metering-areas $box } err]} {
+            catch { msg "BeanScanner: metering-areas $box rejected: $err" }
+            set cam(meter_actual) "rejected"
+            return
+        }
+        set got "?"
+        catch {
+            array set __p [borg camera parameters]
+            if {[info exists __p(metering-areas)]} { set got $__p(metering-areas) }
+        }
+        if {$got ne $cam(meter_actual)} {
+            catch { msg "BeanScanner: camera $cam(index) metering-areas $box -> reads back $got" }
+        }
+        set cam(meter_actual) $got
+    }
+
+    # Capture-page exposure button: screen <-> camera (factory). Persists.
+    proc metering_toggle {} {
+        variable settings
+        variable scan
+        if {$scan(busy)} {
+            set_stage sending [translate "Already working -- please wait."]
+            return
+        }
+        if {[_setting metering screen] eq "screen"} {
+            set settings(metering) camera
+        } else {
+            set settings(metering) screen
+        }
+        save_settings
+        _metering_apply 1
+        _update_capture_ui
+        if {[_setting metering screen] eq "screen"} {
+            set_stage preview [translate "Exposure is set for what the screen shows."]
+        } else {
+            set_stage preview [translate "Exposure: the camera's own metering (whole view)."]
+        }
+    }
+
+    # Exposure button face: {label colour}. Yellow (the active-flash
+    # yellow) = exposure follows the screen; white = factory metering.
+    proc _meter_button_face {} {
+        variable L
+        set g [_glyph_or brightness "Exp"]
+        if {[_setting metering screen] eq "screen"} {
+            return [list $g $L(cam_flash_on)]
+        }
+        return [list $g $L(cam_icon)]
+    }
 
     proc camera_close {} {
         variable cam
@@ -1131,9 +1496,9 @@ namespace eval ::plugins::BeanScanner {
         preview_start
         set n [llength $photos]
         if {$n > 0} {
-            set_stage preview "$n photo[expr {$n == 1 ? {} : {s}}] taken. Capture another side, or tap Send."
+            set_stage preview "[_plural $n photo] taken. Capture another side, or tap Send."
         } else {
-            set_stage preview [translate "Ready. Tap Capture."]
+            set_stage preview [translate "Ready. Tap the shutter."]
         }
     }
 
@@ -1162,6 +1527,18 @@ namespace eval ::plugins::BeanScanner {
             catch { get_set_tablet_brightness $cam(saved_brightness) }
         }
         set cam(saved_brightness) ""
+    }
+
+    # v0.10.1 (F22): wipes the preview photos so the capture page never
+    # opens on the previous visit's last frame. Tk's photo blank makes the
+    # image fully transparent; restart_camera replaces both photos anyway.
+    proc _blank_preview {} {
+        variable cam
+        foreach p [list $cam(photo) $cam(photo_disp)] {
+            if {$p ne "" && [lsearch -exact [image names] $p] >= 0} {
+                $p blank
+            }
+        }
     }
 
     proc preview_start {} {
@@ -1273,7 +1650,7 @@ namespace eval ::plugins::BeanScanner {
             _resume_preview
             _update_capture_ui
             set n [llength $photos]
-            set_stage preview "$n photo[expr {$n == 1 ? {} : {s}}] taken. Capture another side, or tap Send."
+            set_stage preview "[_plural $n photo] taken. Capture another side, or tap Send."
             return
         }
         if {$tries >= $max} {
@@ -1294,6 +1671,7 @@ namespace eval ::plugins::BeanScanner {
             catch { msg "BeanScanner: preview restart failed: $err" }
         }
         set cam(started) 1
+        _metering_apply
         preview_start
     }
 
@@ -1314,6 +1692,8 @@ namespace eval ::plugins::BeanScanner {
         lassign [_flash_button_face] fl_label fl_fill
         catch { dui item config BeanScanner_capture flash_btn -label $fl_label }
         catch { dui item config BeanScanner_capture flash_btn-lbl -fill $fl_fill }
+        lassign [_meter_button_face] mt_label mt_fill
+        catch { dui item config BeanScanner_capture bsc_meter_btn-lbl -fill $mt_fill }
     }
 
     proc clear_photos {} {
@@ -1331,7 +1711,7 @@ namespace eval ::plugins::BeanScanner {
             return
         }
         if {[llength $photos] == 0} {
-            set_error "No photos yet -- tap Capture first."
+            set_error "No photos yet -- tap the shutter first."
             return
         }
         # The pending set is kept until the response parses, so a network
@@ -1476,7 +1856,7 @@ namespace eval ::plugins::BeanScanner {
         set provider [_setting provider anthropic]
         set model [model_id]
         set n [llength $b64s]
-        set_stage sending "Sending $n photo[expr {$n == 1 ? {} : {s}}] ([_fmt_bytes $total]) to $model..."
+        set_stage sending "Sending [_plural $n photo] ([_fmt_bytes $total]) to $model..."
 
         if {$provider eq "openai"} {
             set host "api.openai.com"
@@ -1842,7 +2222,7 @@ namespace eval ::dui::pages::BeanScanner_settings {
         dui add dbutton $page [expr {$rx - $L(btn_h)}] $th_y1 \
             $rx [expr {$th_y1 + $L(btn_h)}] \
             -tags btn_theme -label [::plugins::BeanScanner::_theme_button_face] \
-            -command ::plugins::BeanScanner::toggle_theme \
+            -command [list ::plugins::BeanScanner::_tap $page btn_theme ::plugins::BeanScanner::toggle_theme] \
             -label_font [expr {$L(have_icons) ? $L(font_icon) : $L(font_button)}] \
             -style bsc_btn
 
@@ -1862,9 +2242,14 @@ namespace eval ::dui::pages::BeanScanner_settings {
             "Use Latest Photo" "::plugins::BeanScanner::start_import"
             "Last Result"      "::plugins::BeanScanner::open_page BeanScanner_review"
         } {
+            set tag [string map {" " _} [string tolower $label]]
+            # v0.11.0 (F10): Scan Bean Bag is the page's one primary action.
+            set style bsc_btn
+            if {[::plugins::BeanScanner::_btn_role $page $tag] eq "primary"} { set style bsc_btn_primary }
             dui add dbutton $page $bx1 $ry $bx2 [expr {$ry + $L(btn_h)}] \
-                -tags [string map {" " _} [string tolower $label]] -label [translate $label] \
-                -command $cmd -label_font $L(font_button) -style bsc_btn
+                -tags $tag -label [translate $label] \
+                -command [list ::plugins::BeanScanner::_tap $page $tag $cmd] \
+                -label_font $L(font_button) -style $style
             set ry [expr {$ry + $L(btn_h) + $L(md)}]
         }
 
@@ -1889,17 +2274,17 @@ namespace eval ::dui::pages::BeanScanner_settings {
         # ---- Bottom bar ----
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags page_done -label [translate "Done"] \
-            -command ::dui::pages::BeanScanner_settings::page_done \
+            -command [list ::plugins::BeanScanner::_tap $page page_done ::dui::pages::BeanScanner_settings::page_done] \
             -label_font $L(font_button) -style bsc_btn
         set b2 [expr {$rx - $L(btn_w_std)}]
         dui add dbutton $page $b2 $L(bar_y0) $rx $L(bar_y1) \
             -tags page_help -label [translate "Help"] \
-            -command {::plugins::BeanScanner::open_page BeanScanner_help} \
+            -command [list ::plugins::BeanScanner::_tap $page page_help {::plugins::BeanScanner::open_page BeanScanner_help}] \
             -label_font $L(font_button) -style bsc_btn
         set b1 [expr {$b2 - $L(md) - $L(btn_w_wide)}]
         dui add dbutton $page $b1 $L(bar_y0) [expr {$b1 + $L(btn_w_wide)}] $L(bar_y1) \
             -tags page_diag -label [translate "Diagnostics"] \
-            -command {::plugins::BeanScanner::open_page BeanScanner_diagnostics} \
+            -command [list ::plugins::BeanScanner::_tap $page page_diag {::plugins::BeanScanner::open_page BeanScanner_diagnostics}] \
             -label_font $L(font_button) -style bsc_btn
     }
 
@@ -1932,11 +2317,20 @@ namespace eval ::dui::pages::BeanScanner_settings {
             if {$btn_label ne "" && $btn_cmd ne ""} {
                 dui add dbutton $page $btn_x1 $y1 $btn_x2 [expr {$y1 + $L(btn_h)}] \
                     -tags ${key}_btn -label [translate $btn_label] \
-                    -command ::dui::pages::BeanScanner_settings::$btn_cmd \
+                    -command [list ::plugins::BeanScanner::_tap $page ${key}_btn ::dui::pages::BeanScanner_settings::$btn_cmd] \
                     -label_font $L(font_button) -style bsc_btn
             }
             incr row
         }
+    }
+
+    # v0.10.1 (F22): values are written before the page appears; show keeps
+    # the navigation bookkeeping and repeats the refresh.
+    proc load {page_to_hide page_to_show args} {
+        return [::plugins::BeanScanner::_page_load "settings page" $page_to_show {
+            ::plugins::BeanScanner::apply_defaults
+            refresh $page_to_show
+        }]
     }
 
     proc show {page_to_hide page_to_show} {
@@ -1944,13 +2338,14 @@ namespace eval ::dui::pages::BeanScanner_settings {
         # Reached through the settings page, so sub-pages should hand back
         # here rather than jumping past it.
         set ::plugins::BeanScanner::_entered_at_subpage 0
+        if {![::plugins::BeanScanner::_page_is_current $page_to_show]} { return }
         ::plugins::BeanScanner::apply_defaults
         refresh $page_to_show
     }
 
     proc refresh {page} {
         set p [::plugins::BeanScanner::_setting provider anthropic]
-        set pname [expr {$p eq "openai" ? "OpenAI" : "Anthropic"}]
+        set pname [::plugins::BeanScanner::_pick [expr {$p eq "openai"}] "OpenAI" "Anthropic"]
         catch { dui item config $page provider_value -text $pname }
         catch { dui item config $page model_value -text [::plugins::BeanScanner::model_id] }
         switch -- [::plugins::BeanScanner::api_key_source] {
@@ -2058,7 +2453,7 @@ namespace eval ::dui::pages::BeanScanner_apikey {
         dui add entry $page $lx $y -tags key_entry \
             -textvariable ::dui::pages::BeanScanner_apikey::key_text \
             -width 46 -font $L(font_body) -canvas_anchor w \
-            -borderwidth 1 -bg $L(entry_bg) -foreground $L(on_card_value) -relief flat
+            -borderwidth 1 -bg $L(entry_bg) -foreground $L(entry_fg) -relief flat
 
         set y [expr {$y + $L(row_pitch)}]
         dui add dtext $page $lx $y -tags key_help \
@@ -2068,20 +2463,37 @@ namespace eval ::dui::pages::BeanScanner_apikey {
 
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags page_done -label [translate "Save"] \
-            -command ::dui::pages::BeanScanner_apikey::page_done \
+            -command [list ::plugins::BeanScanner::_tap $page page_done ::dui::pages::BeanScanner_apikey::page_done] \
             -label_font $L(font_button) -style bsc_btn
         dui add dbutton $page [expr {$rx - $L(btn_w_std)}] $L(bar_y0) $rx $L(bar_y1) \
             -tags page_clear -label [translate "Clear"] \
-            -command ::dui::pages::BeanScanner_apikey::clear_key \
+            -command [list ::plugins::BeanScanner::_tap $page page_clear ::dui::pages::BeanScanner_apikey::clear_key] \
             -label_font $L(font_button) -style bsc_btn
     }
 
+    # v0.10.1 (F22): the key and provider line are written before the page
+    # appears, so the entry never shows the last visit's text.
+    proc load {page_to_hide page_to_show args} {
+        return [::plugins::BeanScanner::_page_load "API key page" $page_to_show {
+            _refresh $page_to_show
+        }]
+    }
+
     proc show {page_to_hide page_to_show} {
+        if {![::plugins::BeanScanner::_page_is_current $page_to_show]} { return }
+        _refresh $page_to_show
+    }
+
+    proc _refresh {page} {
         variable key_text
         set p [::plugins::BeanScanner::_setting provider anthropic]
         set key_text [::plugins::BeanScanner::_setting api_key_$p ""]
-        set pname [expr {$p eq "openai" ? "OpenAI" : "Anthropic"}]
-        catch { dui item config $page_to_show provider_label \
+        if {$p eq "openai"} {
+            set pname "OpenAI"
+        } else {
+            set pname "Anthropic"
+        }
+        catch { dui item config $page provider_label \
             -text "[translate {Key for}] $pname" }
     }
 
@@ -2132,7 +2544,7 @@ namespace eval ::dui::pages::BeanScanner_capture {
         dui add dbutton $page $m $m [expr {$m + $d}] [expr {$m + $d}] \
             -tags page_done -shape oval -fill $L(cam_circle) \
             -label [$G xmark "X"] -label_font $ifont -label_fill $L(cam_icon) \
-            -command ::dui::pages::BeanScanner_capture::page_done
+            -command [list ::plugins::BeanScanner::_tap $page page_done ::dui::pages::BeanScanner_capture::page_done]
         # Slim status pill (per the mock), centred on the top row's axis.
         # A TRUE capsule, composed of two end ovals and a middle rect --
         # both the smooth-polygon helper and dui's round shape render
@@ -2156,13 +2568,55 @@ namespace eval ::dui::pages::BeanScanner_capture {
         dui add dbutton $page [expr {$sw - $m - $d}] $m [expr {$sw - $m}] [expr {$m + $d}] \
             -tags flash_btn -shape oval -fill $L(cam_circle) \
             -label [$G bolt-slash "fl off"] -label_font $ifont -label_fill $L(cam_icon) \
-            -command ::plugins::BeanScanner::flash_cycle
+            -command [list ::plugins::BeanScanner::_tap $page flash_btn ::plugins::BeanScanner::flash_cycle]
+        # v0.10.0: exposure metering toggle, one gap left of the flash.
+        # Yellow = exposure follows what the screen shows (default),
+        # white = the camera's factory metering. bsc_ prefix: dui's press
+        # handling reaches same-named tags on every plugin's pages.
+        set mx1 [expr {$sw - $m - $d - $L(cam_ctrl_gap)}]
+        lassign [::plugins::BeanScanner::_meter_button_face] mt_label mt_fill
+        dui add dbutton $page [expr {$mx1 - $d}] $m $mx1 [expr {$m + $d}] \
+            -tags bsc_meter_btn -shape oval -fill $L(cam_circle) \
+            -label $mt_label -label_font $ifont -label_fill $mt_fill \
+            -command [list ::plugins::BeanScanner::_tap $page bsc_meter_btn ::plugins::BeanScanner::metering_toggle]
 
-        # --- bottom row: Send pill, Clear, shutter, flip ---
+        # --- bottom row (v0.9.15): shutter + flip under the left thumb,
+        # trash + Send under the right thumb, the middle left clear ---
+        set in  $L(cam_side_inset)
+        set gap $L(cam_ctrl_gap)
+
+        set rr [expr {$L(cam_ring_d) / 2}]
+        set shut_cx [expr {$in + $rr}]
+        dui add canvas_item oval $page [expr {$shut_cx - $rr}] [expr {$cy - $rr}] \
+            [expr {$shut_cx + $rr}] [expr {$cy + $rr}] \
+            -outline "#ffffff" -width $L(cam_ring_w) -fill {} -tags shutter_ring
+        set sr [expr {$L(cam_shutter_d) / 2}]
+        # The shutter is label-free by design; the single space keeps a
+        # real label sub-item in existence (empty-label dbuttons can
+        # never be relabelled later -- the sub-item is simply not built).
+        # The tap pad grows the target from the disc out to the ring.
+        dui add dbutton $page [expr {$shut_cx - $sr}] [expr {$cy - $sr}] \
+            [expr {$shut_cx + $sr}] [expr {$cy + $sr}] \
+            -tags capture_btn -shape oval -fill $L(cam_shutter_fill) \
+            -label " " -label_font $L(font_button) \
+            -tap_pad $L(cam_shutter_pad) \
+            -command [list ::plugins::BeanScanner::_tap $page capture_btn ::plugins::BeanScanner::capture_jpeg]
+
+        # Flip: the plain two-arrow loop (per the mock -- arrows-rotate,
+        # not the camera-with-arrows glyph), one gap right of the ring.
+        set fr [expr {$L(cam_flip_d) / 2}]
+        set flip_cx [expr {$shut_cx + $rr + $gap + $fr}]
+        dui add dbutton $page [expr {$flip_cx - $fr}] [expr {$cy - $fr}] \
+            [expr {$flip_cx + $fr}] [expr {$cy + $fr}] \
+            -tags cam_btn -shape oval -fill $L(cam_circle) \
+            -label [$G arrows-rotate "Flip"] -label_font $ifont \
+            -label_fill $L(cam_icon) \
+            -command [list ::plugins::BeanScanner::_tap $page cam_btn ::plugins::BeanScanner::camera_flip]
+
         set sy0 [expr {$cy - $L(btn_h) / 2}]
         set sy1 [expr {$cy + $L(btn_h) / 2}]
-        set snd_x0 [expr {$m + 94}]
-        set snd_x1 [expr {$snd_x0 + $L(cam_send_w)}]
+        set snd_x1 [expr {$sw - $in}]
+        set snd_x0 [expr {$snd_x1 - $L(cam_send_w)}]
         # -radius equals the FULL button height on purpose: dui's round
         # shape draws corner circles whose DIAMETER is the radius value,
         # so height-sized "radius" (clamped to the height internally) is
@@ -2172,13 +2626,15 @@ namespace eval ::dui::pages::BeanScanner_capture {
             -fill $L(cam_send_fill) \
             -label [translate "Send"] -label_font $L(font_button) \
             -label_fill $L(cam_send_text) \
-            -command ::plugins::BeanScanner::send_photos
+            -command [list ::plugins::BeanScanner::_tap $page send_btn ::plugins::BeanScanner::send_photos]
         # Inside the pill, per the mock: a dark count badge on the left
         # (hidden until a photo exists) and a paper plane on the right.
-        # They sit ON TOP of the button, so their taps are forwarded to
-        # send_photos with a raw canvas tag binding below.
+        # The badge stays on the left in the corner position too: the
+        # right thumb comes in from the edge and covers the plane end,
+        # never the count. Both sit ON TOP of the button, so their taps
+        # are forwarded to send_photos with a raw canvas tag binding below.
         set bd $L(cam_badge_d)
-        set bx0 [expr {$snd_x0 + 24}]
+        set bx0 [expr {$snd_x0 + $L(cam_badge_inset)}]
         dui add canvas_item oval $page $bx0 [expr {$cy - $bd / 2}] \
             [expr {$bx0 + $bd}] [expr {$cy + $bd / 2}] \
             -fill $L(cam_send_text) -outline $L(cam_send_text) \
@@ -2188,7 +2644,7 @@ namespace eval ::dui::pages::BeanScanner_capture {
             -anchor center -justify center -initial_state hidden
         # Plane: smaller than the other icons, centred between the end of
         # the "Send" label and the pill's right wall.
-        dui add dtext $page [expr {$snd_x1 - 66}] $cy -tags send_plane \
+        dui add dtext $page [expr {$snd_x1 - $L(cam_plane_dx)}] $cy -tags send_plane \
             -text [$G paper-plane ">"] \
             -font [expr {$L(have_icons) ? $L(font_icon_sm) : $L(font_button)}] \
             -fill $L(cam_send_text) \
@@ -2196,40 +2652,16 @@ namespace eval ::dui::pages::BeanScanner_capture {
         catch {
             set can [dui canvas]
             foreach t {send_badge send_badge_n send_plane} {
-                $can bind $t <ButtonRelease-1> ::plugins::BeanScanner::send_photos
+                $can bind $t <ButtonRelease-1> [list ::plugins::BeanScanner::_tap $page send_btn ::plugins::BeanScanner::send_photos]
             }
         }
-        set clr_x0 [expr {$snd_x1 + $L(md)}]
-        dui add dbutton $page $clr_x0 [expr {$cy - $d / 2}] \
-            [expr {$clr_x0 + $d}] [expr {$cy + $d / 2}] \
+        # Trash: one gap left of the Send pill.
+        set clr_x1 [expr {$snd_x0 - $gap}]
+        dui add dbutton $page [expr {$clr_x1 - $d}] [expr {$cy - $d / 2}] \
+            $clr_x1 [expr {$cy + $d / 2}] \
             -tags clear_btn -shape oval -fill $L(cam_circle) \
             -label [$G trash-can "Clr"] -label_font $ifont -label_fill $L(cam_icon) \
-            -command ::dui::pages::BeanScanner_capture::clear_pressed
-
-        set rr [expr {$L(cam_ring_d) / 2}]
-        dui add canvas_item oval $page [expr {$cx - $rr}] [expr {$cy - $rr}] \
-            [expr {$cx + $rr}] [expr {$cy + $rr}] \
-            -outline "#ffffff" -width 5 -fill {} -tags shutter_ring
-        set sr [expr {$L(cam_shutter_d) / 2}]
-        # The shutter is label-free by design; the single space keeps a
-        # real label sub-item in existence (empty-label dbuttons can
-        # never be relabelled later -- the sub-item is simply not built).
-        dui add dbutton $page [expr {$cx - $sr}] [expr {$cy - $sr}] \
-            [expr {$cx + $sr}] [expr {$cy + $sr}] \
-            -tags capture_btn -shape oval -fill "#ffffff" \
-            -label " " -label_font $L(font_button) \
-            -command ::plugins::BeanScanner::capture_jpeg
-
-        # Flip: the plain two-arrow loop (per the mock -- arrows-rotate,
-        # not the camera-with-arrows glyph).
-        set fr [expr {$L(cam_flip_d) / 2}]
-        set flip_cx [expr {$cx + 786}]
-        dui add dbutton $page [expr {$flip_cx - $fr}] [expr {$cy - $fr}] \
-            [expr {$flip_cx + $fr}] [expr {$cy + $fr}] \
-            -tags cam_btn -shape oval -fill $L(cam_circle) \
-            -label [$G arrows-rotate "Flip"] -label_font $ifont \
-            -label_fill $L(cam_icon) \
-            -command ::plugins::BeanScanner::camera_flip
+            -command [list ::plugins::BeanScanner::_tap $page clear_btn ::dui::pages::BeanScanner_capture::clear_pressed]
 
         # Screen-flash overlay: created LAST so it covers everything,
         # starts hidden (st:hidden via -initial_state, so page loads never
@@ -2240,7 +2672,23 @@ namespace eval ::dui::pages::BeanScanner_capture {
             -initial_state hidden
     }
 
+    # v0.10.1 (F22): cheap visual resets only, before the page appears --
+    # no count badge, "Starting the camera..." instead of the last status,
+    # and the last visit's frame wiped (a blanked photo is transparent, so
+    # the black backdrop shows). The camera itself is NOT opened here:
+    # borg open/start is slow and synchronous, and a capture hide still
+    # queued from a quick leave-and-return would close a camera opened in
+    # load. show opens it, as before.
+    proc load {page_to_hide page_to_show args} {
+        return [::plugins::BeanScanner::_page_load "camera page" $page_to_show {
+            ::plugins::BeanScanner::clear_photos
+            ::plugins::BeanScanner::set_stage idle [translate "Starting the camera..."]
+            ::plugins::BeanScanner::_blank_preview
+        }]
+    }
+
     proc show {page_to_hide page_to_show} {
+        if {![::plugins::BeanScanner::_page_is_current $page_to_show]} { return }
         # A fresh visit is a fresh scan: pending photos from an interrupted
         # or cancelled session must not leak into this one (mode/page
         # switches reset input state).
@@ -2258,7 +2706,7 @@ namespace eval ::dui::pages::BeanScanner_capture {
 
     proc clear_pressed {} {
         ::plugins::BeanScanner::clear_photos
-        ::plugins::BeanScanner::set_stage preview [translate "Photos cleared. Tap Capture."]
+        ::plugins::BeanScanner::set_stage preview [translate "Photos cleared. Tap the shutter."]
     }
 
     proc page_done {} {
@@ -2312,21 +2760,34 @@ namespace eval ::dui::pages::BeanScanner_review {
 
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_wide)}] $L(bar_y1) \
             -tags accept_btn -label [translate "Accept"] \
-            -command ::dui::pages::BeanScanner_review::accept \
-            -label_font $L(font_button) -style bsc_btn
+            -command [list ::plugins::BeanScanner::_tap $page accept_btn ::dui::pages::BeanScanner_review::accept] \
+            -label_font $L(font_button) -style bsc_btn_primary
         set b2 [expr {$rx - $L(btn_w_std)}]
         dui add dbutton $page $b2 $L(bar_y0) $rx $L(bar_y1) \
             -tags page_done -label [translate "Cancel"] \
-            -command {::plugins::BeanScanner::_exit_subpage} \
+            -command [list ::plugins::BeanScanner::_tap $page page_done ::plugins::BeanScanner::_exit_subpage] \
             -label_font $L(font_button) -style bsc_btn
         set b1 [expr {$b2 - $L(md) - $L(btn_w_std)}]
         dui add dbutton $page $b1 $L(bar_y0) [expr {$b1 + $L(btn_w_std)}] $L(bar_y1) \
             -tags rescan_btn -label [translate "Rescan"] \
-            -command {::plugins::BeanScanner::open_page BeanScanner_capture} \
+            -command [list ::plugins::BeanScanner::_tap $page rescan_btn {::plugins::BeanScanner::open_page BeanScanner_capture}] \
             -label_font $L(font_button) -style bsc_btn
     }
 
+    # v0.10.1 (F22): the scan's fields and "will be cleared" marks are
+    # written before the page appears, never the previous scan's.
+    proc load {page_to_hide page_to_show args} {
+        return [::plugins::BeanScanner::_page_load "review page" $page_to_show {
+            _refresh $page_to_show
+        }]
+    }
+
     proc show {page_to_hide page_to_show} {
+        if {![::plugins::BeanScanner::_page_is_current $page_to_show]} { return }
+        _refresh $page_to_show
+    }
+
+    proc _refresh {page_to_show} {
         upvar #0 ::plugins::BeanScanner::scan scan
         upvar #0 ::plugins::BeanScanner::L L
         set dash "—"
@@ -2402,15 +2863,25 @@ namespace eval ::dui::pages::BeanScanner_diagnostics {
 
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags page_done -label [translate "Done"] \
-            -command {::plugins::BeanScanner::_exit_subpage} \
+            -command [list ::plugins::BeanScanner::_tap $page page_done ::plugins::BeanScanner::_exit_subpage] \
             -label_font $L(font_button) -style bsc_btn
         dui add dbutton $page [expr {$rx - $L(btn_w_wide)}] $L(bar_y0) $rx $L(bar_y1) \
             -tags probe_btn -label [translate "Probe Camera"] \
-            -command ::dui::pages::BeanScanner_diagnostics::probe \
+            -command [list ::plugins::BeanScanner::_tap $page probe_btn ::dui::pages::BeanScanner_diagnostics::probe] \
             -label_font $L(font_button) -style bsc_btn
     }
 
-    proc show {page_to_hide page_to_show} { refresh $page_to_show }
+    # v0.10.1 (F22): the report is written before the page appears.
+    proc load {page_to_hide page_to_show args} {
+        return [::plugins::BeanScanner::_page_load "diagnostics page" $page_to_show {
+            refresh $page_to_show
+        }]
+    }
+
+    proc show {page_to_hide page_to_show} {
+        if {![::plugins::BeanScanner::_page_is_current $page_to_show]} { return }
+        refresh $page_to_show
+    }
 
     proc probe {} {
         ::plugins::BeanScanner::camera_probe
@@ -2423,15 +2894,20 @@ namespace eval ::dui::pages::BeanScanner_diagnostics {
         lappend lines "Version: $::plugins::BeanScanner::version"
         lappend lines "Provider: [::plugins::BeanScanner::_setting provider anthropic]   Model: [::plugins::BeanScanner::model_id]"
         lappend lines "API key: [::plugins::BeanScanner::api_key_source]"
-        lappend lines "DYE loaded: [expr {[::plugins::BeanScanner::dye_available] ? {yes} : {NO - enable DYE in Extensions}}]"
+        lappend lines "DYE loaded: [::plugins::BeanScanner::_pick [::plugins::BeanScanner::dye_available] {yes} {NO - enable DYE in Extensions}]"
         lappend lines "Camera preference: [::plugins::BeanScanner::_setting camera_pref front]   Capture: [::plugins::BeanScanner::_setting capture_size 1600x1200]"
         set fl [::plugins::BeanScanner::_setting flash_mode off]
         if {$cam(flash_modes) ne ""} {
-            set fhw [expr {$cam(flash_hw) eq "" ? "none - screen flash" : $cam(flash_hw)}]
+            set fhw [::plugins::BeanScanner::_pick [expr {$cam(flash_hw) eq ""}] "none - screen flash" $cam(flash_hw)]
             lappend lines "Flash: $fl   Hardware (last camera): $fhw (modes: [join $cam(flash_modes) {, }])"
         } else {
             lappend lines "Flash: $fl   Hardware: unknown until a camera is opened (front cameras use screen flash)"
         }
+        set mline "Exposure metering: [::plugins::BeanScanner::_setting metering screen]"
+        if {$cam(meter_box) ne ""} { append mline "   box $cam(meter_box)" }
+        if {$cam(meter_actual) ne ""} { append mline "   camera reads back $cam(meter_actual)" }
+        if {$cam(meter_max) ne ""} { append mline "   max areas $cam(meter_max)" }
+        lappend lines $mline
         lappend lines "Import folder: [::plugins::BeanScanner::_setting import_dir /sdcard/DCIM/Camera]"
         lappend lines ""
         if {$cam(probe) eq ""} {
@@ -2444,8 +2920,10 @@ namespace eval ::dui::pages::BeanScanner_diagnostics {
             lappend lines "Last capture: [::plugins::BeanScanner::_fmt_bytes $cam(last_bytes)]"
         }
         lappend lines ""
-        lappend lines "Last HTTP: [expr {$::plugins::BeanScanner::last_http eq {} ? {none} : $::plugins::BeanScanner::last_http}]"
-        lappend lines "Last error: [expr {$::plugins::BeanScanner::last_error eq {} ? {none} : $::plugins::BeanScanner::last_error}]"
+        set lh $::plugins::BeanScanner::last_http
+        set le $::plugins::BeanScanner::last_error
+        lappend lines "Last HTTP: [::plugins::BeanScanner::_pick [expr {$lh eq {}}] {none} $lh]"
+        lappend lines "Last error: [::plugins::BeanScanner::_pick [expr {$le eq {}}] {none} $le]"
         if {$::plugins::BeanScanner::last_raw ne ""} {
             lappend lines "Last response: [::plugins::BeanScanner::_short $::plugins::BeanScanner::last_raw 400]"
         }
@@ -2469,7 +2947,7 @@ namespace eval ::dui::pages::BeanScanner_help {
         set body [join {
             "1. Put your API key in Settings > API key, or push a file named api_key_anthropic.txt (or api_key_openai.txt) into the BeanScanner plugin folder. A ChatGPT Plus or Claude Pro subscription does NOT include API access -- create a key with pay-as-you-go credit instead. One scan costs a fraction of a cent."
             ""
-            "2. Tap Scan Bean Bag. The screen becomes a camera: the white circle at the bottom takes a picture. Photograph every side of the bag that has printing on it -- the roast date is often on the back -- then tap Send to have all the photos read together. The trash circle drops the photos and starts over; the X (top left) cancels. Good light and a steady hand matter more than resolution."
+            "2. Tap Scan Bean Bag. The screen becomes a camera: the white circle at the bottom left takes a picture. Photograph every side of the bag that has printing on it -- the roast date is often on the back -- then tap Send (bottom right) to have all the photos read together. The trash circle drops the photos and starts over; the X (top left) cancels. Good light and a steady hand matter more than resolution. The sun circle next to the flash sets how the camera judges brightness: yellow (default) = on what the screen shows, white = the camera's own metering of its whole view."
             ""
             "The lightning circle (top right) is the flash: slashed white = off, yellow = on, yellow with an A = auto (back camera only). On the back camera the real flash is used as a steady light; the front camera has no flash, so the whole screen turns white while the picture is taken -- the screen never flashes for the back camera. The two-arrow circle flips between the front and back camera without leaving the page; photos already taken are kept."
             ""
@@ -2489,7 +2967,7 @@ namespace eval ::dui::pages::BeanScanner_help {
 
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags page_done -label [translate "Done"] \
-            -command {::plugins::BeanScanner::_exit_subpage} \
+            -command [list ::plugins::BeanScanner::_tap $page page_done ::plugins::BeanScanner::_exit_subpage] \
             -label_font $L(font_button) -style bsc_btn
     }
 }

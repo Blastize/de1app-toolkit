@@ -2,8 +2,124 @@
 
 Entries follow the CLAUDE.md doc cap (about 15 lines each; entries that
 added or changed a write capability keep their full write-path text). The
-long pre-trim entries survive in the Desktop "BeanScanner Archive" snapshot
-of each version.
+long pre-trim entries survive in the "Version archive/BeanScanner Archive"
+snapshot of each version.
+
+## v0.11.0 - 2026-10-02 - the look batch (F8, F9, F10, F21)
+
+Base: v0.10.1.
+
+* F8: fonts and coordinates share one scale source, dui's canvas size
+  (`dui cget screen_size_width/height`, 1340x800), not `winfo
+  screenheight` (736 on the Tab A9), so text now renders at its design
+  size (title 40 px, body 19, buttons 20; was 37/17/18). Camera preview
+  choice unchanged (1600x960 still covers the screen).
+* F9: every button reacts to the finger. Each -command goes through
+  `_tap` (GrindAdvisor 3.22.0): the face takes its role's press tone at
+  once, is restored 120 ms after the command from the CURRENT palette,
+  page-scoped; no core -pressfill. Camera chrome has its own tones.
+* F10: one primary (green) action per page: Scan Bean Bag, Accept.
+* F21: the shared status roles; "will be cleared" uses the family warn
+  (#7a4b00 light, #E8B34C dark; adopted Lumen keeps its own warn).
+  Display text is picked with `_pick`/`_plural`, never `expr ?:`.
+* Harness bsc_v0110_harness.tcl.
+
+**Safety status: no change to data behavior.** Look and tap feedback
+only. The only data write remains the DYE next-shot update after you
+press Accept. No SQL, no history files, no direct `::settings` writes.
+
+Files: plugin.tcl, BeanScanner.tcl, README.md, CHANGELOG.md, PROJECT_STATE.md.
+
+## v0.10.1 - 2026-10-02 - pages open fresh, never on the last visit (F22)
+
+Base: v0.10.0.
+
+* dui runs a page's show hook only after the page is already on screen,
+  so every BeanScanner page briefly showed the previous visit: the camera
+  page its last frame, old status and photo count; the review page the
+  previous scan; settings, API key and diagnostics their old values.
+  Each of these pages now refreshes in a load hook, which dui runs before
+  the page appears (mechanism copied from GrindAdvisor 3.17.4: skip until
+  set up, log errors, always return 1). Camera page load only blanks the
+  old frame, clears the count and sets "Starting the camera..."; the
+  camera still opens in show. Every show checks it is still the current
+  page before repainting.
+* preload no longer saves settings (CLAUDE.md rule); the migrations run
+  in memory on every start and persist with the next settings change.
+* Harness bsc_v0101_harness.tcl, 250 checks.
+
+**Safety status: no change to data behavior.** The only data write remains
+the DYE next-shot update after you press Accept. No SQL, no history files,
+no direct `::settings` writes; one fewer settings save (at startup).
+
+Files: plugin.tcl, BeanScanner.tcl, README.md, CHANGELOG.md, PROJECT_STATE.md.
+
+## v0.10.0 - 2026-09-30 - exposure measured on what the screen shows
+
+Base: v0.9.15.
+
+* Owner report: the preview looked overexposed until the bag filled the
+  whole screen. Cause: the full-screen preview (since v0.8.3) is centre-
+  cropped, so the camera metered about 44% of its view that never reaches
+  the screen (front camera, 1600x960 on 1340x800), brightened for the
+  dark surroundings there and clipped the label.
+* After every preview start the camera now gets ONE metering area
+  matching the visible part of the frame (`(-838,-833,838,833,1000)` on the
+  Tab A9), one key per call, read back and logged. A sun button left of
+  the flash switches to the camera's factory metering (white) and back
+  (yellow, default); the choice persists. Diagnostics shows the box and
+  the camera's read-back. Both cameras report `max-num-metering-areas` 1.
+* Owner-approved amendment of v0.9.12's "no 3A writes": metering-areas
+  only. Harness bsc_v0100_harness.tcl, 197 checks.
+
+**Safety status: no change to data behavior.** The only data write remains
+the DYE next-shot update after you press Accept. No SQL, no history files,
+no direct `::settings` writes. New plugin settings key: `metering`
+(screen/camera), saved when the sun button is tapped. New camera parameter
+write: `metering-areas` on the open camera only (never persisted).
+
+Files: plugin.tcl, BeanScanner.tcl, README.md, CHANGELOG.md, PROJECT_STATE.md.
+
+## v0.9.15 - 2026-09-30 - polish: shutter bottom-left, Send bottom-right
+
+Base: v0.9.14.
+
+* Capture page bottom row mirrored for two thumbs (owner request): the
+  shutter sits in the bottom-left corner with the camera flip beside it;
+  Send sits in the bottom-right corner with the trash beside it. Count
+  badge stays on the pill's left end (the right thumb covers the plane,
+  not the count). Gaps between tap areas grew to 96 virtual (about 7 mm).
+* The shutter's tap area now covers the whole white ring, not just the
+  disc. Status text says "Tap the shutter" (no control is labelled
+  Capture); Help and README name the corners. Top row unchanged.
+
+**Safety status: no change to data behavior.** Layout and copy only. The
+only data write remains the DYE next-shot update after you press Accept.
+No SQL, no history files, no direct `::settings` writes.
+
+Files: plugin.tcl, BeanScanner.tcl, README.md, CHANGELOG.md, PROJECT_STATE.md.
+
+## v0.9.14 - 2026-09-30 - polish: text contrast (family palette)
+
+Base: v0.9.13.
+
+* Colour tokens only, now the values GrindAdvisor, ShotHistoryEditor and
+  MaintenanceTracker share. Light: muted text #666666 -> #595959
+  (subtitles, key help, review labels 3.98 -> 4.86:1); value blue #4e85f4
+  -> #2753bb (card values 3.51 -> 6.91:1, API key entry text 3.38 ->
+  6.65:1). Dark: muted #8d92a0 -> #9aa0ad (4.91 -> 5.82:1); button labels
+  #e8e9ee -> #ffffff (6.17 -> 7.48:1). Every text pair of both palettes
+  meets WCAG AA at its rendered size. A restart and the sun/moon toggle
+  paint the same values. Camera page unchanged.
+* API key entry text has its own token, entry_fg (each palette's value
+  blue), never adopted: on Lumen with theme "" it drew Lumen's accent on
+  its own near-white box (down to 1.2:1); now 6.65:1 on every Lumen palette.
+
+**Safety status: no change to data behavior.** Colours only. The only
+data write remains the DYE next-shot update after you press Accept. No
+SQL, no history files, no direct `::settings` writes.
+
+Files: plugin.tcl, BeanScanner.tcl, README.md, CHANGELOG.md, PROJECT_STATE.md.
 
 ## v0.9.13 - preview refresh reverted to the classic poll
 

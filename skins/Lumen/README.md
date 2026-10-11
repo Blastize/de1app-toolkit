@@ -1,7 +1,7 @@
 # Lumen
 
 **A glass dashboard home screen for the Decent DE1: grind recommendation, last shot, shot graph and next-shot beans, without opening Settings.**
-Version 0.59.0 · a skin for the Decent DE1app · by Blastize
+Version 0.62.1 · a skin for the Decent DE1app · by Blastize
 
 ![The Lumen home screen in a custom theme: grind tile, last shot, live graph, next-shot strip, and the taskbar with three favorite profile names, the loaded one glowing](docs/home_custom_theme.png)
 
@@ -56,18 +56,85 @@ shot — all reachable without going into Settings. It is built to work with
 GrindAdvisor, DYE, Bean Scanner, ShotHistoryEditor, MaintenanceTracker
 and SDB.
 
-**Version 0.59.0 — every page built, baked and running on the tablet.**
+**Version 0.62.1 — every page built, baked and running on the tablet.**
+
+New in 0.62.1: **Sleep is the power symbol, and the words read one way.**
+The taskbar's sleep button (far left, same place, same tap) now shows the
+standard power symbol instead of the moon, which the plugins use for their
+dark theme. Everything Lumen writes follows the toolkit's one copy style: a
+cut name or note ends in a real ellipsis (…) instead of three dots, two
+facts on one line are joined by a middle dot ("Start ~13.5 (est. from 4
+bags) · pull a shot to calibrate", the bean notes' lines, "No shot data yet
+· pull a shot"), the theme progress reads "Applying Light theme…", and the
+tank-empty page's button reads "Exit app".
+
+Earlier, 0.62.0: **text at its design size, one set of status colours, dates
+in your clock format.** Lumen's text used to come out at 92% on the tablet
+(its size was taken from the screen height Android reports, 736 instead of
+the app's 800); it is now drawn at its design size -- titles 40 px, body
+19, captions 16 -- from the same screen size the layout uses. The places
+that would have crowded were re-spaced: the grind number and its note, the
+change ("finer by 0.5") in the body size, the next-shot bean name and the
+last-shot name cut to fit their row instead of wrapping, a wider GRIND
+column on the last-shot card, the cleaning banner (its right line in the
+caption size, the profile names cut to fit), and the theme picker's header
+and sun line. The good / amber / red colours are the ones GrindAdvisor,
+MaintenanceTracker and DrinkMenu now share (light theme: a deeper green,
+amber and red; dark theme: a lighter, coral red), and the cleaning banner
+keeps one red face in every theme. Dates follow the settings CLOCK row
+everywhere: the last-shot card reads "Mon Sep 29 09:29 PM · 4 days ago",
+the cleaning banner's "comes back at 08:17 PM" and the picker's "Sunrise
+06:10 AM" use 12 hours when the taskbar does. The theme miniature shows the
+tile as it is now (chip word and "12 shots on this bag"), and the theme
+progress pill counts "DYE page 3 of 7".
+
+Earlier, 0.61: **the grind tile speaks plain words** (with GrindAdvisor 3.19).
+The header reads NEXT GRIND, the change reads "finer by 0.5" instead of
+"-0.5" (right-aligned, so a quarter-step grind like 12.25 never crowds it),
+the line under the number says what happened in barista words ("15.5 s,
+target 28 s: go finer", or "28 s is out of reach by grind: change dose or
+yield"), the chip says how sure the number is (Low / Medium / High / Very
+high, or First shot / Estimate) instead of the method, and the footer counts
+the shots it stands on ("4 of 5 shots on this bag") beside the same coloured
+dot as before. The method, slope and fit are one tap away under Shot
+analysis -> Why?. Also fixed: stepping past the newest or oldest bag no
+longer writes an empty error line to the log. With an older GrindAdvisor the
+tile keeps its earlier note.
+
+Earlier, 0.60.0: **Clear favorite profiles can be undone.** One tap still
+empties the three slots at once, but for six seconds the link then reads
+"Cleared. Undo"; a tap on it puts the cleared favorites back. A double
+tap does not undo itself (the second tap within half a second is ignored),
+and leaving the page or waiting six seconds makes the clear final. The undo
+lives in memory only: if the app is closed in those six seconds, the
+favorites stay cleared, exactly as the screen said.
+
+0.59.2: **bigger targets for the − / + pills.** Every stepper pill
+and the bag arrows answer a tap over 64 × 80 px now (it was the 44 × 48
+pill itself), reaching into the value between the pills and above and
+below, so a thumb that lands beside a pill still steps it; the pills look
+the same and the tap glow stays on the pill. On the settings page, Steam
+and Hot Water choose their mode on a two-part pill, [TIME | FLOW] and
+[TEMP | VOL], with the selected half filled.
+
+New in 0.59.1: **every text reads on what it sits on.** Text colours are
+checked against the real surface under them (the accent-lit grind tile,
+the glow behind the timers, the pills) and only deepened on light glass,
+or lightened on dark, as far as needed; the confidence band shows its
+verdict as a coloured dot beside the words.
 
 New in 0.59.0: **Auto follows the sun.** With the Auto base, the glass
 turns light at today's sunrise and dark at today's sunset where your
 tablet is, so it moves with the seasons. The position comes from the
 tablet's time zone (Settings > General management > Date and time on
 Android), or from its location when the zone is not known; nothing about
-it is saved. The picker shows today's times ("Auto: Sunrise 06:09
-Sunset 18:10"); they are no longer tapped to set. If neither source is
+it is saved. The picker shows today's times ("Sunrise 06:09 AM  Sunset
+06:10 PM", in the CLOCK row's 12 or 24 hours since 0.62.0); they are no
+longer tapped to set. If neither source is
 available, the fixed times (07:00 and 19:00 unless set earlier) stay.
 
-New in 0.57.0: **the taskbar, re-laid out.** Sleep (the moon) sits alone
+New in 0.57.0: **the taskbar, re-laid out.** Sleep (the moon then, the
+power symbol since 0.62.1) sits alone
 at the far left where a stray tap finds nothing else; the date sits under
 the time with the water level beside it; the four remaining icons close up
 at the right edge; the wordmark is gone. The three favorite slots now show
@@ -189,7 +256,7 @@ same roaster (4 bags)") — instead of just `--`. It is display-only and
 disappears the moment the bag's first real shot produces a calibration.
 
 Since 0.30.0 the top of the screen is a **taskbar** (re-laid out in
-0.57.0): the moon (sleep) alone at the far left, a live clock over the date
+0.57.0): the power symbol (sleep) alone at the far left, a live clock over the date
 (12/24-hour and day-month/month-day formats, chosen on the settings CLOCK
 row) with the water level beside it, the three favorite profile names
 across the middle, and mug / wrench / gear / DE1 icons at the right — Drink
@@ -220,11 +287,11 @@ backdrop and let the shadow do the separating.
 
 | Tile | Shows | Tap |
 |---|---|---|
-| Taskbar (top) | Live clock over the date, and the water left in the tank in mL — amber under 300 ml, blank when no machine is connected | The five icons: moon (far left, alone) = sleep; at the right, mug = Drink Menu, wrench = MaintenanceTracker's card list, gear = Lumen settings, DE1 side view = the stock app settings |
-| Favorite profiles (taskbar, three slots across the middle) | Each slot shows its profile's name, centred and cut with an ellipsis when long: a dim `+` is an empty slot, grey is a set one, and the loaded profile's slot reads in crema over a soft crema halo | Tap an empty slot to store the profile loaded now; tap a set slot to load its profile (refused while the machine is running). Put your backflush profile in one and a cleaning run is one tap plus the GHC button. "Clear favorite profiles" on the Lumen settings page empties all three |
+| Taskbar (top) | Live clock over the date, and the water left in the tank in mL — amber under 300 ml, blank when no machine is connected | The five icons: power symbol (far left, alone) = sleep; at the right, mug = Drink Menu, wrench = MaintenanceTracker's card list, gear = Lumen settings, DE1 side view = the stock app settings |
+| Favorite profiles (taskbar, three slots across the middle) | Each slot shows its profile's name, centred and cut with an ellipsis when long: a dim `+` is an empty slot, grey is a set one, and the loaded profile's slot reads in crema over a soft crema halo | Tap an empty slot to store the profile loaded now; tap a set slot to load its profile (refused while the machine is running). Put your backflush profile in one and a cleaning run is one tap plus the GHC button. "Clear favorite profiles" on the Lumen settings page empties all three, with six seconds to undo |
 | Maintenance dot (at the wrench) | Amber when a maintenance item is due soon, red when one is overdue — driven by the MaintenanceTracker plugin's status; blank when all is well or the plugin is absent | — |
 | Cleaning banner (top of the graph card, 0.58.0) | A red strip while a cleaning profile is loaded: "CLEANING PROFILE LOADED" and its name, plus which espresso profile comes back and when (after Maintenance Tracker's Start), or "Pick your espresso profile before brewing" | While Maintenance Tracker holds a switch-back: switch back to the espresso profile now |
-| Grind | GrindAdvisor's next setting for the loaded bag, the change from the last one, method, confidence and shot count. A bag with no shots yet shows the **starting estimate** instead (GrindAdvisor 3.13.0): STARTING ESTIMATE header, `~` before the number, an Estimate chip, and which bags it was borrowed from | Opens GrindAdvisor's settings (target time, rounding, history) |
+| Grind | NEXT GRIND: GrindAdvisor's next setting for the loaded bag, the move in words ("finer by 0.5"), one plain line on why ("15.5 s, target 28 s: go finer"), how sure it is in the chip (Low / Medium / High / Very high), and the shots it stands on ("4 of 5 shots on this bag", with a green or amber dot for high or low confidence). A bag with no shots yet shows the **starting estimate** instead (GrindAdvisor 3.13.0): STARTING ESTIMATE header, `~` before the number, and which bags it was borrowed from | Opens GrindAdvisor's settings (target time, rounding, history) |
 | Shot analysis (on the grind tile) | — | Opens GrindAdvisor's result popup |
 | Curve (on the grind tile) | — | Opens GrindAdvisor's Calibration Curve directly |
 | Last shot | The last **real espresso** of the loaded bean (cleaning, backflush, calibration and sub-5 s runs are skipped; a bag with no shots yet falls back to the newest real shot of any bag): the profile it ran on, the roaster and bean, then grind, dose, yield (with the ratio beneath) and time — as **that shot recorded them**, read back from the shot file, so corrections made in the Shot History Editor appear here. `--` when the shot had no weight | — |
@@ -247,9 +314,13 @@ lights after its first shot without touching the arrows.
 There are no Espresso/Steam/Water/Flush buttons — the machine's GHC starts
 those, and the flow pages take over the screen as soon as it does.
 
-The Grind tile's method chip names the rung GrindAdvisor used: **First shot**
-(1 shot on the bag), **2-shot**, **Regression** (3 or more), or **Pairwise**
-when the regression is too flat to solve.
+Since 0.61 the Grind tile no longer names the method GrindAdvisor used
+(first shot, two-shot, regression, pairwise, weak fit): that is under Shot
+analysis -> Why?, together with the slope, the fit and the confidence score.
+The chip that showed it (the pill is part of the baked background) now says
+how sure the number is.
+The tile's words come from GrindAdvisor 3.19.0's plain summary; with an older
+GrindAdvisor it shows the band word and the shortened reason as before.
 
 ## If the scale does not connect
 
@@ -306,7 +377,11 @@ The skin does not use the app's `load_font`, because that hands a *positive*
 — 0.5 on this tablet — which makes text size unpredictable across DPI. Lumen
 takes only the family name from the font loader and creates every font itself
 at negative (pixel) sizes, with a 16px floor. If the TTFs cannot be
-registered, each face falls back to Helvetica or Courier.
+registered, each face falls back to Helvetica or Courier. Since 0.62.0 the
+pixel sizes are scaled by the app's own screen height (`dui cget
+screen_size_height`, 800 on a 1340x800 tablet) -- the value the layout is
+scaled by -- not by Tk's reported screen height, which is short by the
+Android bar and drew every font at 92%.
 
 ## Install
 
@@ -368,9 +443,13 @@ role tag, repaints the photo panels and restyles the graphs.
 base (dark or light glass), the backdrop hue and tint strength, and the
 accent hue and saturation. Backdrop drives the page gradient, the glass
 (translucent white over it, so it inherits the tint) and the three inks;
-accent replaces crema everywhere. Good/warn/danger and the chart colours
-never change. The page backgrounds cannot be pre-rendered for arbitrary
-colours, so at the first launch after a change the skin paints them in
+accent replaces crema everywhere. Good/warn/danger keep their hues and the
+chart lines their colours; since 0.59.1 every text colour (the inks, the
+accent's text ink, good/warn/danger, the legend inks) moves only its
+lightness, and only as far as the surface it sits on needs for 4.5:1
+(3:1 for large text and status dots). The page backgrounds cannot be
+pre-rendered for arbitrary colours, so at the first launch after a change
+the skin paints them in
 pure Tcl — the gradient, every panel and pill with a soft shadow, the
 bloom — and writes `lumen_<page>_custom.png` next to the baked images,
 with a `lumen_custom.sig` stamp so unchanged colours draw nothing. If
@@ -382,8 +461,9 @@ temperature (±0.5°C), Steam, Flush time (±1 s) and Hot Water, each with the
 same − value + steppers as the home strip. Changes are saved and sent to the
 machine automatically, one second after the last tap.
 
-**Steam and Hot Water each carry two settings** (0.26.0). Tap the mode line
-under the row's label to choose which one the − / + pills drive:
+**Steam and Hot Water each carry two settings** (0.26.0). Tap the mode pill
+under the row's label, [TIME | FLOW] or [TEMP | VOL] (0.59.2; the filled half
+is the selected one), to choose which setting the − / + pills drive:
 
 | Row | Modes | Step |
 |---|---|---|
@@ -411,6 +491,11 @@ is a Lumen preference only — it never reaches the machine.
 day-month ↔ month-day, the time button toggles 24H ↔ 12H. Both apply to
 the taskbar immediately — no restart — and persist in
 `::settings(lumen_date_format)` / `::settings(lumen_time_format)`.
+Since 0.62.0 they also set every date and time Lumen shows (the last-shot
+card, the cleaning banner, the picker's sun times), and plugins that show
+dates read them too (`::lumen::time_format` returns 12 or 24,
+`::lumen::date_format` mdy or dmy). Plugins drawing on Lumen's glass can
+ask for its status inks with `::lumen::role_color ok|warn|danger|info`.
 
 ## The next-shot strip
 
@@ -497,7 +582,10 @@ clamps its value. Three groups:
   `lumen_custom_base` / `_bh` / `_bs` / `_ah` / `_as` (picker Done only),
   and `lumen_fav_profiles` (the three favorite slots: a tap on an empty
   slot stores the loaded profile's filename and title; the settings
-  page's Clear link removes the key).
+  page's Clear link empties it -- stores "" since 0.60.0, so the core's
+  additive settings restore cannot bring old slots back -- and a tap on
+  "Cleared. Undo" within six seconds writes the pre-clear value back,
+  both through save_settings).
 * **Profile switch (0.53.0):** a tap on a set favorite slot calls the
   core's own `select_profile` with that slot's filename (the same call
   DrinkMenu and DYE make), then `save_settings` + `save_settings_to_de1`

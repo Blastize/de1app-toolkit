@@ -1,7 +1,7 @@
 # Drink Menu
 
 **A visual espresso drink menu on the tablet: every drink drawn as a cup with its layers.**
-Version 1.17.0 · a plugin for the Decent DE1app · by Blastize
+Version 1.18.1 · a plugin for the Decent DE1app · by Blastize
 
 ![The menu: a grid of cups with coloured layers, tabs for hot, cold, milk, favorites and custom](docs/menu.png)
 
@@ -47,7 +47,42 @@ custom drinks. Presets are read-only for the user. Since v0.11.0 the
 pages carry the design mock's own warm brown look, whatever skin theme
 is active.
 
-Author: **Blastize** - Current version: **1.17.0** (Pass 48: UX review)
+Author: **Blastize** - Current version: **1.18.1** (Pass 51: one copy pass)
+
+## New in v1.18.1
+
+A small wording pass. The editor's last ingredient chip reads "+ Custom…"
+with a real ellipsis instead of three dots. When you save a copy, the
+confirmation button now says "Save as copy", the same words as the button
+that asked for it (it said "Save copy"). After "To machine" sets both a
+profile and the water, the note joins the two results with a middle dot
+("Profile set · Water 120 ml") instead of a comma. The button is still
+too narrow to show both, so for now it reads "Profile set" and an
+ellipsis, as before. Nothing else changed, and nothing the plugin writes
+changed.
+
+## New in v1.18.0
+
+Text is the size it was designed to be. On the tablet every title, name,
+amount and button was drawn about 8% small, because the plugin sized its
+fonts from the screen minus Android's bar; they now grow to their intended
+size (captions were already at their floor and stay). The menu's subtitle
+just counts the drinks ("46 espresso drinks") and the bottom bar says
+"Page 1 of 4". Warnings are amber (the editor's status line, a drink over
+its cup's capacity) and an error is red ("Presets failed to load"). The
+vessel picker and the "Exceeds vessel by" message follow your ml/oz
+choice. On a drink, Hide is a little narrower so "To machine" has room;
+in the editor the amounts get a little more room, long ingredient names
+shrink one step before they are shortened, and the "Drink name" hint is
+easier to read. Nothing the plugin writes changed.
+
+## New in v1.17.1
+
+Pages no longer show what they showed last time. Tapping a drink opens
+it straight away (it used to show the previously viewed drink for a
+moment), the editor opens on the drink you chose, and coming back from a
+drink or the editor shows your change (a new favourite, a saved or
+deleted drink) at once.
 
 ## New in v1.17.0
 
@@ -192,7 +227,7 @@ pen.
 
 ## New in v1.3.0
 
-The editor's ingredient palette ends in a "+ Custom..." chip. It opens a
+The editor's ingredient palette ends in a "+ Custom…" chip. It opens a
 small form: type any ingredient name, choose whether it measures in ml or
 grams, and pick one of twelve colours. The layer then behaves like any
 other - steppers, remove, capacity, the drawn cup - except its amount

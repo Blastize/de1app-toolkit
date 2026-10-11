@@ -2,17 +2,17 @@
 
 **Five plugins and a skin for the classic Decent DE1 app, in one download. Drop two folders into the app, tick a few boxes, done.**
 
-| Lumen skin 0.59.0 | Grind Advisor 3.16.5 |
+| Lumen skin 0.62.1 | Grind Advisor 3.24.0 |
 |---|---|
 | ![Lumen home screen](docs/lumen.png) | ![Grind Advisor popup](docs/grindadvisor.png) |
 | A glass dashboard home screen: next grind, last shot, live graph, next-shot beans, favorite profile slots, your own colours. | After every espresso: your next grind setting and why. Nothing to type. |
 
-| Drink Menu 1.17.0 | Maintenance Tracker 0.29.1 |
+| Drink Menu 1.18.1 | Maintenance Tracker 0.31.1 |
 |---|---|
 | ![Drink Menu](docs/drinkmenu.png) | ![Maintenance Tracker](docs/maintenancetracker.png) |
 | 45 drinks drawn as cups with their layers; favorites, custom drinks, one tap to load a linked profile. | Backflush, descale, gaskets, burrs, filter, bottle level, counted from your shots. Alerts can load the cleaning profile. |
 
-| Shot History Editor 0.13.0 | Bean Scanner 0.9.13 |
+| Shot History Editor 0.19.0 | Bean Scanner 0.11.0 |
 |---|---|
 | ![Shot History Editor](docs/shothistoryeditor.png) | ![Bean Scanner](docs/beanscanner.png) |
 | Your shots as cards. Fix a wrong grind or bean, delete mistakes to a restorable trash. The database is never written. | Photograph the bag; Claude or GPT reads the label into DYE's next shot. Needs your own API key. |
@@ -29,9 +29,9 @@ Each one has its own page with more screenshots, a changelog and the full refere
 
 Every plugin works on any skin, but they are designed around Lumen. On Lumen each one has a place on the home screen, one tap away; on other skins you reach them through **Settings > App > Extensions** and each plugin's settings button.
 
-![Lumen's taskbar icons: the cup for Drink Menu, the wrench for Maintenance Tracker with its amber "due soon" dot, Lumen's gear and the app's settings](docs/lumen_taskbar_icons.png)
+![Lumen's taskbar icons: the cup for Drink Menu, the wrench for Maintenance Tracker (it wears an amber "due soon" dot when something is due), Lumen's gear and the app's settings](docs/lumen_taskbar_icons.png)
 
-- **Grind Advisor:** the **Recommended Grind** tile keeps your next setting, its change, method and confidence on screen between shots. **Shot analysis** and **Curve** open its cards; a tap on the tile opens its settings. Its popups float on glass in your theme's colours.
+- **Grind Advisor:** the **Next grind** tile keeps your next setting, the change in plain words and its confidence on screen between shots. **Shot analysis** and **Curve** open its cards; a tap on the tile opens its settings. Its popups float on glass in your theme's colours.
 - **Maintenance Tracker:** the **wrench** on the taskbar wears an amber dot when something is due soon and a red one when it is overdue, so you see it without opening anything. One tap opens the trackers. While a cleaning profile is loaded, a red banner across the graph card says so, and when Maintenance Tracker loaded it, one tap on the banner puts your espresso profile back.
 - **Drink Menu:** the **cup** on the taskbar opens the menu.
 - **Shot History Editor:** the **Last Shot** card shows your last real espresso as its shot file records it, so your corrections show up there; its **Shot history** link opens the shot list.
@@ -75,11 +75,11 @@ Download the zip again and copy the two folders over the old ones. Your settings
 
 | Folder | Version |
 |---|---|
-| `skins/Lumen` | 0.59.0 |
-| `plugins/GrindAdvisor` | 3.16.5 |
-| `plugins/DrinkMenu` | 1.17.0 |
-| `plugins/MaintenanceTracker` | 0.29.1 |
-| `plugins/ShotHistoryEditor` | 0.13.0 |
-| `plugins/BeanScanner` | 0.9.13 |
+| `skins/Lumen` | 0.62.1 |
+| `plugins/GrindAdvisor` | 3.24.0 |
+| `plugins/DrinkMenu` | 1.18.1 |
+| `plugins/MaintenanceTracker` | 0.31.1 |
+| `plugins/ShotHistoryEditor` | 0.19.0 |
+| `plugins/BeanScanner` | 0.11.0 |
 
 Built with Claude Code against the real app on a Galaxy Tab A9, verified on the machine before each release. GPL-3. Not affiliated with Decent Espresso. Bug reports and ideas: the issues page of the plugin concerned, or this repo.

@@ -1,0 +1,35 @@
+# Internal development notes -- contain local tablet/network details.
+# Never published.
+PROJECT_STATE.md
+
+# Local dev tooling -- contains absolute paths from this machine.
+tools/
+
+# Runtime state written by the DE1app on the tablet -- personal data.
+*.tdb
+userdata/
+
+# Espresso databases and shot history -- personal data, never public.
+*.db
+*.sqlite
+*.sqlite3
+history/
+history_v2/
+history_archive/
+*.shot
+
+# Local backup/trash/log folders (never shipped)
+backups/
+backup/
+trash/
+logs/
+log/
+*.bak
+
+# Version archives
+*Archive/
+
+# OS junk
+desktop.ini
+Thumbs.db
+.DS_Store

@@ -1,33 +1,33 @@
 # Grind Advisor
 
 **Your next grind setting, after every espresso. Read-only, nothing to type.**
-Version 3.16.5 · a plugin for the Decent DE1app · by Blastize
+Version 3.24.0 · a plugin for the Decent DE1app · by Blastize
 
 ![After the shot: the recommended next grind on a glass card over the Lumen home screen](docs/popup_glass.png)
 
-**The after-shot popup.** Shot saved, here is your next grind, and why. On Lumen it floats on glass over the live home screen; on any other skin it is the same card, opaque.
+**The after-shot popup.** Your next grind, how sure it is, and why. On Lumen it floats on glass over the live home screen; on any other skin it is the same card, opaque.
 
-![The Calibration Curve: this bag's shots, the fitted line and the target time](docs/calibration_curve.png)
+![The calibration curve: this bag's shots, the fitted line and the target time](docs/calibration_curve.png)
 
-**Calibration Curve.** Every shot of the current bag, the line the plugin fitted through them, and where your target time lands on it. Residuals underneath tell you when something other than grind is driving the shot.
+**Calibration curve.** Every shot of the current bag, the line the plugin fitted through them, and where your target time lands on it. Residuals underneath tell you when something other than grind is driving the shot.
 
-![The settings page: target shot time, grinder range, popup options, History and Bag Stats](docs/settings.png)
+![The settings page: target shot time, grinder range, popup options, History and Bag stats](docs/settings.png)
 
-**Settings.** Target shot time, your grinder's range, the popup theme and whether it opens by itself. History and Bag Stats are one tap away; Advanced holds the tools.
+**Settings.** Target shot time, your grinder's range, the popup theme and whether it opens by itself. Under Confidence, one next step while it is below High ("Pull 2 more shots on this bag for a steadier fit."). History and Bag stats are one tap away; Advanced holds the tools.
 
-![Bag Stats: every bag with its ideal grind, slope, drift and how many shots it took to land on target](docs/bag_stats.png)
+![Bag stats: every bag with its ideal grind, slope, drift and how many shots it took to land on target](docs/bag_stats.png)
 
-**Bag Stats.** Every bag you have pulled: the grind it settled on, how strongly grind moves shot time, how it drifted as it aged, and how many shots it took to hit the target.
+**Bag stats.** Every bag you have pulled, with its ideal grind in large type on the right (or why it has none), plus how strongly grind moves shot time, how the bag drifted as it aged, and how many shots it took to hit the target.
 
-![Recent Shot History: each shot's grind change, time and bag shot number](docs/history.png)
+![Recent shot history: each shot's grind change, time and bag shot number](docs/history.png)
 
-**History.** Shot by shot: what you dialled, what it recommended, how long the shot ran.
+**History.** Shot by shot: the next grind in large type on the right, and on the left what you dialled, how long the shot ran against your target, the recipe and the bag.
 
 ## Recommended: the Lumen skin
 
 ![Lumen's Recommended Grind tile: the next grind, the change from the last one, the method, confidence and shot count, with Curve and Shot analysis links](docs/lumen_grind_tile.png)
 
-Grind Advisor is designed around the [Lumen skin](https://github.com/Blastize/de1app-skin-Lumen). Lumen's home screen keeps a **Recommended Grind** tile up at all times: the next setting for the bag you have loaded, the change from the last one, the method, how confident it is and how many shots it is based on. A bag with no shots yet shows its starting estimate. **Shot analysis** opens the after-shot card, **Curve** opens the Calibration Curve, and a tap on the tile opens the settings, each in one tap. The popups float on glass in your theme's colours. On other skins the after-shot popup works the same, but between shots you reach everything through the app's Settings, Extensions and the plugin's settings button.
+Grind Advisor is designed around the [Lumen skin](https://github.com/Blastize/de1app-skin-Lumen). Lumen's home screen keeps a **Recommended Grind** tile up at all times: the next setting for the bag you have loaded, the change from the last one, the method, how confident it is and how many shots it is based on. A bag with no shots yet shows its starting estimate. **Shot analysis** opens the after-shot card, **Curve** opens the calibration curve, and a tap on the tile opens the settings, each in one tap. The popups float on glass in your theme's colours. On other skins the after-shot popup works the same, but between shots you reach everything through the app's Settings, Extensions and the plugin's settings button.
 
 Both are in the [de1app-toolkit](https://github.com/Blastize/de1app-toolkit) download.
 
@@ -37,16 +37,147 @@ Copy the folder to `de1plus/plugins/GrindAdvisor/`, restart the app, enable **Gr
 
 ## Safety
 
-Reads your shots from SDB and never writes to it. History files are never touched. The one button that causes a write, Advanced > Recalculate from History, asks SDB to resync its own database.
+Reads your shots from SDB and never writes to it. History files are never touched. The one button that causes a write, Advanced > Recalculate from history, asks SDB to resync its own database.
 
 <details>
 <summary><b>Full reference and version notes</b></summary>
 
 ## Reference
 
-Current plugin version: **v3.16.5** — the popup closes when the water tank
+Current plugin version: **v3.24.0**: one way of writing, and a next step
+under Confidence. Every title, button and label is in sentence case, as Lumen
+and the other plugins write them: **Shot settings**, **Bag stats**, **History
+display options** (Set grind, Recommended grind, Recommendation reason, Set
+dose, Set ratio, Set yield, Actual yield, Date & time, Shot time, Bag shot
+number, Bag name), **Dose / yield source** (Source mode), **Shot data**,
+**Recalculate from history**, **Calculation details** (Latest calculation),
+Diagnostics' **Detected fields**, the **Recent shot history** and **Calibration
+curve** titles. Facts on one line are split by a middle dot (a bag reads "Bam
+Bam Bam · Lykke Coffee Farms · Gentle and sweet"; Advanced's subtitle "Grind
+Advisor 3.24.0 · tuning and tools"), ranges take an en dash, waiting text ends
+in one ellipsis character ("Reading…", "Working…"), and Why? puts the word
+first: "Medium (40%)". On the main page, while Confidence reads below High, one
+line under it says what would help, from what the plugin already knows:
+"Pull 2 more shots on this bag for a steadier fit." (until the bag has the 4
+shots Bag stats fits from), or "28 s is out of reach by grind: change dose or
+yield." Nothing shows when there is no such step. The settings file is now
+written only by a real change, never while the app starts.
+Previous (v3.23.0): text at its full size, one colour per
+status, dates in your clock's format. The settings pages now draw their text
+at the size it was designed for (it was 8% small on the tablet), the same as
+History and Bag Stats. Green means good, amber a warning, red a failure and
+blue a value, the same colours as Lumen and the other plugins; the Calibration
+Curve is blue now, so a plain plot no longer reads as "all good", and a failed
+Recalculate from History shows its note in red. Dates follow Lumen's clock
+settings ("Fri Oct 02 09:29 PM" in 12 h, month first; "Fri 02 Oct 21:29"
+otherwise; the year only when it is not this year). With Date & Time on,
+History shows "4 days ago" beside each shot; Bag Stats shows each bag's first
+and last day ("30 Sep – 01 Oct"). Counts read "1–5 of 25 shots" and pages
+"Page 1 of 3".
+Previous (v3.22.0): buttons react to your finger. Every
+button takes a slightly different tone the moment you touch it and returns
+to its colour a moment after its action, so a slow tap (Show next grind,
+History, Bag Stats, a page change) no longer looks missed. The buttons on the
+popup, Why?, History and Bag Stats do the same while your finger is on them.
+"Show next grind" is the page's one primary button, in green; every other
+button stays the neutral colour.
+Previous (v3.21.0): Help in plain words, one tap from the
+main page. The main page's bottom bar has a **Help** button next to Advanced,
+and Help's Back returns there. Help has three short pages, one per section:
+"What it does", "Daily use" and "If something looks wrong". Each is a column
+of 90 characters or fewer, with no engine internals; those are in this README
+and under Why? and Calculation Details. Advanced's Inspect card now holds
+Diagnostics, Calculation Details and Bag Stats. On Bag Stats, every bag's dates
+now end on one column.
+Previous (v3.20.0): History and Bag Stats cards lead with
+the number you came for. History shows the next grind in large type on the
+right with the move under it ("finer by 0.5"). On the left are the grind you
+used and the time against the target ("15.5 s (12.5 s fast)"; within 2 s it
+says "on target", the same window Bag Stats counts, and a time the plugin
+adjusted for a short or long yield says "yield-adjusted"). Then the date and
+recipe, then the bag name, "shot 5 on this bag" and how confident that
+recommendation was. Warnings show in amber: "28 s is out of reach by grind:
+change dose or yield" and "Much faster than recent shots at this grind: check
+puck prep". A warning gets its own line when one is free, and a long caption
+never pushes it off the card; when both warnings share a line, the second
+shortens to "check puck prep". Lines you switch off leave no gap. Bag Stats
+judges "on target" on the same time History shows, and shows the ideal grind
+in large type with "ideal grind" under it. If a bag has none, the large text says "Out
+of reach" (amber, "trend ideal -4.0" under it) or "No ideal yet" with the
+reason ("needs 4+ shots", "fewer than 3 different grinds", "times not tracking
+grind"). The bag name and dates come first, then shots to target and the
+shot count, then slope, drift and fit. History Display Options gains
+**Bag Name** (on by default) in the Shot card. Both pages now use the page type
+scale whatever the popup font scale is set to, so their fixed 96 px cards
+never stack.
+Previous (v3.19.1): plain words up front. The popup (glass
+over Lumen and opaque from Settings) is titled "Next grind": the grind change
+in neutral colour, "finer by 0.5 · ● medium confidence, 4 of 5 shots" under it, one
+line such as "15.5 s against a 28 s target", any warning in amber with a ⚠
+(including "28 s is out of reach by grind on this bag: change dose or yield
+instead"), and a small recipe line ("19 g in · 38.2 g out (1:2.0) · shot 5 on
+this bag"). The slope, method, technical reason and the confidence score are
+one tap away under **Why?**. The main page says "Show next grind" and its gauge
+"Confidence" reads Low / Medium / High / Very high. Skins get the same words in
+the recommendation's `plain` key (Lumen 0.61.0's tile reads `plain.move`,
+`plain.conf` and `plain.short`). 3.19.1 fixed what the review found: whole
+numbers keep their ".0" (3.5 → 3.0), the count says "4 of 5 shots" when an
+off-target shot was left out, Why? names the band the same way, and a
+recommendation saved by an older version gets the plain words when loaded.
+Previous (v3.18.2): says when grind cannot reach your
+target. Once a bag's forecast is trusted (3+ shots at 3+ different grinds
+that track the grind) and puts your target time outside the grinder's range,
+missing it by more than 2 s even at the end of the range, Why? shows a
+"Grind reach" row ("change dose or yield (ideal -7.7)") and Calculation
+Details explains it. Bag Stats says "Out of reach by grind (trend ideal
+-4.0)" instead of a clamped "Ideal 0.0" (from its own trend fit, hence the
+different number), and such a bag no longer seeds a new bag's starting
+estimate. The grind it recommends is unchanged. See "When grind cannot reach
+the target" below.
+Previous (v3.17.4): pages never show your last visit.
+The main page, Advanced, Help and Dose / Yield Source are filled in before
+they appear. Calculation Details, Diagnostics and the Calibration Accuracy
+gauge read the shot database, so they open at once with "Reading shots..."
+and fill in a moment later, instead of showing old numbers first.
+Previous (v3.17.3): Advanced is grouped by what
+you do there. **Settings** (left): popup delay and font scale, then Dose /
+Yield Source and History Display Options. **Shot Data** (top right):
+Recalculate from History. **Inspect** (below it): Diagnostics, Calculation
+Details, Help / Guide and Bag Stats. Same buttons, nothing else changed.
+Previous (v3.17.2): Back goes back one page: the Advanced
+tools (Dose / Yield Source, History Display Options, Diagnostics,
+Calculation Details, Help) return to Advanced, and Advanced returns to the
+main page, whose Done leaves the plugin. Their button reads Back now (it
+said Done and skipped Advanced).
+Previous (v3.17.1): History Display Options is three cards
+(Grind, Dose and yield, Shot) of full-width rows: tap anywhere on a row to
+switch that field on or off; a blue ticked box means it shows on the history
+cards. The rows are 60 px tall, like every other control.
+Previous (v3.17.0): every number setting is a − / + stepper
+with 60 px buttons, so no keyboard ever opens: target shot time and the
+grinder range on the main page, popup delay and font scale under Advanced,
+the dose and ratio bounds under Dose / Yield Source. A value can't leave its
+range (the end that would do nothing greys out), a minimum stays below its
+maximum, and tapping quickly speeds up the steps, as on Lumen's home screen.
+Values typed in older versions are tidied once ("28,5" becomes 28.5; a blank
+popup delay goes back to 1500 ms, which also stops it breaking the popup).
+On the main page, History and Bag Stats now share a row.
+Previous (v3.16.8): Advanced > Recalculate from History
+runs once per tap: the button greys out while SDB re-reads your shots, the
+note under it counts the progress ("Synchronizing DB: 120/1203"), and a tap
+while SDB is already busy says so instead of starting a second sync on top
+of the first. Previous (v3.16.7): easier-to-read text in both themes:
+dark button labels on the light theme's blue buttons (they were white), stronger
+grey captions, a darker blue for light-mode values, and the History Display
+Options checkboxes in the theme colours after a restart.
+Previous (v3.16.6): History, Bag Stats and the popup
+opened from Settings now use the same dark (and light) colours, buttons and
+page header as the other plugins instead of a black background, and every
+Prev / Next sits at the bottom right (◀ Prev / Next ▶, the unavailable one
+greyed out). The glass popup over the Lumen home screen is unchanged.
+Previous (v3.16.5): the popup closes when the water tank
 runs low: the app's fill-the-tank page now shows on its own instead of under
-the after-shot card, and no card opens while the tank is empty. Previous
+the after-shot card, and no card opens while the tank is empty. Before that
 (v3.16.4): only espresso counts. A shot whose
 beverage type is pour-over, tea or manual is no longer read as espresso, even
 with a grind, dose and yield filled in; shots with no beverage type (older
@@ -80,38 +211,33 @@ reads your latest shot from **SDB** and shows a popup recommending your next
 grind setting. You enter nothing by hand.
 
 ```
-┌───────────────────────────────────┐
-│            ✓ Shot Saved           │
-│                                   │
-│           13.5 → 13.0             │
-│           coarser by 0.5          │
-│                                   │
-│   Time        26.8s (target 28s)  │
-│   Dose        18.0g               │
-│   Yield       36.0g               │
-│   Ratio       1:2.0               │
-│   Bag Shot    #6                  │
-│                                   │
-│   Reason                          │
-│   Regression over 6 shots (slope  │
-│   -4.1 s/grind, predicts 28.0s    │
-│   at 13.0).                       │
-│                                   │
-│ [ OK ] [ Why? ] [ Curve ] [ Hist ]│
-└───────────────────────────────────┘
+┌────────────────────────────────────────────────────┐
+│                     Next grind                     │
+│                                                    │
+│                    13.5 → 13.0                     │
+│   finer by 0.5  ·  ● high confidence, 6 shots      │
+│                                                    │
+│            26.8 s against a 28 s target            │
+│                                                    │
+│  18 g in  ·  36 g out (1:2.0)  ·  shot 6 on this bag│
+│                                                    │
+│    [ OK ]     [ Why? ]     [ Curve ]    [ History ]│
+└────────────────────────────────────────────────────┘
 ```
 
-Dose, Yield, and Ratio lines appear automatically when those columns exist in
-SDB; if they aren't stored, those lines are simply omitted.
+(v3.19.0.) The dot is the confidence colour; a warning (channeling, or "out of
+reach by grind") adds an amber ⚠ line under the time. The recipe line appears
+when SDB stores dose and yield. **Why?** has the method, slope, fit, the
+confidence score and the full technical reason.
 
-## Calibration Curve
+## Calibration curve
 
 **Curve** shows what the recommendation is actually standing on. **Back**
 returns to the popup.
 
 ```
 ┌─────────────────────────────────────────┐
-│           Calibration Curve             │
+│           Calibration curve             │
 │  30 ┃  ·                                │
 │     ┃╲   ·        ┆      target 28s     │
 │  ‥‥‥┃‥‥╲‥‥‥‥‥‥‥‥‥‥┆‥‥‥‥‥‥‥‥‥‥‥‥‥‥‥‥‥‥‥ │
@@ -138,7 +264,8 @@ returns to the popup.
   solved, a dashed guide at your target time, and a labelled dashed vertical
   at the recommended grind. On the regression rung those two dashed guides
   cross exactly where the fitted line hits your target time — that crossing
-  *is* the recommendation. The latest shot is the larger accent dot.
+  *is* the recommendation. The latest shot is the larger blue dot (the
+  Curve's colour has been the shared "info" blue since v3.23.0).
 * **Residual strip** — how far each shot sits from that line. Stems to zero,
   so residuals stacked on one side (a biased fit) are obvious.
 * **Grind axis** — ticks at readable grind values (0.5 steps on a typical
@@ -233,14 +360,14 @@ Verified against the reference spreadsheet's "Forecast Method" sheet: for its
 intercept, ideal grind (12.97 → **13.0**), and predicted time (27.9 s). A
 single fast shot (grind 13.5, time 19.1 s, target 28) recommends **12.0**.
 
-The **Why?** button on the popup and the **Calculation Details** page show
+The **Why?** button on the popup and the **Calculation details** page show
 the method used, the learned slope, the model fit (R²), the eligible shot
 count, and every intermediate. The possible-channeling warning is
 display-only and does not override the recommendation.
 
-## Bag Stats — compare how each bag behaved (v3.5.0, card list v3.6.0)
+## Bag stats — compare how each bag behaved (v3.5.0, card list v3.6.0)
 
-**Bag Stats** — on the main page's Actions card and under Advanced → Tools —
+**Bag stats** — on the main page's Actions card and under Advanced → Inspect —
 lists your bags newest first as a card list (same look and paging as the
 History list: 5 cards per page, ◀ Prev / Next ▶, up to 25 bags), so bags can
 be compared at a glance. Each bag card shows:
@@ -254,13 +381,16 @@ be compared at a glance. Each bag card shows:
 * shot count and excluded outliers.
 
 A bag only gets numbers when the fit is trustworthy (4+ eligible shots and
-at least 1.0 of grind spread); otherwise it says "fit not reliable" with the
+at least 1.0 of grind spread); otherwise its card says "No ideal yet" with the
 reason — shots pulled all at one grind setting can't calibrate anything.
+Since v3.20.0 the ideal (or "Out of reach" / "No ideal yet") is the large
+number on the right of each card; the bag name and its dates lead the left
+column.
 The header shows the **median bean slope** across reliable bags (the number
 that carries between bags) and the average R² as an overall fit-quality
 gauge. R² itself is per bag and resets when the bag changes.
 
-Long text pages (Help / Guide, Calculation Details, Diagnostics) paginate
+Long text pages (Help, Calculation details, Diagnostics) paginate
 with ◀ Prev / Next ▶ in the bottom bar instead of clipping when the content
 outgrows the card (fixed in v3.6.0).
 
@@ -298,9 +428,44 @@ seconds at a fixed grind, the way out is a **deliberately large grind move** —
 a full step or two — so the change clears the scatter. The plugin damps every
 correction by half and will not suggest that on its own.
 
-## After editing a shot — Recalculate from History (v3.9.0)
+## When grind cannot reach the target (v3.18.0)
 
-**Advanced → Shot Data → Recalculate from History.**
+Some bags never get there by grind. Lykke Bam Bam on *Gentle and sweet* ran
+11.1 s at 10.0 and only 15.5 s at 5.7: the profile caps the flow on a weak
+puck, so the shot ends at about the same time whatever the grind. Its own fit
+(4 shots, R² 0.77, about −1 s per grind number) puts 28 s at grind −7.7,
+below anything the grinder can do, yet the popup kept saying "finer by 0.5".
+
+Now, when the forecast regression is trusted (3+ shots at 3+ different
+grinds, R² ≥ 0.30, a real slope), its ideal grind lies outside your Grinder
+minimum / maximum, and even at that end of the range the line still misses
+the target by more than 2 s (the same window Bag stats calls "on target"),
+GrindAdvisor says so: **Why?** gets a "Grind reach" row, **Calculation
+details** a "Grind reach" line with the fit's time at the end of the range
+("at the grinder's end ... within 2s" when it only just misses, "not
+assessed" with fewer than 3 different grinds). The 1-shot and 2-shot rungs
+never say this: a pair of flow-capped shots looks flat even when finer grinds
+would still gain time.
+
+**Bag stats** applies the same range test and 2 s tolerance to its own robust
+trend (Theil-Sen over every shot of the bag, no recency weighting), so its
+number differs: Bam Bam reads "Out of reach" with "trend ideal −4.0" under
+it there, and −7.7 in Why?. When that trend does not track the grind (R²
+below 0.30) the card says "No ideal yet" with "times not tracking grind"
+instead, and when it rests on fewer than 3 different grinds, "No ideal yet"
+with "fewer than 3 different grinds" (v3.18.2; this wording since v3.20.0).
+Such a bag is skipped when a new bag's starting estimate is computed, because
+its only "ideal" is the clamped end of the range.
+
+The recommended grind itself does not change. Read-only backtest
+(tools/backtest_reach.py on a copy of shots.db, 2026-10-02): of the 93
+regression positions since 2026-06-28, exactly the two Bam Bam ones are out
+of reach (7.6 and 10.3 s short at grind 0); no other bag is. The popup line
+and Lumen's tile follow in the next passes.
+
+## After editing a shot — Recalculate from history (v3.9.0)
+
+**Advanced → Shot data → Recalculate from history.**
 
 Correcting a shot in the Shot History Editor writes `history/<file>.shot` and
 nothing else — that plugin never touches SDB, by design. Grind Advisor reads
@@ -447,7 +612,7 @@ below for what a skin can show instead.
 
 For a bag with **no shots yet**, `::plugins::GrindAdvisor::starting_estimate`
 returns a display-only starting grind borrowed from bags whose per-bag fit
-converged (the Bag Stats trust gate: 4+ shots, ≥ 1.0 grind spread,
+converged (the Bag stats trust gate: 4+ shots, ≥ 1.0 grind spread,
 |slope| ≥ 0.5) on the **same profile**. First rung that yields data wins:
 
 1. `same_coffee` — same bean and roaster (a re-bought coffee) → the most
@@ -466,7 +631,7 @@ labels). Rules for skins: present it as an estimate — **never with the word
 SDB and is not memoized; call it when the bag changes or a page opens).
 
 The estimate is not evidence: it never enters the regression, never counts
-as a shot, and never touches n, the slope, or Calibration Accuracy. Shot 1
+as a shot, and never touches n, the slope, or the Confidence score. Shot 1
 on a new bag still runs the normal First-shot rung, which replaces the
 estimate with a real per-bag number.
 
@@ -489,7 +654,19 @@ Defaults live in `plugin.tcl` under `::plugins::GrindAdvisor::settings`:
 
 The Regression Forecast method has no tuning knobs — its constants (3.0 s/step
 default, 0.5 damping, 0.85 recency decay, 1.8 s/g dose sensitivity, 2.0 g
-outlier threshold, 3-shot minimum) are fixed and documented on the Help page.
+outlier threshold, 3-shot minimum) are fixed and documented here (the Help page
+carried them until v3.21.0; it now explains daily use in plain words).
+
+The reason line under **Why?** names the rung that produced the number:
+"First shot" (one shot of the bag, or a second one at the same grind or with
+almost the same time: a damped nudge from the time error), "2-shot
+calibration" (the pair's seconds-per-grind), "Regression over N shots" (with
+the learned slope and the time it predicts at the new grind),
+"Regression fallback: <why>" (all shots at one grind, a degenerate fit, or a
+slope too flat to use), or "Shot times are not tracking grind on this bag (R2 ... over N
+shots), so the fit was not used" (the line explains too little; the nudge from
+the last shots is used instead). Calculation details shows every intermediate
+value.
 (Upgrading from v2.x: the old `recommendation_mode`, `default_seconds_per_step`,
 `first_cap`, and `later_cap` settings are gone and any stored values are
 ignored.)

@@ -1,11 +1,13 @@
 # Shot History Editor
 
 **Browse your shots as cards, fix a wrong grind or bean name, delete mistakes to a restorable trash.**
-Version v0.13.0 · a plugin for the Decent DE1app · by Blastize
+Version v0.19.0 · a plugin for the Decent DE1app · by Blastize
 
 ![The shot list: five cards per page with grind, dose, yield, time, bean and profile](docs/shot_list.png)
 
-**Your shots as cards.** Grind, dose, yield, time, bean and profile, five per page, newest first. Edit on the card, Select to pick shots for the trash.
+**Your shots as cards.** Grind, dose, yield, time, bean and profile, five per page, newest first. Edit on the card, Select to pick shots for the trash. Cleaning runs are marked CLEANING on a tinted card.
+
+**Your bags.** The Bags tab groups your shots by roaster and bag name, six tiles a page: roast level and date, notes, how many shots and when, and which bag is in use. Edit bag changes the roaster, name, notes, roast date or roast level of every shot of a bag at once, after checked backups and a typed confirmation.
 
 ![Edit Preview: pick one field, type the new value, preview before and after, then save](docs/edit_preview.png)
 
@@ -33,20 +35,134 @@ Copy the folder to `de1plus/plugins/ShotHistoryEditor/`, restart the app, enable
 
 ## Safety
 
-SDB is read-only. Edits rewrite exactly one line of one `.shot` file after a whole-file backup. Deletes move files into the plugin's trash and are logged; only Empty trash deletes for good, only inside that trash folder, after a typed confirmation. Raw pressure, flow and temperature data are never shown or edited.
+SDB is read-only. Edits rewrite exactly one line of one `.shot` file after a whole-file backup; a bag edit rewrites only the changed bag lines of each of its `.shot` files, after every backup is made and checked, and stops at the first problem; when that bag is the one loaded for your next shot, DYE is asked to update the next shot's bean fields too (logged). Deletes move files into the plugin's trash and are logged; only Empty trash deletes for good, only inside that trash folder, after a typed confirmation. Raw pressure, flow and temperature data are never shown or edited.
 
 <details>
 <summary><b>Full reference and version notes</b></summary>
 
 ## Reference
 
-Version: v0.13.0
+Version: v0.19.0
 Author: Blastize
+
+## Your next shot follows a bag edit (v0.18.0, v0.19.0)
+
+The bag your next shot will be saved with is not in the shot files: it is DYE's next-shot plan
+(or, without DYE, the app's settings). Since v0.19.0, when you save the bag that is loaded for
+your next shot (the IN USE one), Save also updates the next shot with the fields you changed,
+through DYE itself (the same call Bean Scanner and Lumen's bag arrows use), before Grind Advisor
+and Lumen refresh -- so Lumen shows the new name with its dot lit right away. Review says so
+beforehand ("Save updates it too"), the result page lists what changed (old -> new), and
+edit_log.txt records the old and new next-shot values. Grind, dose and profile are never
+touched. If DYE cannot take it (not installed, busy, or it refuses), the save of your shots
+still stands and the result page says what the next shot still has and how to load the bag
+again: after a new name or roast date, tap a Lumen bag arrow until this bag shows with its dot
+lit; after notes or roast level, arrow to another bag and back (or edit DYE's Next shot either
+way; without DYE, enter the details again where your skin sets the bean).
+
+## Bag Save (v0.17.0)
+
+**Edit bag now saves.** Change a bag's roaster, name, notes, roast date or roast level, tap
+Review, check the table (each field now and after, the files, any warning), tap **Save N
+files...**, type the number of files and tap Save. Every shot of the bag changes -- and the
+cleaning runs that carried it, so they stay with their bag.
+
+What happens, in order: every file is copied to `plugins/ShotHistoryEditor/backups/<time>_<id>_bag/`
+and each copy is checked byte for byte; only then is each file rewritten -- just the changed
+setting lines, every other byte kept -- read back, and checked; a file that does not check out
+gets its backup back. `edit_log.txt` records the start, every file and the end. If anything
+stops the save part-way, the result page says which files changed and which did not.
+
+Save stays off when nothing changed, when both roaster and name are empty, when a value holds
+a brace or a backslash, or when the new name matches another bag in all but letter case (type
+it exactly to join that bag). It refuses while the DE1 is busy or the shot database is syncing.
+Renaming a bag onto another bag's name joins the two (Review and the confirm step say so); a
+file that cannot be changed (skipped) stays in the old bag, and Review says so too. The
+shot database (SDB) is never written by this plugin: it catches up from the files (Grind Advisor
+asks it to right after the save). history_v2 copies and shots already uploaded to Visualizer
+keep the old values. Grind, dose, yield, time, profile and the shot curves are never touched.
+
+## Bags view; cleaning runs marked (v0.16.0, v0.16.1)
+
+The card page has a **Shots | Bags** switch under the title, on the left (v0.18.1; Select sits at
+the right of the same row). Bags shows one tile per bag
+-- every shot with the same roaster and bag name -- six to a page, newest bag first. A tile shows
+the roaster and bag name, the roast level (with a colour dot) and roast date ("Roasted 20 Sep"
+for a YYYY-MM-DD date, otherwise as typed), or "+ Roast level"
+/ "+ Roast date" when the bag does not have them yet, two lines of notes, how many shots and over
+which days, and how many cleaning runs carried the bag. The bag loaded in the app right now has a
+blue outline and IN USE. Shots with no roaster and no bag name share one tile you cannot edit.
+
+**Edit bag** shows the bag's roaster, name, notes and roast date (typed in the top half, clear of
+the keyboard, with Hide keyboard beside them) and six roast-level choices. Each field says
+Changed when you change it, or that its shots disagree (the newest is shown). **Review** lists
+every field now and after, warns when the new name would merge two bags or the date is not
+YYYY-MM-DD, and names the files it would change -- cleaning runs included, so they stay with
+their bag. (v0.16.x saved nothing; v0.17.0 adds Save, above.) Grind, dose, yield, time,
+profile and the shot curves are never part of a bag edit.
+
+On the Shots tab a cleaning run has a teal card, a CLEANING label and "Cleaning run | not
+counted as a shot" instead of grind, dose and yield. Diagnostics lists which bag fields SDB has.
+
+## Advanced is grouped; Tidy is on the Trash page (v0.15.2)
+
+Advanced shows two cards: **Recover** (Trash / Restore, Reconcile hidden shots) and
+**Inspect** (Source Inspector, Diagnostics, Help / Guide). Tidy, which removes the empty
+folders that restores leave in the plugin trash, now sits on the Trash page next to Empty
+trash... and says how many it would remove ("Tidy 14 empty folders"); it is greyed out when
+there are none, and its result shows under the Trash page's status. It never touches a shot
+file or a batch.
+
+## One way out of every page (v0.15.1)
+
+Every page under Advanced has a single Back button at the bottom left; the
+Done button beside it did exactly the same thing and is gone, so the
+buttons after it move one slot left -- except the red Empty trash, which
+now sits on the right next to Prev, well away from Back. Every page now has the main list's
+large title with one line under it saying what the page is for. The delete,
+save and Empty trash steps keep their Cancel, and their result pages keep
+Done.
+
+## You can see what you selected (v0.15.0)
+
+In Select mode, tap a card's text (or its button) to select it: a selected
+card turns light blue with a blue outline, so you can see your picks at a glance. The
+bottom-left button reads "Delete 2" (or however many) in red, and stays
+greyed out until something is selected. Tapping is instant now, because
+selecting no longer re-reads the shot database each time. Deleting still
+goes through the same review and typed confirmation as before, and leaving
+the list ends Select mode, so it always comes back plain.
+
+## Trash cards name the shot (v0.14.0)
+
+Advanced > Trash / Restore lists deleted batches as cards, five per page,
+the same cards as the main list: the shot's own date and time and its bean
+(with "+1 more" when the batch held more than one shot), then its grind,
+dose and yield, then when it was deleted. You can see which shot you are
+bringing back before you tap Restore. Restore still brings back the whole
+batch, as before. The bean and numbers are read from the file in the trash;
+nothing is changed by looking.
+
+## Easier to read (v0.13.2)
+
+Light-theme button labels are dark now (they were white on the pale
+buttons), and grey captions, red warnings and the blue Edit Preview value
+got stronger, so all text meets the standard contrast in both themes.
+Same colours as the other plugins; nothing else changed.
+
+## Same controls as the other plugins (v0.13.1)
+
+The light/dark button now sits in the top-right corner, where Grind
+Advisor, Maintenance Tracker and Bean Scanner have it; Select moved one
+slot to its left. Every paged page (the card list, Trash, Shot Detail,
+Diagnostics, Help, Reconcile and the Empty trash preview) has the same
+pager in the same place: **◀ Prev / Next ▶ at the bottom right**, both
+always there, the one you can't use greyed out. Nothing else changed.
 
 ## Tidy empty trash folders (v0.13.0)
 
 Restoring a batch moves its files back but used to leave the empty batch
-folder behind. Advanced > "Tidy empty trash folders" removes every empty
+folder behind. Tidy (under Advanced until v0.15.2, on the Trash page since) removes every empty
 folder directly under the plugin trash, and nothing else: files, batches
 and anything inside a folder are untouched, and one TIDY line goes to the
 delete log. Empty trash now does the same sweep after removing its files,

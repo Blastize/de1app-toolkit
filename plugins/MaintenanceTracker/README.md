@@ -1,7 +1,7 @@
 # Maintenance Tracker
 
 **Backflush, descale, gaskets, burrs, water filter, bottle level. Counted from your shots, recorded with one tap.**
-Version 0.29.1 · a plugin for the Decent DE1app · by Blastize
+Version 0.31.1 · a plugin for the Decent DE1app · by Blastize
 
 ![The tracker list: every item with its counter and a green, amber or red bar](docs/trackers.png)
 
@@ -17,11 +17,11 @@ Version 0.29.1 · a plugin for the Decent DE1app · by Blastize
 
 ![Edit steps: numbered steps with Up, Down and Remove, and Cancel, Reset to default, Add step and a green Save](docs/step_editor.png)
 
-![New Tracker: name, count by days, shots or ml, threshold and icon](docs/new_tracker.png)
+![New tracker: name, count by days, shots or ml, threshold and icon](docs/new_tracker.png)
 
 **Your own trackers.** A second grinder, a water tank clean, anything: name it, count by days, shots or millilitres, set the threshold, pick an icon.
 
-![Edit Tracker: name and link, due-after threshold and auto-record, icon](docs/edit_tracker.png)
+![Edit tracker: name and link, due-after threshold and auto-record, icon](docs/edit_tracker.png)
 
 **Edit any tracker.** Rename it, link it to a profile or the app's Descale or Clean, change the threshold, auto-record or icon. Nothing changes until Save.
 
@@ -54,7 +54,7 @@ measured from the machine's own dispense reports) — plus your own
 **custom trackers** (a second grinder, a water tank clean, anything)
 with their own name, unit and threshold.
 
-Author: **Blastize** · Current version: **0.29.1** (section cards)
+Author: **Blastize** · Current version: **0.31.1** (one voice in the words)
 
 ## What it will do (target design)
 
@@ -68,14 +68,54 @@ Author: **Blastize** · Current version: **0.29.1** (section cards)
 - A small public API (`status_summary`, `open_page`) lets the Lumen skin
   show a notification dot near a maintenance icon.
 
-## What it does right now (v0.29.1 — section cards)
+## What it does right now (v0.31.1 — one voice in the words)
 
+- **One voice in the words** (v0.31.1): titles and buttons read in sentence
+  case like the other plugins (New tracker, Edit tracker, Hide tracker,
+  Undo last record, Yes, delete last record, Yes, remove this record,
+  Delete tracker, Record maintenance); the Diagnostics page is titled
+  just "Diagnostics" with the plugin name in the line under it; no
+  double hyphens in any text (a full stop, brackets or a middle dot
+  instead, e.g. "Nothing left. Change it now."); the auto toggle reads
+  "Auto: clean cycle"; cut names end in a real ellipsis character. The
+  Steps page's button reads **Record** like the list and the tracker page
+  (it opens the same confirm; was "Mark done"), the app's cycles are
+  always "clean cycle" / "descale cycle" ("Descale cycle (app)"), and a
+  threshold of 1 reads "0 / 1 day". Start-up no longer saves the settings
+  file; the first real change does. The meaning of every text and button
+  is unchanged.
+- **Text at its design size, dates you can read** (v0.31.0): every text was
+  drawn at 92% of its size on the tablet; titles, tracker names, buttons and
+  body text are now full size (captions were already). Dates read like the
+  Lumen taskbar and follow its 12/24 h and date-order settings ("Last done
+  Fri Oct 02 09:29 PM · 4 days ago"; the year only appears for last year's
+  records); the history shows the date on the left and "recorded
+  automatically · 4 days ago" on the right. The list counts "1–5 of 11
+  trackers". OK / due soon / overdue use the colours the other plugins use,
+  and the AUTO-RECORD / AUTO-COUNT tags are blue. Long names are cut with
+  an ellipsis where they only get one line: the hidden-tracker chips, the Steps
+  title and the Edit page's delete question. Diagnostics says "due soon"
+  instead of "amber".
+- **Buttons react to your finger** (v0.30.0): every button takes a slightly
+  different tone the moment you touch it and returns to its colour a moment
+  after its action, so a slow tap (opening a tracker, Confirm, Done) no longer
+  looks missed. Green and red buttons press in their own colour, and a tracker
+  card or an icon in the picker tints toward the button colour under your
+  finger (lighter in the dark theme, greyer in the light one).
+- **Clearer in both themes** (v0.29.3): buttons in the light theme have dark
+  labels, and grey text and the status words (OK, DUE SOON, OVERDUE, NEVER
+  RECORDED) now read clearly in the light and the dark theme; the sun / moon
+  button repaints everything, button labels included.
+- **Same pager as the other plugins** (v0.29.2): ◀ Prev / Next ▶ now sit at
+  the bottom right of the tracker list (easier to reach), in the same place
+  and style as Shot History Editor and Grind Advisor; Done, New tracker and
+  Diagnostics line up from the left.
 - **Easier to read** (v0.29.1): every section sits on its own card. A
   tracker's page shows its status card (the same bar as the list), the
   history beside the linked profile, the steps with green numbers, and the
-  New Tracker and Edit Tracker pages in three cards each.
+  New tracker and Edit tracker pages in three cards each.
 - **Remove any record** (v0.29.0): tap a line in a tracker's history; it
-  turns red and the bottom button reads **Yes, Remove This Record** (tap
+  turns red and the bottom button reads **Yes, remove this record** (tap
   another line to change your mind, Cancel to leave it). Removing an older
   record leaves the counter as it is; the newest is the usual Undo.
 - **Your own steps** (v0.28.0): **Edit steps** (top right of a tracker's
@@ -97,8 +137,8 @@ Author: **Blastize** · Current version: **0.29.1** (section cards)
 - **Step-by-step instructions** (v0.26.0): every tracker's Detail page has a
   green **Start** button that opens its Steps page: numbered instructions
   and one green button for the job: **Load profile**, **Open Descale** or
-  **Start Clean** for a linked tracker, **Mark done** otherwise (a linked
-  tracker has Mark done beside it too). The steps come from a built-in
+  **Start Clean** for a linked tracker, **Record** otherwise (a linked
+  tracker has Record beside it too; "Mark done" until v0.31.1). The steps come from a built-in
   library matched to the tracker's name (backflush with detergent or water,
   Rinza steam wand soak, descale, drip tray, water tank, drain, group head,
   burrs, water filter, water bottle, ball-joint grease, and a generic set),
@@ -108,7 +148,7 @@ Author: **Blastize** · Current version: **0.29.1** (section cards)
   Link Descale, Link Clean and Unlink moved to the Edit page, beside the
   name, and only take effect when you tap Save (Cancel undoes a stray
   Unlink). Detail shows the link in full with its one action, has a green
-  **Record** button that comes back to Detail, and Undo Last Record is a
+  **Record** button that comes back to Detail, and Undo last record is a
   normal button that turns red only after the first tap.
 - **Worst first, properly** (v0.25.0): inside each colour, the tracker
   closest to due comes first.
@@ -157,8 +197,8 @@ Author: **Blastize** · Current version: **0.29.1** (section cards)
   re-runs the shot-database pass — counts refresh when something
   actually changed (recording, auto-detect, machine events, 10 min TTL).
 
-- **Auto source chosen at creation**: the New Tracker page has an
-  "Auto: off / Clean cycle / Descale cycle" toggle in its top-right
+- **Auto source chosen at creation**: the New tracker page has an
+  "Auto: off / clean cycle / descale cycle" toggle in its top-right
   header corner, so a new tracker can auto-record from day one (still
   changeable later via Edit).
 - **Two kinds of AUTO, told apart**: cards wear **AUTO-RECORD** when
@@ -176,7 +216,7 @@ Author: **Blastize** · Current version: **0.29.1** (section cards)
   day you actually did the task.
 - **Choosable auto-record sources**: every tracker — built-in or
   custom — has an **Auto-record** row on its Edit page that cycles
-  **off → Clean cycle → Descale cycle**. A completed Clean cycle (or a
+  **off → clean cycle → descale cycle**. A completed Clean cycle (or a
   blind-basket backflush run as a "cleaning" espresso profile) and a
   completed Descale cycle now auto-record *every* tracker subscribed
   to that source, not just the fixed Backflush/Descale pair — so your
@@ -198,12 +238,12 @@ Author: **Blastize** · Current version: **0.29.1** (section cards)
 - **One consolidated tracker model**: every tracker — built-in or
   custom — can be **edited** (name, threshold, icon; the counting unit
   stays locked so history keeps meaning what it meant) and **hidden**
-  (at most 6 at once, matching the 6 restore chips on the New Tracker
+  (at most 6 at once, matching the 6 restore chips on the New tracker
   page; the Hide button disables with an explanation at the cap).
   Built-ins cannot be deleted — hiding is their reversible retirement,
   which protects the auto-record, burr-offset and water-meter wiring —
   while custom trackers delete from the bottom of their **Edit** page
-  behind the same two-step "Yes, Delete Tracker" confirm.
+  behind the same two-step "Yes, delete tracker" confirm.
 - **A written button standard** (see the implementation header) now
   governs every page: bottom-left is always safe navigation
   (Done / Back / Cancel — and while a destructive confirm is armed, it
@@ -252,18 +292,18 @@ Author: **Blastize** · Current version: **0.29.1** (section cards)
 - **Detail page icon**: opening a tracker shows its icon top-left on a
   state-tinted plate, matching its card.
 - **Hide / restore trackers**: every tracker's Detail page has a Hide
-  Tracker button — hiding removes it from the card list and the status
+  tracker button — hiding removes it from the card list and the status
   rollup (it can no longer light the skin's dot) while keeping all its
-  data. The New Tracker page shows one chip per hidden tracker — tap a
+  data. The New tracker page shows one chip per hidden tracker — tap a
   chip to restore just that one. At most 6 trackers can be hidden at
   once. **Burr install starts hidden** (burrs last ~30k shots — not a
   routine maintenance item; restore it if you want it back).
 - **Edit any tracker**: the Edit button on every Detail page changes
   the tracker's name, threshold and icon — the history and the
   counting unit (days, shots or ml) stay as they are. Custom trackers
-  additionally have Delete Tracker at the bottom of their Edit page
+  additionally have Delete tracker at the bottom of their Edit page
   (two-tap confirm).
-- **Custom trackers**: the New Tracker button (bottom center of the
+- **Custom trackers**: the New tracker button (bottom center of the
   main page) creates your own named tracker — e.g. "Grinder 2 burr
   clean" — counting days, shots or ml against a threshold you set with
   stepper buttons. Custom trackers appear as cards after the built-ins
@@ -293,7 +333,7 @@ Author: **Blastize** · Current version: **0.29.1** (section cards)
 - **Tapping a card's text area** (anywhere left of its Record button)
   opens a per-item **Detail page**: current state and counter, the 5
   newest events with date and how they were recorded, and — when at
-  least one event exists — an **Undo Last Record** button (red once armed). Undo
+  least one event exists — an **Undo last record** button (red once armed). Undo
   asks for confirmation on the same page, showing exactly which record
   will be removed and what the counter falls back to; confirming pops
   just that one event and returns to the card list.
@@ -340,28 +380,33 @@ Author: **Blastize** · Current version: **0.29.1** (section cards)
   `PRAGMA table_info`). It never reuses or blocks the app's own handle.
 - **History files (`history/`, `history_v2/`) are never touched by this
   plugin, in this or any future version.**
-- No popups, no automatic UI. The single registered event listener
-  (`after_flow_complete`) only marks the internal counter cache stale.
-- The only file written is the plugin's own
-  `plugins/MaintenanceTracker/settings.tdb`, via `plugins save_settings` —
-  after an explicit user tap (Confirm, Confirm Undo, Add Tracker, or the
-  two-tap Delete Tracker), one auto event per completed real
-  clean/descale cycle, or (v0.13.0) the water-meter update when a
-  flow/cycle completes. Undo removes only the single newest record.
-  Deleting is possible **only for custom trackers you created**, needs
-  two taps, and the removed tracker is kept in the settings file under
-  `last_deleted_custom` so a mistake is recoverable. There is no bulk
-  delete or reset anywhere. v0.22.0 adds two more explicit taps that
-  save the file (Link current profile, Unlink: the tracker's own
-  `profile_fn` / `profile_title` keys) and one app-facing action
-  (Load profile: the core's `select_profile`, then `save_settings` +
-  `save_settings_to_de1`), which writes nothing of ours and starts no
-  flow. v0.23.0 adds Link Descale / Link Clean (the `link_kind` key,
-  saved on the tap) and two app-facing actions: Open Descale (the
-  core's `show_settings descale_prepare`; never `start_decaling`) and
-  Start Clean, the **only machine cycle this plugin can start**: the
-  core's `start_cleaning`, on the second tap of an 8-second
-  confirmation, refused unless connected and idle or asleep.
+- No popups, no automatic UI. Two silent listeners: `after_flow_complete`
+  (marks the counter cache stale; a finished cleaning-profile run
+  auto-records) and `on_major_state_change` (a real clean or descale
+  cycle auto-records; the water meter adds each finished flow).
+- The only file of ours written is
+  `plugins/MaintenanceTracker/settings.tdb`, via `plugins save_settings`,
+  never at start-up (v0.31.1). It is saved after a tap (**Confirm** on a
+  Record page; **Save** on New tracker, Edit tracker and Edit steps;
+  **Hide tracker**; a restore chip; the sun / moon theme button;
+  **Start** on a profile-linked tracker, which remembers the profile to
+  bring back, and **Switch back now**; the removals below) and by itself
+  (one auto record per real cycle or cleaning-profile run, off with
+  `auto_record`; the water meter; clearing a finished switch-back).
+- Removing data always takes two taps: **Undo last record**
+  then **Yes, delete last record** (the newest record); a history row
+  then **Yes, remove this record** (any other record, kept in
+  `last_removed_event`); **Delete tracker** then **Yes, delete tracker**
+  (custom trackers only, kept in `last_deleted_custom`). No bulk delete
+  or reset anywhere.
+- App-facing actions: **Start** on a profile-linked tracker loads the
+  cleaning profile through the core's `select_profile` (then the core's
+  `save_settings` + `save_settings_to_de1`) and switches back the same
+  way; **Open Descale** shows the app's own descale page (`show_settings
+  descale_prepare`, never `start_decaling`); **Start Clean** is the
+  **only machine cycle this plugin can start**: the core's
+  `start_cleaning` on the second tap within 8 seconds, refused unless
+  connected and idle or asleep. Profile files are only read.
 
 ## Install
 

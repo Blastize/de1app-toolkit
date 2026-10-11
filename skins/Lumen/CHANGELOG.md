@@ -4,6 +4,144 @@ Entries follow a documentation cap (about 15 lines each; longer only where a
 version added or changed a write capability). The original long-form entries
 survive unchanged in the archive snapshot of each version.
 
+## 0.62.1 - Sleep is the power symbol; one copy style (F23 + F25, 2026-10-02) - TABLET-VERIFIED 17:54 (verify.sh PASS run 1)
+
+Base: 0.62.0 (on the tablet). Patch: one glyph and copy. Owner 2026-10-02: "go with F23 to F26 next".
+- F25: the taskbar's Sleep glyph is Font Awesome power-off U+F011 (was the moon U+F186, the plugins'
+  dark-theme toggle). In the cmap of the app's FA6 Pro Regular 6.4.2 (glyph 1522, one em wide: 22 px
+  at 17..39 in its 0..56 zone) and in dui's symbol table. Same zone, start_sleep, "Sleep", ZZZ fallback;
+  layout token bar_moon_x -> bar_sleep_x (check_skin follows).
+- F23: `::lumen::glyph` (ellipsis U+2026, dot U+00B7). `_ellipsis` and `_fit_text` cut with the real
+  ellipsis (`_fit_text` measures every candidate with it; `_ellipsis` keeps its max - 2 characters,
+  the glyph no wider than the dots in its callers' 16 px caption). Wait pill and picker status lines
+  ("Applying Light theme", the drawing / colours / DYE page steps, "Drawing your theme", "Drawing the
+  dark glass for later") end in U+2026, not "...". A middle dot replaces the spaced hyphen: estimate
+  note, bean notes' joined lines, "No shot data yet . pull a shot", bean_sub. "Exit App" -> "Exit app";
+  the scale box's "no scale" -> "No scale", like its "Connect" / "Tap to retry".
+- Tests: passes/Lumen/pass_14_offline.tcl 20/20 (0.62.0 fails 15); pass_13 pins and check_skin pins
+  moved to the glyph (lists in pass_14.md).
+
+**Safety status:** no new write and no write path changed; display only (one glyph, text form).
+
+## 0.62.0 - Text at design size, shared status colours, dates in the clock format (F8 + F21, 2026-10-02) - TABLET-VERIFIED 08:44 (verify.sh PASS run 1)
+
+Base: 0.61.1 (on the tablet). Feature, minor. Owner 2026-10-02: F8 "grow text to design", F21 shared roles.
+- F8: font sizes from `dui cget screen_size_height` (800; validated, default 800, never winfo's 736), so
+  every font is its design px (title 37->40, body 17->19; captions stay 16). glass_material and
+  custom::screen read dui too (winfo said 1340x736, a folder that does not exist).
+- Tight spots re-spaced, live text only (no baked art moved): grind hero gy+14 / note gy+108, delta in
+  body; NEXT SHOT name 649 (49 px box); both bean names and the LAST SHOT roaster measured
+  (`_fit_text`); GRIND column 84 from 988; ratio caption 190; cleaning banner right line in caption, both
+  lines fitted; picker version at 76, sun line without "Auto:", base pills 88 wide; miniature +11.5 / +38.5.
+- F21: status seeds good/warn/danger shared (light #086750 #7A4B00 #962219, dark danger #FF8A80) plus an
+  `info` ink (not a role token); banner face pinned #B3261E; `::lumen::role_color` for plugins.
+- F21 dates: `_fmt_when/_day/_time/_ago/_hm` (shared helpers); LAST SHOT "date . 4 days ago", banner
+  back_at and picker sun times follow 12/24 h; expr ?: text picks replaced (`_pick`, if).
+- Counts: "No shots on this bag" for n 0; wait pill "DYE page 3 of 7"; miniature "High" + "12 shots on
+  this bag". Tests: passes/Lumen/pass_13_offline.tcl (0.61.1 fails 26 of 36); check_skin pins updated.
+
+**Safety status:** no new write and no write path changed; display only (fonts, colours, text, layout).
+
+## 0.61.1 - Review fixes: the chip says how sure, the delta right-aligned (2026-10-02)
+
+Base: 0.61.0 (archived, never on the tablet). Bugfix, patch. 12-agent review, each finding checked.
+- The method pill is baked into every home background (tools/make_backgrounds.py, the custom bake
+  table): 0.61.0's removal of its label left an EMPTY pill in every theme. Instead of re-baking, the
+  chip comes back with plain content -- Low / Medium / High / Very high (GA's Poor..Excellent), First
+  shot, Estimate -- and the footer counts the shots ("4 of 5 shots on this bag", GA's n and bag_shot)
+  beside the unchanged dot. The chip's contrast wiring (crema_ink on chip) is live again.
+- The delta is right-aligned to the tile's inner edge: a five-character hero ("12.25") came within
+  ~10 px of it on the tablet and touched it at font_scale 1.0.
+- No translate on GrindAdvisor's numbered sentences (a desktop build appends each miss to translation.tcl).
+- check_skin: G pins the chip word for every rung x band x plain (0.60.0 fails 85, 0.61.0 stops at the
+  missing chip); the cycle_bag log check gained a positive control (a real DYE failure still logs).
+
+**Safety status:** no new write; reads only (GrindAdvisor's rec dict). Every write path unchanged.
+
+## 0.61.0 - The grind tile in plain words; cycle_bag logs no empty error (design review F15, 2026-10-02)
+
+Base: 0.60.0. Feature, minor. Owner 2026-10-02 (batch f): "Plain, tile too" -- barista words up front,
+the method behind Why? (pairs with GrindAdvisor 3.19.0's rec key `plain`).
+- Header NEXT GRIND (estimate keeps STARTING ESTIMATE); delta "finer by 0.5" / "coarser by ..." / "keep
+  this grind" (plain.move, else the same words computed here); note = plain.short ("15.5 s, target 28 s:
+  go finer", the out-of-reach line); band "medium confidence, 4 shots" (plain.conf, else mapped from the
+  band word), dots unchanged. Older GrindAdvisor builds keep the shortened reason.
+- The method chip (pill + grind_method) is removed; the rung is under Shot analysis -> Why?.
+- `_grind_num`: two decimals only when the step needs them (3.25 read "3.2"). Theme miniature "High - 12".
+- cycle_bag: the end stops and the empty list are `return`s inside its catch (code 2), which logged
+  "could not cycle the bean bag: " with an empty message; only code 1 is an error now (Bags-view review).
+- check_skin.tcl: G now pins that no rung name reaches any tile accessor (with and without `plain`), new
+  H1 plain-words section, end stops log no ERROR; 0.60.0 fails the new checks. check_last_shot PASS.
+
+**Safety status:** no new write; reads only (GrindAdvisor's rec dict). Every write path unchanged.
+
+## 0.60.0 - Clear favorite profiles: six seconds to undo (design review F20, 2026-10-01)
+
+Base: 0.59.2. Protocol lane (persistence), owner 2026-10-01: "go with batch d next", "Clear + 6 s
+Undo". Feature, minor bump.
+- One tap still clears at once (same link, same tap zone). For six seconds the link reads
+  "Cleared. Undo" (`fav_clear_label` checks `_fav_undo_live`; the 200 ms variable tick blanks it
+  on its own, no timer); a tap restores the EXACT pre-clear value. A tap within 500 ms of the
+  clear (finger-down double tap; dbuttons do not debounce) is ignored. Leaving lumen_settings
+  drops the undo (`dui page add_action lumen_settings hide ::lumen::act::_fav_undo_drop`).
+- The clear now stores an EMPTY value instead of unsetting the key: the core's
+  convert_legacy_to_v2 (shot.tcl, reached by DYE's export) loads an old shot's settings and
+  restores the current ones additively, which brought an unset key -- the old favorites -- back
+  (reproduced against 0.59.2 in review). A save that throws rolls memory back (clear and undo).
+- Multi-lens review (persistence, real dui, UX; no major): the label now expires the undo and a
+  tap trusts what it last showed (a tap in the tick after expiry got nothing); a backwards clock
+  expires it; a failed undo logs the lost value. The hide action fires on the real dui.
+- Write path, fully: `::settings(lumen_fav_profiles)` is written by fav_tap (unchanged), by the
+  clear (now "" + save_settings) and by the undo (the snapshot + save_settings) -- the same one
+  key through the app's own save_settings. The snapshot lives in RAM only (never on disk); a kill
+  inside the six seconds leaves the favourites cleared, as the screen said. Nothing else written.
+- Safety status: no new file, database or history write; one existing settings key gains one
+  restore write. Offline: check_skin.tcl F20 block (both font modes); verify.sh + owner taps.
+
+## 0.59.2 - touch: 64x80 stepper tap zones, [TIME | FLOW] mode pills (polish batch F14, 2026-09-30)
+
+Base: 0.59.1. Design review F14, owner 2026-09-30 ("go with the touch batch next").
+- Every -/+ pill (home GRIND / DOSE / YIELD; settings BREW, STEAM, FLUSH, HOT WATER, BAGS TO
+  CYCLE, LOW WATER) taps over 64x80 design px (was the 44x48 pill): `step_tap` grows the zone
+  20px into the value and 16px up and down (`step_hit_in`, `step_hit_v`). The bag arrows are
+  70x80 (20 out, 6 toward Edit). The drawn pills and backgrounds are unchanged (no re-bake), and
+  the press flash is a chip on the pill (`chip` style), so it looks as before.
+- STEAM / HOT WATER: the "TIME | flow" caption is a two-segment pill, [TIME | FLOW] and
+  [TEMP | VOL], 180x44 at row+48 under the row label (tap zone 180x60): plain glass_2 track, the
+  selected half in crema_lo with a crema_ink word, the other word ink_2 (the picker pills'
+  look). Halves and words carry no role tags; `_mode_seg_sync` paints them from the mode (the
+  clean banner's pattern), the toggles repaint at once, build_settings clears the paint cache.
+  `var` takes -tags; the old mode-line accessors and `set_mode_dx` are gone.
+- Independent review before the push: a first cut at row+40 painted over the labels' feet
+  (fixed, now pinned); check_skin gained exact zone growth, chip-on-glyph, pill order and tag
+  checks, and an overlap now fails a standalone run. Five mutations all caught; both modes PASS.
+- Safety status: unchanged -- no new write; the mode toggles write the same two settings.
+
+## 0.59.1 - contrast: every text ink guarded on the surface it sits on (polish batch, 2026-09-30) - verify.sh PASS on the tablet (dark half)
+
+Base: 0.59.0. Tablet capture (custom Auto, light half): the grind tile's texts read at
+2.1-3.9:1 ("Poor - 2 shots" in warn 2.1, hero and links in crema 2.8-3.1), accent-pill labels
+3.1, legends 2.6-3.4.
+- `::lumen::custom::text_roles` guards each text ink against the surfaces it is drawn on: custom
+  palettes at 65 text spots through `_surface_at`, the painter's own 8-bit arithmetic (Tk's
+  truncating paste, the quarter-scale bloom, drop shadows; matches `page_photo` pixel for pixel),
+  the baked themes on their sampled worst pixels. Only lightness moves, only as far as 4.5:1 (3:1
+  large text, status dots) needs; passing colours stay.
+- New tokens: `crema_ink` (crema-hued text; crema stays on glyphs), `halo_ink` (the active
+  favorite) on `halo_tint` (its halo; darker, hue kept, on the 7 dark palettes where even white
+  read under 4.5:1), `c_*_ink` (legends, flow readings, water; the chart lines keep their colours),
+  `danger_face` (the cleaning banner; white was 3.95:1 on the dark theme's danger).
+- Confidence band: a good / warn dot, the words in ink_2; the tile header in ink_2. Picker
+  captions and notes take the current theme's inks; DYE remarks and list selection crema_ink.
+- Dark theme unchanged but danger (4.24 -> 4.5:1 on glass), the banner face and the halo ink.
+- Review round: a smooth surface model (1-4 units light) and spots off the bloom's column had let
+  the band line, note and chip slip to 4.47-4.50:1 and slot 1's name to 4.2:1; fixed as above.
+  A preset pill whose colour equalled the live page colour was repainted by the role walk after a
+  switch or Auto flip; refresh_preview now restores each pill's own colour.
+
+**Safety status: colour-only change; no write behaviour added or changed. The custom painter and its
+signature are untouched, so no background is redrawn.**
+
 ## 0.59.0 - Auto follows sunrise / sunset (pass 10, 2026-09-27) - verify.sh PASS on run 1 (boot log: "sun times from the time zone Asia/Dubai: sunrise 06:08, sunset 18:11"; picker 42 texts, 0 overlaps; owner checklist open: a real sunset / sunrise flip)
 
 Base: 0.58.0. Owner: Auto must not flip at fixed times but at sunrise / sunset for the

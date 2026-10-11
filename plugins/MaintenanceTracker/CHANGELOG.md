@@ -4,6 +4,87 @@ Entries follow the CLAUDE.md doc cap (~15 lines each; entries that added or
 changed a write capability keep their full write-path description). The long
 pre-trim entries survive in the Desktop archive snapshot of each version.
 
+## v0.31.1 - 2026-10-02 - one voice in the words (design review F23 + review fixes, pass 38, copy; no save at start-up) - TABLET-VERIFIED 18:05 (verify.sh PASS run 1; list + Diagnostics checked)
+
+- Sentence case: New tracker, Edit tracker, Delete tracker / Yes, delete tracker, Hide tracker, Undo last record,
+  Yes, delete last record, Yes, remove this record, Record maintenance / burr install / water bottle. Steps'
+  "Mark done" buttons read "Record" (the list's and Detail's label for the same confirm; built-in steps say
+  "Tap Record ...", typed steps untouched). The app's cycles are "clean cycle" / "descale cycle" everywhere
+  ("Descale cycle (app)", "Linked: the app's descale cycle."); the action buttons keep Descale / Clean.
+- Diagnostics: title "Diagnostics", subtitle "Maintenance Tracker" + middle dot. "Icon: Wrench". A threshold
+  of 1 reads "0 / 1 day", "1 of 1 shot since last done" (`_unit_word`).
+- No " -- " in visible text (sentence breaks, brackets or the middle dot); Detail asks `_item_detail` for no
+  tail instead of cutting at " -- ". Cut text ends in U+2026 (`_u 0x2026`), measured by `_fit_text`.
+- Preload no longer calls `plugins save_settings` (CLAUDE.md); defaults and migrations stay in memory, the
+  one-shot burr hide re-applies on main's reload (`burr_hide_session`) until the first real save stores it.
+- Tests: pass_38_offline.tcl 65 PASS (v0.31.0 fails 49); pass_37 / polish_0291 / superseded pins updated.
+
+**Safety status unchanged, one write fewer:** no new write capability; start-up no longer saves settings.tdb
+(the first real change does). The plugin still writes only its own settings file.
+
+## v0.31.0 - 2026-10-02 - design-size text, shared colours, dates and counts (design review F8 + F21, pass 37) - TABLET-VERIFIED 2026-10-02 08:37 (verify.sh PASS run 1, run by Claude; list + Diagnostics screenshots checked)
+
+- F8: fonts follow `dui cget screen_size_height` (800 on the tablet; winfo's 736 drew every font at 92%):
+  title 40, primary 22, body 19, button 20, icons 26/24 (caption 16 unchanged). List / Detail card name
+  and state lines 24/47 -> 22/48 ref so they keep 6 virtual px apart at 22 px.
+- F21 colours: ok / amber / red = the shared roles (dark amber #E8B34C; light #086750 / #7a4b00 / #962219);
+  new col_info (#8ab4ff / #2753bb) on the AUTO tags; faces #0a7a5f / #b3261e unchanged. Every role >= 4.5:1
+  as text on its surfaces, every plate glyph >= 3.0 on its tint.
+- F21 dates: shared _fmt_when / _fmt_time (Lumen's 12/24 h and date order, else enable_ampm): history rows,
+  Last done, the Undo / Remove confirm texts, the Steps run hint. Log line and Diagnostics stay ISO.
+- F21 counts: "1-5 of 11 trackers" (en dash) on the list; one step-count helper for Steps and the editor.
+- Owner rules: no literal non-ASCII (the four middle dots come from _u 0xB7), text picked with if, not
+  expr ?:; Diagnostics shows the state word. One-line fits with "...": hidden-tracker chips, Steps title,
+  the Edit delete question.
+- Tests: pass_37_offline.tcl 51 PASS (v0.30.0 fails 18); pass_36, pass_23, polish_0291 PASS.
+
+**Safety status unchanged:** no new write; display only. The plugin still writes only its own settings file.
+
+## v0.30.0 - 2026-10-02 - every button reacts to the finger (design review F9, batch e) - TABLET-VERIFIED 2026-10-02 06:27 (verify.sh PASS run 1, run by Claude; list screenshot unchanged)
+
+- Every styled button (54 creation sites, about 92 buttons) is created with -command [list _tap $page $tag <cmd>]:
+  the face it wears now picks the press tone (normal #5f6a8c / #a6acd1, green #075c48, red #8f1e18),
+  painted on this page only (_ids) before the command runs (update idletasks, never update), the
+  120 ms restore armed BEFORE the command; the restore puts back the CURRENT palette's face only if
+  the button still wears the press tone (a theme switch, arming Undo or a run starting wins).
+- Card taps (row<i>_open) and icon picker cells (pick<k>_tap) tint their art (card_press, card_bg
+  60% toward the button face, fill only), never the invisible rect; history and step-editor rows
+  repaint themselves and stay unwrapped. No core -pressfill (creation-fill restore, global tags).
+- Contrast: labels 5.35-8.9:1 pressed; card text 7.5 / 10.3:1 (muted 3.5:1 dark while pressed).
+- Tests: passes/MaintenanceTracker/pass_36_offline.tcl 22 PASS (v0.29.3 fails 9); pass_23 and
+  polish_0291 PASS; older pass_26..35 / polish_0281 fail exactly as on v0.29.3 (superseded).
+
+**Safety status unchanged:** no new write; files written unchanged.
+
+## v0.29.3 - 2026-09-30 - polish: contrast (WCAG 2.1 at the tablet's rendered sizes)
+
+- Button labels follow the theme: white on dark (7.48:1), #2b2b2b on the light face (8.32:1;
+  white was 1.70:1). Muted text is the shared #9aa0ad / #595959 (4.66 / 4.86:1, were 3.93 / 3.10).
+- ok/amber/red are per theme in `_apply_palette` (dark #2FD3A4 / #fe7e00 / #ff8a80, light
+  #0a7a5f / #a35200 / #b3261e; state words now 4.78-6.39:1); bars, plate tints, counters,
+  history rows and the Detail card follow. NEVER RECORDED / NO DATA stay two different greys
+  and pass 4.5:1 (dark #c2c6d0 / #aeb3bf, light #747474 / #595959; plates 3.2-5.4:1).
+- Primary / danger faces and the step badges: fixed #0a7a5f / #b3261e, white labels 5.30 /
+  6.54:1 (were 3.13 / 3.95); armed Undo and the Steps action swap label colour with the face.
+- Theme toggle: also repaints button labels and the texts, bullets, cup and step entry it
+  missed, and resets `_cfg`'s cache (a toggle left the Detail wear bar empty).
+- Offline: contrast table + toggle harness PASS, 243 procs compile, MT POLISH PASS. Advisory
+  (non-text): on the dark theme the fixed primary / danger faces stand 2.3-2.9:1 off the card.
+- Safety status unchanged from v0.29.2: colour only, no new write capability; the plugin still
+  writes only its own settings file and SDB stays read-only.
+
+## v0.29.2 - 2026-09-30 - polish: pager bottom-right (cross-plugin standard)
+
+- Tracker list: Prev/Next move from the top-right toolbar to the bottom-right of the bottom
+  bar (owner 2026-09-30: easier to reach), labelled "◀ Prev" / "Next ▶" -- the same place,
+  size (Prev 1648-2048, Next 2068-2468 virtual) and disabled-at-the-ends rule as
+  ShotHistoryEditor 0.13.1 and GrindAdvisor 3.16.6. Done, New Tracker (now btn_w_std, was the
+  wide centre button) and Diagnostics line up from the left with sm gaps. The toolbar keeps
+  the count line, now full width. Design-rules header updated.
+- Offline: 240 procs compile; bar geometry and toggle box checked (scratchpad harness).
+- Safety status unchanged from v0.29.1: layout only, no new write capability; the plugin
+  still writes only its own settings file and SDB stays read-only.
+
 ## v0.29.1 - 2026-09-26 - polish batch: section cards (owner-approved mockup) - verify.sh PASS run 1; tablet screenshots of all four pages match the mockup
 
 - Detail: a status card with the list card's anatomy (summary + counter, state word + AUTO tag,

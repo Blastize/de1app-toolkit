@@ -5,7 +5,9 @@ package require de1plus 1.0
 #  LUMEN  --  a glass dashboard skin for the Decent DE1
 #
 #  Author:  Blastize
-#  Version: 0.59.0  (Auto theme follows sunrise / sunset; see `variable version`)
+#  Version: 0.62.1  (F23 one copy style: the real ellipsis and the middle
+#                    dot; F25 the taskbar's Sleep is the power symbol;
+#                    see `variable version`)
 #
 #
 #
@@ -87,8 +89,12 @@ package require de1plus 1.0
 #    feed `winfo screenwidth` into a coordinate.
 #
 #    Fonts are PHYSICAL. Tk font objects bypass that rescale, so they are
-#    sized in real pixels from the detected screen, with negative Tk sizes
-#    (negative = pixels; positive = points, which explode on Android DPI).
+#    sized in real pixels, with negative Tk sizes (negative = pixels;
+#    positive = points, which explode on Android DPI). 0.62.0 (F8): their
+#    scale comes from dui's screen_size_height -- the height the canvas and
+#    every coordinate are built from (800 on the 1340x800 tablet) -- never
+#    from Tk's winfo screenheight, which says 736 there and drew every font
+#    at 0.92 of its design size through 0.61.1.
 #
 #  This file is authored entirely in DESIGN pixels on a 1340x800 basis --
 #  the same basis as the design mockup -- and converts to virtual through
@@ -102,7 +108,7 @@ package require de1plus 1.0
 #############################################################################
 
 namespace eval ::lumen {
-    variable version "0.59.0"
+    variable version "0.62.1"
 
     variable C        ;# colour tokens
     array set C {}
@@ -137,12 +143,32 @@ namespace eval ::lumen {
     # change is one itemconfigure per token, no restart. The tokens, in
     # the order the reverse lookup tries them (first match wins should a
     # derived custom palette ever give two tokens one value).
+    # 0.59.1: the guarded text inks join last, so the older tokens keep
+    # their claims (set_palette steps each new one clear of every other).
     variable role_tokens [list ink ink_2 ink_3 crema crema_lo crema_brd \
                                glass glass_2 glass_brd spec good warn danger \
                                c_press c_flow c_temp c_weight grid \
-                               chart_bg chart_bg_flow bg]
+                               chart_bg chart_bg_flow bg \
+                               crema_ink halo_ink c_press_ink c_flow_ink c_temp_ink c_weight_ink]
     variable C_rev        ;# colour -> token, rebuilt by set_palette
     set C_rev [dict create]
+    # 0.62.0 (F21, owner 2026-10-02): the status colours shared with
+    # GrindAdvisor, MaintenanceTracker and DrinkMenu, one literal each. They
+    # are the SEEDS of Lumen's good / warn / danger (names kept: tests and
+    # the role tags read them) and of the new info ink; text_roles guards
+    # each on the surfaces it is drawn on, and both baked presets keep these
+    # values unchanged (every one clears its floor on the sampled art).
+    # info is not a role token -- no Lumen item draws it, so it needs no
+    # retheme tag and C_rev stays one colour per token; ::lumen::role_color
+    # hands it to plugins drawing on Lumen surfaces.
+    variable status_seeds {
+        dark  {good #2FD3A4 warn #E8B34C danger #FF8A80 info #8AB4FF}
+        light {good #086750 warn #7A4B00 danger #962219 info #2753BB}
+    }
+    # The cleaning banner's face: the plugins' danger button face, white
+    # text at 6.54:1 in every theme (0.59.1 derived it from danger, which a
+    # light #FF8A80 seed would have turned pink).
+    variable danger_face "#B3261E"
     variable item_n 0     ;# unique first tag per item (dui refuses duplicates)
     variable photo_items  ;# tag -> {page x y w h radius kind}: photo panels to redraw
     set photo_items [dict create]
@@ -235,10 +261,16 @@ proc ::lumen::set_palette { mode } {
                    [dict get $pr bs] [dict get $pr ah] [dict get $pr as]]
         # 0.56.0: the base on screen, for the schedule tick to compare.
         set ::lumen::custom::active_base [dict get $pr eff]
+        # 0.59.1: plus the guarded text roles palette derives (crema_ink,
+        # halo_ink, the c_*_ink legend inks, the banner's danger_face) and
+        # the favorite halo's guarded tint.
         foreach k {bg glass glass_2 glass_brd spec ink ink_2 ink_3 crema crema_lo crema_brd \
-                   good warn danger c_press c_flow c_temp c_weight grid chart_bg chart_bg_flow} {
+                   good warn danger info c_press c_flow c_temp c_weight grid chart_bg chart_bg_flow \
+                   crema_ink halo_ink c_press_ink c_flow_ink c_temp_ink c_weight_ink danger_face \
+                   halo_tint} {
             set C($k) [dict get $P $k]
         }
+        set darkbase [expr {[dict get $P base] ne "light"}]
     } elseif { $mode eq "light" } {
         set C(bg)          "#E9EDF3"
         set C(glass)       "#F8F9FB"
@@ -256,13 +288,12 @@ proc ::lumen::set_palette { mode } {
         set C(crema_lo)    "#E4DDD7"
         set C(crema_brd)   "#DCC4AA"
 
-        set C(good)        "#12805F"
-        set C(warn)        "#B4761A"
         # 0.32.0: dedicated danger token (maintenance dot's red). The
         # palette had no red that wasn't a chart series colour; c_temp was
         # the closest but means "temperature curve". Light variant darker
         # than dark, same as good/warn/crema.
-        set C(danger)      "#B23641"
+        # 0.62.0 (F21): good / warn / danger (+ info) are the shared seeds.
+        foreach {k v} [dict get $::lumen::status_seeds light] { set C($k) $v }
 
         set C(c_press)     "#0E9E7C"
         set C(c_flow)      "#3F72E0"
@@ -279,6 +310,7 @@ proc ::lumen::set_palette { mode } {
         # 1340x800/lumen_flow_chart_light.png.
         set C(chart_bg_flow) "#DEE1E4"
 
+        set darkbase 0
     } else {
         set C(bg)          "#0A0E15"
         set C(glass)       "#191E26"
@@ -296,9 +328,9 @@ proc ::lumen::set_palette { mode } {
         set C(crema_lo)    "#282219"
         set C(crema_brd)   "#614824"
 
-        set C(good)        "#2FD3A4"
-        set C(warn)        "#E8B34C"
-        set C(danger)      "#DA515E"
+        # 0.62.0 (F21): the shared seeds (danger was #DA515E, 3.1:1 on a
+        # plugin card and moved by the guard here).
+        foreach {k v} [dict get $::lumen::status_seeds dark] { set C($k) $v }
 
         set C(c_press)     "#17C29A"
         set C(c_flow)      "#6C9BFF"
@@ -317,6 +349,7 @@ proc ::lumen::set_palette { mode } {
         # Sampled from 1340x800/lumen_flow_chart.png.
         set C(chart_bg_flow) "#171719"
 
+        set darkbase 1
     }
 
     # 0.46.1: the painter's parameters for THIS theme, so non-baked pages
@@ -337,9 +370,66 @@ proc ::lumen::set_palette { mode } {
         msg -NOTICE "Lumen: no painter parameters for theme '$mode': $err"
     }
 
+    variable role_tokens
+    # 0.59.1: the baked presets' text roles, from their own colours on their
+    # sampled surfaces (::lumen::custom::baked_surfaces) plus the flat ones
+    # (_flat_surfaces: the picker page painted over its page colour from
+    # theme_P, DYE's flat tokens, the graph backgrounds). A custom palette
+    # derived its own in ::lumen::custom::palette. Should the guard ever
+    # throw, every new token takes the colour it derives from, as before.
+    if { $mode ne "custom" } {
+        if { [catch {
+            set surf [dict create]
+            dict for {lab hex} [dict get $::lumen::custom::baked_surfaces $mode] {
+                dict lappend surf $lab [::lumen::custom::hex_rgb $hex]
+            }
+            if { $theme_P ne "" } {
+                foreach {lab rgb} [::lumen::custom::_flat_surfaces $theme_P \
+                        [::lumen::custom::hex_rgb $C(bg)] [::lumen::custom::hex_rgb $C(glass)] \
+                        [::lumen::custom::hex_rgb $C(glass_2)] [::lumen::custom::hex_rgb $C(crema_lo)] \
+                        [list [::lumen::custom::hex_rgb $C(chart_bg)] [::lumen::custom::hex_rgb $C(chart_bg_flow)]]] {
+                    dict lappend surf $lab $rgb
+                }
+            }
+            set seeds [dict create]
+            foreach k {ink ink_2 ink_3 crema good warn danger info c_press c_flow c_temp c_weight bg} {
+                dict set seeds $k [::lumen::custom::hex_rgb $C($k)]
+            }
+            dict for {k v} [::lumen::custom::text_roles $seeds $surf $darkbase 1] { set C($k) $v }
+        } err] } {
+            msg -ERROR "Lumen: text guard failed for theme '$mode': $err"
+        }
+    }
+    foreach {k from} {crema_ink crema halo_ink crema c_press_ink c_press c_flow_ink c_flow
+                      c_temp_ink c_temp c_weight_ink c_weight} {
+        if { ![info exists C($k)] } { set C($k) $C($from) }
+    }
+    # 0.62.0 (F21): the banner face is pinned, not derived (see danger_face).
+    if { ![info exists C(danger_face)] } { set C(danger_face) $::lumen::danger_face }
+    # 0.59.1: a new text token often equals the colour it derives from (dark
+    # glass needs no change), and role tags are read off colours (_tags),
+    # so such a token is stepped one unit per channel toward its text side
+    # until no other role token holds its value -- invisible, and the
+    # colour -> token map below stays one-to-one.
+    foreach tok {crema_ink halo_ink c_press_ink c_flow_ink c_temp_ink c_weight_ink} {
+        for { set n 0 } { $n < 8 } { incr n } {
+            set clash 0
+            foreach other $role_tokens {
+                if { $other ne $tok && [string equal -nocase $C($other) $C($tok)] } { set clash 1 ; break }
+            }
+            if { !$clash } { break }
+            set d [expr {$darkbase ? 1 : -1}]
+            lassign [::lumen::custom::hex_rgb $C($tok)] r g b
+            set nv [::lumen::custom::rgb_hex [list [expr {$r + $d}] [expr {$g + $d}] [expr {$b + $d}]]]
+            if { $nv eq [string toupper $C($tok)] } {
+                set nv [::lumen::custom::rgb_hex [list [expr {$r - $d}] [expr {$g - $d}] [expr {$b - $d}]]]
+            }
+            set C($tok) $nv
+        }
+    }
+
     # 0.47.0: colour -> token, for the role tags the drawing helpers attach.
     variable C_rev
-    variable role_tokens
     set C_rev [dict create]
     foreach tok $role_tokens {
         set v [string toupper $C($tok)]
@@ -356,6 +446,25 @@ proc ::lumen::set_palette { mode } {
     set ::skin_background_colour   $C(bg)
 }
 
+# 0.62.0 (F21): the shared status role names on Lumen's guarded tokens, for
+# a plugin drawing text on Lumen's surfaces (GrindAdvisor's glass, Bean
+# Scanner's adopt-Lumen mode): ok -> good, warn, danger, info. The value is
+# the CURRENT theme's ink, guarded on Lumen's backdrop and glass (custom
+# palettes included); "" for an unknown role. Read it when drawing -- a
+# theme change moves it. Guard with [info procs ::lumen::role_color].
+proc ::lumen::role_color { role } {
+    variable C
+    switch -exact -- $role {
+        ok      { set tok good }
+        warn    { set tok warn }
+        danger  { set tok danger }
+        info    { set tok info }
+        default { return "" }
+    }
+    if { ![info exists C($tok)] } { return "" }
+    return $C($tok)
+}
+
 #############################################################################
 #  Layout
 #############################################################################
@@ -364,16 +473,37 @@ proc ::lumen::set_palette { mode } {
 proc ::lumen::X { v } { return [expr {int(round($v * 2560.0 / 1340.0))}] }
 proc ::lumen::Y { v } { return [expr {int(round($v * 1600.0 /  800.0))}] }
 
+# 0.62.0 (F8): the app's own screen size -- dui's screen_size_width /
+# _height, the values the canvas and every coordinate rescale are built
+# from (1340 x 800 on the tablet, where Tk's winfo screenheight reports 736:
+# the Android bar). {W H} as integers, or {0 0} when dui has no usable
+# answer (no dui, or "" / junk). Preconditions are tested, not caught.
+proc ::lumen::app_screen {} {
+    if { ![llength [info commands ::dui::cget]] } { return {0 0} }
+    set w [::dui::cget screen_size_width]
+    set h [::dui::cget screen_size_height]
+    if { ![string is double -strict $w] || ![string is double -strict $h] || $w <= 1 || $h <= 1 } {
+        return {0 0}
+    }
+    return [list [expr {int($w)}] [expr {int($h)}]]
+}
+
 proc ::lumen::_init_layout {} {
     variable L
     array unset L
     array set L {}
 
-    # Real physical screen, used ONLY for font pixel sizes.
-    set psh 800
-    catch { set psh [winfo screenheight .] }
-    if { $psh <= 1 } { set psh 800 }
-    set font_scale [expr {double($psh) / 800.0}]
+    # 0.62.0 (F8, owner: "grow text to design"): ONE scale source. Fonts
+    # take the height dui built the canvas from -- the same one every
+    # coordinate is rescaled by -- falling back to the 800 design height,
+    # never to Tk's winfo screenheight (736 on the tablet: every font drew
+    # at 0.92 of its design size through 0.61.1).
+    set ch 800
+    if { [llength [info commands ::dui::cget]] } {
+        set v [::dui::cget screen_size_height]
+        if { [string is double -strict $v] && $v > 1 } { set ch $v }
+    }
+    set font_scale [expr {double($ch) / 800.0}]
     set L(font_scale) $font_scale
 
     # ---- spacing -------------------------------------------------------
@@ -411,22 +541,24 @@ proc ::lumen::_init_layout {} {
     #
     # Every gap is md (16) and the bottom margin is 16, as before.
     set L(bar_y)      0 ; set L(bar_h)   48
-    # 0.57.0 (owner's mockup): the bar is re-laid out. Sleep (moon) is
-    # ALONE at the far left -- nothing tappable near it, so the corner tap
-    # that used to put the machine to sleep by accident lands on nothing.
+    # 0.57.0 (owner's mockup): the bar is re-laid out. Sleep is ALONE at
+    # the far left (0.62.1, F25: the power symbol, no longer the moon,
+    # which the plugins use for their dark theme) -- nothing tappable
+    # near it, so the corner tap that used to put the machine to sleep by
+    # accident lands on nothing.
     # The clock takes two rows (time over date) so the water reading can
     # follow it on the left; the four remaining icons close up to the
     # right margin; the wordmark is gone; the favorite slots widen to
     # carry the profile NAMES, centred on the free span between water
     # and icons. Every zone is the bar's full 48px height.
     #
-    #   moon      0..56
+    #   sleep     0..56  (power glyph, 22 px wide at 17..39)
     #   time     66.. (row 1, 26px mono, widest "12:59 PM" ends ~190)
     #   date     68.. (row 2, caption)
     #   water   206.. (anchored w, widest "1500 ml" ends ~315)
     #   slots   396..576  586..766  776..956  (180 wide, 10 apart)
     #   mug 1052..1108  wrench 1124..1180  gear 1196..1252  DE1 1268..1324
-    set L(bar_moon_x)   0
+    set L(bar_sleep_x)  0
     set L(bar_time_x)  66 ; set L(bar_time_y) 20
     set L(bar_day_x)   68 ; set L(bar_day_y)  40
     set L(bar_water_x) 206
@@ -504,12 +636,18 @@ proc ::lumen::_init_layout {} {
     # row does not move:
     #
     #   584 label (->601)   606 profile (->622)   629 roaster (->645)
-    #   652 hero (40px ->692)   699 notes (->715)
+    #   649 hero (40px ->689)   699 notes (->715)
     #   722 action row (->770), 14 clear of the strip edge at 784
+    # 0.62.0 (F8): the hero renders at its full 40 px now (37 through
+    # 0.61.1), a 49 px line box (Inter ascent 39 + descent 10): from 652 it
+    # ran 2 px into the notes' box and its descenders came within ~3 px of
+    # their ink. 3 px up, the line boxes no longer overlap (roaster box ends
+    # 649, hero 649..698, notes from 699) and the ink gaps are ~9 above and
+    # ~6 below.
     set L(id_label_y)  584      ;# NEXT SHOT
     set L(id_prof_y)   606      ;# PROFILE <value>, its own row again
     set L(id_roast_y)  629      ;# roaster, small
-    set L(id_name_y)   652      ;# bean type, hero (40px -> 692)
+    set L(id_name_y)   649      ;# bean type, hero (40px, line box -> 698)
     set L(id_notes_y)  699      ;# tasting notes, only when non-empty
     set L(id_act_y)    722      ;# action row (48 tall -> 770)
 
@@ -577,6 +715,18 @@ proc ::lumen::_init_layout {} {
     set L(step_y)      642
     set L(step_h)       48
 
+    # 0.59.2 (F14, design review): the -/+ pills stay 44x48 but their TAP
+    # ZONES are 64x80 -- 20px into the value between the pills and 16px above
+    # and below -- so a thumb that lands beside a pill, one-handed with a
+    # portafilter in the other hand, still steps it. The press flash stays on
+    # the pill (chip style). Home: 626..706, 16 clear of the bottom row at
+    # 722; settings rows: row+19..row+99, inside the 118 panel. The bag
+    # arrows grow 20px outward and 6px toward Edit, which sits 12px away.
+    set L(step_hit_in)  20
+    set L(step_hit_v)   16
+    set L(cyc_hit_out)  20
+    set L(cyc_hit_in)    6
+
     # Bottom row of the strip, on the SAME grid as the steppers above and the
     # same y as the identity block's action row.
     set L(scale_y)      722
@@ -591,7 +741,8 @@ proc ::lumen::_init_layout {} {
     # Identity on the left, metrics on the right, so the taller type fits in
     # a shorter card. Mirrors the next-shot card's row order exactly:
     # LABEL -> PROFILE -> roaster -> bean type.
-    set L(last_id_x)   706 ; set L(last_id_w)  274
+    # 0.62.0 (F8): 266 wide, was 274 -- 8 px to the GRIND column (below).
+    set L(last_id_x)   706 ; set L(last_id_w)  266
     set L(last_val_x)  796      ;# PROFILE value on THIS card -- NOT id_val_x,
                                 ;# which is the next-shot card's 130 and lands
                                 ;# inside the grind tile (seen on the tablet)
@@ -610,10 +761,17 @@ proc ::lumen::_init_layout {} {
 
     # Four metrics on a 76 pitch: 996 + 3*76 + 76 = 1300, the tile's inner
     # edge (682 + 642 - 24).
-    set L(last_met_x)  996 ; set L(last_met_pitch) 76
+    # 0.62.0 (F8): GRIND gets an 84 px column from 988 (DOSE / YIELD / TIME
+    # stay at 1072 / 1148 / 1224): a five-character grind on a 0.25 step
+    # ("17.25", 72 px in the 24 px mono) ended 4 px from DOSE; now 12.
+    set L(last_met_x)  988 ; set L(last_met_pitch) 76 ; set L(last_met_grind_w) 84
     set L(last_met_label_y) 136
     set L(last_met_val_y)  160
-    set L(last_met_sub_y)  188  ;# the derived ratio, under YIELD
+    # 0.62.0 (F8): 190, was 188 -- the values grow to their 24 px design
+    # size (22 through 0.61.1), and the digits' ink came within ~5 px of
+    # the ratio's parentheses; 2 down restores ~7 (row ends 210, the
+    # bottom row is at 220).
+    set L(last_met_sub_y)  190  ;# the derived ratio, under YIELD
 
     # Water tank level (0.24.0), in the card's top-right corner -- the only
     # space on the page that was empty, and where every other skin puts its
@@ -625,9 +783,25 @@ proc ::lumen::_init_layout {} {
     # Shot history is a text link now, matching Curve / Shot analysis on the
     # grind tile rather than being the only button on the card.
     set L(hist_y)      220
+    # 0.59.1: a rated confidence band's words start one status dot in (the
+    # dot, U+25CF at the caption size, is 15 px wide in Inter; the rest is
+    # a word space).
+    set L(band_dot_dx)  22
 
     set L(pad_x)     24        ;# inner padding of a tile
     set L(pad_y)     20
+
+    # Grind tile rows, below the tile's text origin gy (grind_y + pad_y).
+    # 0.62.0 (F8): the 84 px hero (77 through 0.61.1) put its digit ink
+    # (rows +29..+91 of the anchor) on the note's ascenders from +20; at +14
+    # the digits end at gy+105 and the note, 2 lower at +108, starts its ink
+    # at gy+112 (~7 clear) and ends it at gy+130 (~9 above the band row's
+    # ink). The digit centre stays within 1 px of where the tablet showed
+    # it. The delta (+60) is centred on the digits beside them.
+    set L(grind_hero_dy)   14
+    set L(grind_delta_dy)  60
+    set L(grind_note_dy)  108
+    set L(grind_note_w)   560
 
     # ---- flow pages (espresso / steam / water / flush) -----------------
     set L(center_x)      670
@@ -689,15 +863,16 @@ proc ::lumen::_init_layout {} {
     set L(set_step_w) 44 ; set L(set_step_gap) 8
     set L(set_val_w) 100 ; set L(set_step_h)  48
 
-    # The alternating rows' mode line (0.26.0): "TIME | flow". The second word
-    # starts at a fixed offset so the two text items never reflow -- the
-    # longest first word is TEMP at ~40px, so 70 clears it.
-    #
-    # Its tap target is 48 tall (over the 44px floor) and wide enough to be
-    # hit without aiming, while ending well clear of the stepper group: the
-    # left column's group starts at 402, this ends at 170 + 24 + 180 = 374.
-    set L(set_mode_dx) 70
-    set L(set_mode_w) 180 ; set L(set_mode_h) 48
+    # The alternating rows' mode control (0.26.0 caption, 0.59.2 two-segment
+    # pill): each half 90 wide -- the longest word, FLOW / TEMP, is ~40px --
+    # ending well clear of the stepper group: the left column's group starts
+    # at 402, this ends at 170 + 24 + 180 = 374, 28 short of the grown minus
+    # zone. The pill sits at row+48..row+92, 44 tall (the floor): the row
+    # label's text box is row+26..row+46 (its capitals' ink reaches row+41),
+    # and a pill from row+40 painted over the letters' feet (0.59.2 review).
+    # Its tap zone is 60 tall, row+40..row+100, still inside the 118 panel.
+    set L(set_mode_w) 180 ; set L(set_mode_h) 44
+    set L(set_mode_dy) 48 ; set L(set_mode_hit_v) 8
 
     # Theme picker (0.51.0 redesign): a 640-wide controls column with the
     # labels ABOVE full-width swatch grids (two rows of 13 circles), and a
@@ -726,11 +901,29 @@ proc ::lumen::_init_layout {} {
     # 240 tall) at the swatch rows' +48, five 66-wide chips on an 18 gap
     # (= 402), notes at the inner width, lg between the groups (0.54.1
     # sizes; the caption notes wrap to two lines each at 402).
+    # 0.62.0 (F8): the page title (40 px, a 49 px line box from y 24, so to
+    # 73) and the version caption under it on the picker and the settings
+    # page: the caption from 76 (3 px clear of the title's box; it started
+    # at 72, inside it). Title baseline to caption ink stays ~16 px, as on
+    # the tablet before.
+    set L(hdr_ver_y) 76
+    # 0.62.0 (F21): the BASE card's schedule line in the CLOCK row's 12/24 h.
+    # "Sunrise 06:10 AM" and "Sunset 06:06 PM" are ~130-140 px each at the
+    # caption size: the old "Auto:" + 52 / 172 layout ran the sunset into
+    # the Dark pill (then at x 422). The lead is gone (the Auto pill beside
+    # the line names the schedule), sunrise sits at the card's text edge,
+    # sunset 152 in, and the three base pills are 88 wide (were 96), so the
+    # Dark pill starts at 446: ~12 px after the widest sunrise, ~20 after
+    # the widest sunset.
+    set L(thp_sun_dx) 152
+    set L(thp_base_pill_w) 88 ; set L(thp_base_pill_gap) 8
     set L(thp_mini_y) 152 ; set L(thp_mini_h) 240
     set L(thp_chip_y) 416 ; set L(thp_chip_w) 66 ; set L(thp_chip_h) 48 ; set L(thp_chip_gap) 18
     set L(thp_note_y) 514 ; set L(thp_note2_y) 566 ; set L(thp_status_y) 618
 
-    # ---- fonts: physical pixels, 16px floor ----------------------------
+    # ---- fonts: pixel sizes (design px x font_scale), 16px floor -------
+    # 0.62.0 (F8): font_scale is dui's screen height / 800, 1.0 on the
+    # tablet, so every role renders at its design size below.
     # Fallback names first, so every key is valid even if font creation
     # fails on an unusual build.
     set L(font_title)   Helv_20_bold
@@ -1122,9 +1315,31 @@ proc ::lumen::data::_is_pos { v } {
     return $ok
 }
 
+# 0.62.1 (F23, one copy style across the toolkit): the characters the
+# copy rules name, built with [format %c] -- never literal UTF-8 in this
+# file (the mangling trap): ellipsis U+2026 for a cut or "in progress",
+# dot U+00B7 between two facts on one line. Both are in the shipped Inter
+# and Noto Sans Mono faces (cmap checked). The taskbar's icon glyphs stay
+# in build_home's own table.
+proc ::lumen::glyph { name } {
+    switch -exact -- $name {
+        ellipsis { return [format %c 0x2026] }
+        dot      { return [format %c 0xB7] }
+    }
+    return ""
+}
+
+# A character cap with an ellipsis. 0.62.1 (F23): the cut ends in the real
+# ellipsis (U+2026), not three dots, and keeps the same max - 2 characters
+# before it. Every caller draws in Inter Regular (the caption, 16 px; the
+# body's note goes on through _fit_text), where the glyph is no wider than
+# the three dots it replaces: 821 vs 828 per 1000 px, and 12 vs 12 px /
+# 15 vs 15 px hinted at 16 / 19 -- so every box sized for the old cut holds
+# the new one. (Hinted SemiBold 20-22 px draws it 1-3 px WIDER than three
+# dots: text in those fonts is cut by the measured _fit_text, never here.)
 proc ::lumen::data::_ellipsis { s max } {
     if { [string length $s] <= $max } { return $s }
-    return "[string range $s 0 [expr {$max - 3}]]..."
+    return "[string range $s 0 [expr {$max - 3}]][::lumen::glyph ellipsis]"
 }
 
 # GrindAdvisor states its working in parentheses -- "Regression over 8 shots
@@ -1251,76 +1466,91 @@ proc ::lumen::data::grind_est {} {
 
 # The tile's header label. Static "RECOMMENDED GRIND" until 0.38.0, now an
 # accessor purely so an estimate is never captioned "Recommended"
-# (GrindAdvisor's display contract for estimates).
+# (GrindAdvisor's display contract for estimates). 0.61.0: "NEXT GRIND",
+# the title of GrindAdvisor 3.19.0's popup (design review F15, plain words).
 proc ::lumen::data::grind_header {} {
     if { [grind_rec] eq "" && [grind_est] ne "" } {
         return [translate "STARTING ESTIMATE"]
     }
-    return [translate "RECOMMENDED GRIND"]
+    return [translate "NEXT GRIND"]
+}
+
+# 0.61.0: a grind as GrindAdvisor writes it -- one decimal, two only when
+# the rounding step needs them (a 0.25 step: 3.25 read "3.2" here while the
+# popup said 3.25).
+proc ::lumen::data::_grind_num { v } {
+    if { $v eq "" } { return "--" }
+    if { [catch { set two [format %.2f $v] }] } { return "--" }
+    if { [string index $two end] eq "0" } { return [format %.1f $v] }
+    return $two
 }
 
 proc ::lumen::data::grind_next {} {
     set rec [grind_rec]
-    if { $rec ne "" } { return [_num [_g $rec next] 1] }
+    if { $rec ne "" } { return [_grind_num [_g $rec next]] }
     # "~" marks the hero as an estimate even before the header registers.
     set est [grind_est]
-    if { $est ne "" } { return "~[_num [dict get $est grind] 1]" }
+    if { $est ne "" } { return "~[_grind_num [dict get $est grind]]" }
     return "--"
 }
 
+# GrindAdvisor 3.19.0's plain words (rec key `plain`), or "" on an older
+# build -- every caller keeps its pre-0.61.0 wording as the fallback.
+proc ::lumen::data::_plain { rec key } {
+    if { $rec eq "" || ![dict exists $rec plain $key] } { return "" }
+    return [dict get $rec plain $key]
+}
+
+# 0.61.0: the move in words ("finer by 0.5"), as the popup says it -- not a
+# signed number the barista has to translate into a direction.
+# 0.61.1: GrindAdvisor's sentences carry numbers, so they never match a
+# translation entry -- and on a desktop build every miss is APPENDED to
+# translation.tcl (utils.tcl translate), from the 200 ms tick. Only fixed
+# phrases go through translate.
 proc ::lumen::data::grind_delta {} {
     set rec [grind_rec]
     if { $rec eq "" } { return "" }
+    set move [_plain $rec move]
+    if { $move ne "" } { return $move }
     set from [_g $rec grind]
     set to   [_g $rec next]
     if { $from eq "" || $to eq "" } { return "" }
     if { [catch { set d [expr {double($to) - double($from)}] }] } { return "" }
-    if { abs($d) < 0.05 } { return [translate "no change"] }
-    return [format "%+.1f" $d]
+    if { abs($d) < 0.05 } { return [translate "keep this grind"] }
+    if { $d < 0 } { return "[translate {finer by}] [_grind_num [expr {abs($d)}]]" }
+    return "[translate {coarser by}] [_grind_num [expr {abs($d)}]]"
 }
 
-# GrindAdvisor v3's ladder has FIVE rungs, not two -- see its own
-# _forecast_method_label in plugins/GrindAdvisor/GrindAdvisor.tcl:1997:
-#   first_shot  (n=1)  two_shot  (n=2)  regression  (n>=3)
-#   regression_fallback   (n>=3, but the fitted slope is too flat to solve)
-#   regression_untrusted  (n>=3, the slope solves but R2 < 0.30 -- the times
-#                          are not tracking grind, so the fit is discarded
-#                          and the ladder answers instead)
-# Only the first two were mapped here originally, so the chip sat empty for
-# the first two shots of every bag. Then GrindAdvisor 3.10.0 added the fifth
-# rung and this map was not updated with it, so the chip fell through to the
-# raw dict key and read "regression_unt..." on the tablet (0.27.2).
-#
-# Labels are shortened to fit the 150px chip; the Why? popup carries
-# GrindAdvisor's own full wording. Keep them SHORT -- see the budget on the
-# fallback below.
+# The chip, top right (0.61.1). It used to name GrindAdvisor's rung
+# ("Regression", "2-shot", "Weak fit", the 0.27.2 map of all five) -- the
+# technical word the owner moved behind Why? (design review F15, 2026-10-02
+# "Plain, tile too"). The pill itself is baked into every home background,
+# so 0.61.0's removal of its label left an empty pill; it now carries how
+# sure the number is, in the popup's words: Low / Medium / High / Very high
+# (GrindAdvisor's Poor / Fair / Good / Excellent), "First shot" before a band
+# exists, "Estimate" for a starting estimate. The rung is one tap away:
+# Shot analysis -> Why?. Budget: 12 characters (150 px chip, ~8.4 px/char).
 proc ::lumen::data::grind_method {} {
     set rec [grind_rec]
     if { $rec eq "" } {
-        # 0.38.0: an estimate gets its own chip so the tile never presents
-        # a borrowed number as one of the calibration rungs.
         if { [grind_est] ne "" } { return [translate "Estimate"] }
         return ""
     }
-    set m [_g $rec method]
-    switch -exact -- $m {
-        first_shot           { return [translate "First shot"] }
-        two_shot             { return [translate "2-shot"] }
-        regression           { return [translate "Regression"] }
-        regression_fallback  { return [translate "Pairwise"] }
-        regression_untrusted { return [translate "Weak fit"] }
+    switch -exact -- [_g $rec confidence_band] {
+        Poor      { return [translate "Low"] }
+        Fair      { return [translate "Medium"] }
+        Good      { return [translate "High"] }
+        Excellent { return [translate "Very high"] }
     }
-    # A rung added by a newer GrindAdvisor: show it rather than nothing, so
-    # the chip never silently goes blank again.
-    #
-    # 12, not the 16 this started at. 16 was picked without measuring, and
-    # measured off the tablet screenshot it is ~134px of text in a 150px
-    # chip -- ink to the rounded ends, no margin. font_label is 16px Inter
-    # SemiBold, about 8.4px per character here, so 12 characters is ~100px
-    # and sits inside the chip with room on both sides.
-    return [_ellipsis $m 12]
+    if { [_g $rec n] eq "1" } { return [translate "First shot"] }
+    return ""
 }
 
+# The footer: how many shots the number stands on, beside the confidence
+# dot -- "4 of 5 shots on this bag" when GrindAdvisor left an off-target
+# shot out of the fit (its n against bag_shot), "1 shot on this bag" on a
+# first shot. 0.61.1: the confidence WORD moved to the chip, so this line
+# no longer repeats it.
 proc ::lumen::data::grind_band {} {
     set rec [grind_rec]
     if { $rec eq "" } {
@@ -1331,35 +1561,47 @@ proc ::lumen::data::grind_band {} {
         if { $est ne "" } { return [_ellipsis [dict get $est reason] 48] }
         return ""
     }
-    set band [_g $rec confidence_band]
-    set n    [_g $rec n]
-    if { $band eq "" } {
-        if { $n ne "" } { return "[translate {Shots}]: $n" }
-        return ""
+    set n  [_g $rec n]
+    set bs [_g $rec bag_shot]
+    if { ![string is integer -strict $n] } { return "" }
+    # 0.62.0 (F21 counts): "N of M <noun>" for a subset, the plural only
+    # past one, "No shots" for none -- never "0 shots".
+    if { $n <= 0 } { return [translate "No shots on this bag"] }
+    if { $n == 1 } { return [translate "1 shot on this bag"] }
+    if { [string is integer -strict $bs] && $bs > $n } {
+        return "$n [translate of] $bs [translate {shots on this bag}]"
     }
-    if { $n ne "" } { return "$band  -  $n [translate {shots}]" }
-    return $band
+    return "$n [translate {shots on this bag}]"
 }
 
 # 0.43.1: the band line was always green, so "Poor - 2 shots" looked as
-# reassuring as "Good - 11 shots". Three stacked fixed-colour items share
-# the spot (the maintenance-dot pattern); the text moves between them.
+# reassuring as "Good - 11 shots". Stacked fixed-colour items share the
+# spot (the maintenance-dot pattern); the text moves between them.
 # GrindAdvisor's bands are Poor / Fair / Good / Excellent (_confidence_band).
 # The starting-estimate line and anything unrecognised take the neutral
 # item, so nothing ever goes missing.
+# 0.59.1: the verdict moved from the WORDS to a leading status dot. On the
+# lit tile warn and good read at 1.9-2.8:1 as 16 px text (tablet capture
+# 2026-09-30); a dot is a graphic and needs 3:1, so the words take the
+# secondary ink like the neutral line and the dot (U+25CF, the maintenance
+# dot's glyph) carries good / warn. grind_band_rated is the words of a
+# rated band, drawn one dot-width in.
 proc ::lumen::data::_band_word {} {
     set rec [grind_rec]
     if { $rec eq "" } { return "" }
     return [string tolower [string trim [_g $rec confidence_band]]]
 }
 
-proc ::lumen::data::grind_band_good {} {
-    if { [_band_word] in {good excellent} } { return [grind_band] }
+proc ::lumen::data::_band_dot { words } {
+    if { [_band_word] in $words && [grind_band] ne "" } { return [format %c 0x25CF] }
     return ""
 }
 
-proc ::lumen::data::grind_band_poor {} {
-    if { [_band_word] eq "poor" } { return [grind_band] }
+proc ::lumen::data::grind_band_dot_good {} { return [_band_dot {good excellent}] }
+proc ::lumen::data::grind_band_dot_poor {} { return [_band_dot {poor}] }
+
+proc ::lumen::data::grind_band_rated {} {
+    if { [_band_word] in {good excellent poor} } { return [grind_band] }
     return ""
 }
 
@@ -1370,19 +1612,34 @@ proc ::lumen::data::grind_band_neutral {} {
 
 # Regression needs 3 shots on a bag before it can forecast. Say so plainly
 # rather than showing a number the model cannot justify.
+# 0.62.0 (F8): whatever the source, the note is cut to ONE line of the
+# note's width in its own font (measured; off-tablet a 58-character cap) --
+# at the design 19 px a 64-character note wrapped onto the band row.
 proc ::lumen::data::grind_note {} {
+    return [::lumen::_fit_text [_grind_note_text] $::lumen::L(font_body) $::lumen::L(grind_note_w) 58]
+}
+
+proc ::lumen::data::_grind_note_text {} {
     set rec [grind_rec]
     if { $rec eq "" } {
         # 0.38.0: the owner-specced estimate line plus the standing
-        # instruction. Widest case "Start ~50.0 (est. from 6 bags) - pull
+        # instruction. Widest case "Start ~50.0 (est. from 6 bags) . pull
         # a shot to calibrate" is 57 chars -- one line at font_body in the
         # note's 560px, same budget as the reasons _short_reason passes.
+        # 0.62.1 (F23): a middle dot between the two, not a spaced hyphen
+        # (narrower: 276 vs 460 per 1000 px in Inter).
         set est [grind_est]
         if { $est ne "" } {
-            return "[dict get $est label] - [translate {pull a shot to calibrate}]"
+            return "[dict get $est label] [::lumen::glyph dot] [translate {pull a shot to calibrate}]"
         }
         return [translate "Pull a shot on this bag to get a grind recommendation."]
     }
+    # 0.61.0: GrindAdvisor 3.19.0's one-line plain summary -- "15.5 s,
+    # target 28 s: go finer", or "28 s is out of reach by grind: change dose
+    # or yield" -- built for this one-line budget (~52 chars). Older builds
+    # keep the summarized technical reason.
+    set short [_plain $rec short]
+    if { $short ne "" } { return [_ellipsis $short 64] }
     set reason [_g $rec reason]
     if { $reason ne "" } { return [_short_reason $reason] }
     if { [_g $rec method] eq "regression_fallback" } {
@@ -1526,15 +1783,16 @@ proc ::lumen::data::bean_roaster_line {} {
     return [_ellipsis $v 46]
 }
 
-# Bean type, the hero line. 460px at 40px Inter holds ~19 characters.
+# Bean type, the hero line. 0.62.0 (F8): measured into the row's 460 px in
+# the title font -- at the design 40 px a 19-character cap (the old rule,
+# kept as the off-tablet fallback) let an all-caps name wrap onto the notes.
 proc ::lumen::data::bean_name_line {} {
     set v [_field bean_type]
-    if { $v ne "" } { return [_ellipsis $v 19] }
     # No type: fall back to the roaster rather than showing nothing, since
     # a bag with only a roaster is still a bag.
-    set b [_field bean_brand]
-    if { $b ne "" } { return [_ellipsis $b 19] }
-    return [translate "No bean set"]
+    if { $v eq "" } { set v [_field bean_brand] }
+    if { $v eq "" } { return [translate "No bean set"] }
+    return [::lumen::_fit_text $v $::lumen::L(font_title) $::lumen::L(id_name_w) 19]
 }
 
 # Tasting notes, forced onto ONE line. Blank when unset -- the row is simply
@@ -1546,11 +1804,12 @@ proc ::lumen::data::bean_name_line {} {
 # the second line ran straight through the cycler arrows and Edit. Newlines
 # (and any other whitespace runs) collapse to a separator, and the result is
 # capped at what 460px holds at the 16px caption size, so it can neither wrap
-# nor overflow into the stepper columns.
+# nor overflow into the stepper columns. 0.62.1 (F23): the separator is a
+# middle dot, not a spaced hyphen (the toolkit's one way to join two facts).
 proc ::lumen::data::bean_notes_line {} {
     set v [_field bean_notes]
     if { $v eq "" } { return "" }
-    regsub -all {\s*[\r\n]+\s*} $v " - " v
+    regsub -all {\s*[\r\n]+\s*} $v " [::lumen::glyph dot] " v
     regsub -all {[ \t]+} $v " " v
     return [_ellipsis [string trim $v] 52]
 }
@@ -1563,22 +1822,30 @@ proc ::lumen::data::bean_notes_line {} {
 # split grind/dose/yield already follow. Until then the card read the live
 # bean fields, so a shot loaded for a different bag (startup with a fresh
 # bag scanned, or the fallback below) sat under the wrong name.
+# 0.62.0 review: measured into the column (last_id_w, 266 px since F8 gave
+# GRIND 8 px) in the caption font -- an all-caps roaster such as "SQUARE
+# MILE COFFEE ROASTERS" (~270 px) wrapped onto the bean name below. The
+# 30-character cap is the off-tablet fallback.
 proc ::lumen::data::last_roaster_line {} {
     set v [string trim [_rec roaster]]
     if { $v eq "" } { set v [string trim [_s ::settings(bean_brand)]] }
     if { $v eq "" } { return "" }
-    return [_ellipsis $v 30]
+    return [::lumen::_fit_text $v $::lumen::L(font_caption) $::lumen::L(last_id_w) 30]
 }
 
 proc ::lumen::data::last_name_line {} {
-    # 274px at font_primary (22px) holds ~24 characters.
+    # 0.62.0 (F8): measured into the column (last_id_w, 266 px) in
+    # font_primary (22 px now; "Finca La Esperanza Gesha", 24 characters,
+    # is ~280 px and wrapped). The 24-character cap is the off-tablet
+    # fallback.
     set v [string trim [_rec bean]]
     if { $v eq "" } { set v [string trim [_s ::settings(bean_type)]] }
-    if { $v ne "" } { return [_ellipsis $v 24] }
-    set b [string trim [_rec roaster]]
-    if { $b eq "" } { set b [string trim [_s ::settings(bean_brand)]] }
-    if { $b ne "" } { return [_ellipsis $b 24] }
-    return "--"
+    if { $v eq "" } {
+        set v [string trim [_rec roaster]]
+        if { $v eq "" } { set v [string trim [_s ::settings(bean_brand)]] }
+    }
+    if { $v eq "" } { return "--" }
+    return [::lumen::_fit_text $v $::lumen::L(font_primary) $::lumen::L(last_id_w) 24]
 }
 
 # The grind the last shot was pulled at. ::settings(grinder_setting) persists
@@ -1587,12 +1854,26 @@ proc ::lumen::data::last_name_line {} {
 # Not routed through _is_pos: a grinder setting is not necessarily a number.
 # Plenty of grinders are labelled in clicks, letters or half-steps, and the
 # field is free text, so anything non-empty is a real setting.
+# 0.62.0 (F8): free text, so it is cut to its column -- GRIND's 84 px less
+# 4 -- in the metric font (section, 24 px mono, ~14.4 px a character: five,
+# "17.25", are 72 px; a sixth ran into DOSE).
 proc ::lumen::data::last_grind {} {
     foreach src [list [_rec grind] [_s ::settings(grinder_setting)]] {
         set v [string trim $src]
-        if { $v ne "" } { return $v }
+        if { $v ne "" } {
+            return [::lumen::_fit_text $v $::lumen::L(font_section) \
+                [expr {$::lumen::L(last_met_grind_w) - 4}] 5]
+        }
     }
     return "--"
+}
+
+# 0.62.0: the LAST SHOT metric columns' x (design px): GRIND, DOSE, YIELD,
+# TIME -- GRIND last_met_grind_w wide, the others on last_met_pitch.
+proc ::lumen::last_met_col { i } {
+    variable L
+    if { $i <= 0 } { return $L(last_met_x) }
+    return [expr {$L(last_met_x) + $L(last_met_grind_w) + ($i - 1) * $L(last_met_pitch)}]
 }
 
 proc ::lumen::data::bean_sub {} {
@@ -1602,7 +1883,7 @@ proc ::lumen::data::bean_sub {} {
     set r [_field roast_date]
     if { $r ne "" } { lappend parts "[translate {roasted}] $r" }
     if { [llength $parts] == 0 } { return [translate "Tap to add bean details"] }
-    return [join $parts "  -  "]
+    return [join $parts [_sep]]
 }
 
 proc ::lumen::data::next_grind {} {
@@ -1654,8 +1935,10 @@ proc ::lumen::data::next_ratio_note {} {
 proc ::lumen::data::next_profile {} {
     set v [_field profile_title]
     if { $v eq "" } { return "--" }
-    # The tile is 176 wide at 19px; ~18 characters fit before it wraps into
-    # the row beneath.
+    # The PROFILE value is caption text (16 px, the floor, so F8 leaves it
+    # as it was) in the row's 370 px. The 18-character cap dates from when
+    # it shared the label row (176 px); 18 characters are ~150 px now, so it
+    # can neither wrap nor reach the stepper columns.
     return [_ellipsis $v 18]
 }
 
@@ -1704,28 +1987,22 @@ proc ::lumen::data::legend_temp {}     { return [_legend "Temp" espresso_tempera
 
 # When the LAST shot was pulled (0.43.1): the file's clock, latched with the
 # rest of the record; in-session (record cleared at shot start) the core's
-# espresso_clock, which is that shot's own clock. "Today 15:05",
-# "Yesterday 14:24", else "Fri 12 Sep 12:40" -- honouring the CLOCK row's
-# 12/24 h and day-month preferences. Blank when nothing is known.
+# espresso_clock, which is that shot's own clock. Blank when nothing is known.
+# 0.62.0 (F21, owner 2026-10-02): the shared date shape on its one row --
+# the absolute date in the CLOCK row's 12/24 h and day / month order, then
+# how long ago: "Mon Sep 29 09:29 PM . 4 days ago" (a middle dot), " 2025"
+# when not this year. No Today / Yesterday: the age says it, and the tile
+# has no second line. Widest realistic, "Wed Sep 30 2025 12:40 PM . 368 days
+# ago", is ~340 px at the caption size: from x 706 it ends near 1046, 100
+# short of the Shot history tap zone (1150).
 proc ::lumen::data::last_shot_when {} {
     set c [_rec clock]
     if { $c eq "" } { set c [_s ::settings(espresso_clock)] }
-    if { ![string is integer -strict $c] || $c <= 0 } { return "" }
-    set now [clock seconds]
-    set tf [expr {[::lumen::time_format] == 12 ? "%I:%M %p" : "%H:%M"}]
-    if { [catch {
-        set day  [clock format $c -format %Y-%m-%d]
-        set t    [clock format $c -format $tf]
-        if { $day eq [clock format $now -format %Y-%m-%d] } {
-            set out "[translate Today] $t"
-        } elseif { $day eq [clock format [expr {$now - 86400}] -format %Y-%m-%d] } {
-            set out "[translate Yesterday] $t"
-        } else {
-            set df [expr {[::lumen::date_format] eq "mdy" ? "%a %b %d" : "%a %d %b"}]
-            set out "[clock format $c -format $df] $t"
-        }
-    }] } { return "" }
-    return $out
+    set when [::lumen::_fmt_when $c]
+    if { $when eq "" } { return "" }
+    set ago [::lumen::_fmt_ago $c]
+    if { $ago eq "" } { return $when }
+    return "$when [::lumen::glyph dot] $ago"
 }
 
 # The target under the live weight on the espresso page (0.43.1): what you
@@ -1743,7 +2020,8 @@ proc ::lumen::data::target_yield_note {} {
 proc ::lumen::data::chart_empty_note {} {
     if { [catch { set n [espresso_elapsed length] }] } { return "" }
     if { $n > 1 } { return "" }
-    return [translate "No shot data yet - pull a shot"]
+    # 0.62.1 (F23): fact . next step, a middle dot (was a spaced hyphen).
+    return "[translate {No shot data yet}] [::lumen::glyph dot] [translate {pull a shot}]"
 }
 
 # Last line of defence on anything shown as a duration. espresso_timer is
@@ -1902,28 +2180,54 @@ proc ::lumen::data::water_value_alt {} {
     return [water_volume_value]
 }
 
-# The mode line, split across TWO text items so the selected half can be the
-# accent colour and the other one dim: a canvas text item's -fill is fixed at
-# creation, so the words move between two fixed-colour items rather than the
-# colours moving between two fixed words.
-proc ::lumen::data::steam_mode_active {} {
-    if { [::lumen::steam_mode] eq "flow" } { return [translate "FLOW"] }
-    return [translate "TIME"]
+# 0.59.2 (F14): the mode control is a two-segment pill, [TIME | FLOW] and
+# [TEMP | VOL] (it was a "TIME | flow" caption whose words swapped between a
+# crema item and a dim one). The words stay put now; the selected half fills.
+# A word's accessor returns the fixed word and paints its pill, so the pill
+# follows the mode on the app's update tick, like the clean banner.
+proc ::lumen::data::mode_seg { name side } {
+    ::lumen::_mode_seg_sync $name
+    if { $name eq "steam" } { set words {TIME FLOW} } else { set words {TEMP VOL} }
+    return [translate [lindex $words [expr {$side eq "r"}]]]
 }
 
-proc ::lumen::data::steam_mode_other {} {
-    if { [::lumen::steam_mode] eq "flow" } { return "| [translate {time}]" }
-    return "| [translate {flow}]"
+# Which half is selected: the right one for flow / vol.
+proc ::lumen::_mode_seg_side { name } {
+    if { $name eq "steam" } {
+        return [expr {[::lumen::steam_mode] eq "flow" ? "r" : "l"}]
+    }
+    return [expr {[::lumen::water_mode] eq "vol" ? "r" : "l"}]
 }
 
-proc ::lumen::data::water_mode_active {} {
-    if { [::lumen::water_mode] eq "vol" } { return [translate "VOL"] }
-    return [translate "TEMP"]
-}
-
-proc ::lumen::data::water_mode_other {} {
-    if { [::lumen::water_mode] eq "vol" } { return "| [translate {temp}]" }
-    return "| [translate {vol}]"
+# Paints one mode pill: the selected half in the accent wash with its word in
+# crema_ink (the theme picker's selected-pill look), the other half left to
+# the plain track with its word in ink_2 -- both guarded pairs (accpill and
+# raised flat surfaces). The halves and words carry no role tags (created
+# with no fill), so apply_theme never resets them; the cache includes the
+# colours, so a theme change repaints on the next tick. The fav-halo / clean
+# banner rule: items are never shown or hidden, the canvas is touched only
+# when the mode or a colour changes.
+namespace eval ::lumen { variable mode_seg_state ; array set mode_seg_state {} }
+proc ::lumen::_mode_seg_sync { name } {
+    variable C
+    variable mode_seg_state
+    set side [_mode_seg_side $name]
+    set key [list $side $C(crema_lo) $C(crema_brd) $C(crema_ink) $C(ink_2)]
+    if { [info exists mode_seg_state($name)] && $mode_seg_state($name) eq $key } { return }
+    set mode_seg_state($name) $key
+    if { [catch {
+        set can [dui canvas]
+        foreach s {l r} {
+            set on [expr {$s eq $side}]
+            $can itemconfigure lumen_mseg_${name}_$s \
+                -fill [::lumen::_pick $on $C(crema_lo) ""] \
+                -outline [::lumen::_pick $on $C(crema_brd) ""]
+            $can itemconfigure lumen_mword_${name}_$s \
+                -fill [::lumen::_pick $on $C(crema_ink) $C(ink_2)]
+        }
+    } err] } {
+        msg -ERROR "Lumen: the $name mode pill was not painted: $err"
+    }
 }
 
 proc ::lumen::data::flush_time_value {} {
@@ -2156,30 +2460,11 @@ proc ::lumen::fav_title { n } {
     return $out
 }
 
-# `s` cut to fit `design_w` design px in the caption font, "..." on the
-# cut. Any measuring trouble falls back to a character cap.
+# `s` cut to fit `design_w` design px in the caption font, an ellipsis on
+# the cut. Any measuring trouble falls back to a character cap. 0.62.0: the
+# general _fit_text, in the caption font with the 20-character cap.
 proc ::lumen::_fit_caption { s design_w } {
-    variable L
-    set max_px ""
-    catch {
-        lassign [::lumen::custom::screen] W H
-        if { $W > 0 } { set max_px [expr {int($design_w * $W / 1340.0)}] }
-    }
-    if { $max_px eq "" || [catch { set w [font measure $L(font_caption) $s] }] \
-             || ![string is integer -strict $w] } {
-        return [::lumen::data::_ellipsis $s 20]
-    }
-    if { $w <= $max_px } { return $s }
-    set n [string length $s]
-    while { $n > 1 } {
-        incr n -1
-        set t "[string trimright [string range $s 0 [expr {$n - 1}]]]..."
-        if { [catch { set w [font measure $L(font_caption) $t] }] || ![string is integer -strict $w] } {
-            return [::lumen::data::_ellipsis $s 20]
-        }
-        if { $w <= $max_px } { return $t }
-    }
-    return "..."
+    return [_fit_text $s $::lumen::L(font_caption) $design_w 20]
 }
 
 # The halo behind the ACTIVE slot (0.57.0). One photo, painted by
@@ -2237,7 +2522,6 @@ proc ::lumen::fav_glow_photo {} {
     lassign [::lumen::custom::screen] W H
     if { $W <= 0 } { error "no screen size" }
     set sx [expr {$W / 1340.0}] ; set sy [expr {$H / 800.0}]
-    if { [scan $C(crema) "#%2x%2x%2x" r g b] != 3 } { error "crema '$C(crema)' is not #rrggbb" }
     # 0.57.1 (owner: "very dark", then "lighter still"; 0.57.2 "a bit
     # darker"): quieter than the 0.62 it launched with -- 0.36 inside --
     # and on LIGHT glass, where the crema is a dark amber that painted a
@@ -2245,10 +2529,16 @@ proc ::lumen::fav_glow_photo {} {
     # the halo reads as a pale glow behind the name. Light is read off
     # the ground's luminance, so the custom theme's two halves sort
     # themselves. Tuned on the tablet: 0.62 brown, 0.30/60% too faint.
+    # 0.59.1: the palette's halo_tint is that tint, its lightness lowered
+    # only where even white could not read the active name on it; a
+    # palette without one derives it here as before.
     set a 0.36
-    if { [scan $C(bg) "#%2x%2x%2x" gr gg gb] == 3 \
-             && (0.2126 * $gr + 0.7152 * $gg + 0.0722 * $gb) / 255.0 > 0.45 } {
-        foreach v {r g b} { set $v [expr {int(round([set $v] + (255 - [set $v]) * 0.5))}] }
+    if { ![info exists C(halo_tint)] || [scan $C(halo_tint) "#%2x%2x%2x" r g b] != 3 } {
+        if { [scan $C(crema) "#%2x%2x%2x" r g b] != 3 } { error "crema '$C(crema)' is not #rrggbb" }
+        if { [scan $C(bg) "#%2x%2x%2x" gr gg gb] == 3 \
+                 && (0.2126 * $gr + 0.7152 * $gg + 0.0722 * $gb) / 255.0 > 0.45 } {
+            foreach v {r g b} { set $v [expr {int(round([set $v] + (255 - [set $v]) * 0.5))}] }
+        }
     }
     set png [::lumen::custom::halo_png [list $r $g $b] $a \
         [expr {int(round($L(bar_fav_glow_w) * $sx))}] [expr {int(round($L(bar_h) * $sy))}] \
@@ -2272,8 +2562,10 @@ proc ::lumen::_redraw_fav_glow {} {
     image delete $old
 }
 
-# The settings header link, blank while no slot is set.
+# The settings header link, blank while no slot is set. 0.60.0 (F20): for
+# six seconds after a clear the same link offers the undo.
 proc ::lumen::data::fav_clear_label {} {
+    if { [::lumen::act::_fav_undo_live] } { return [translate "Cleared. Undo"] }
     if { [dict size [::lumen::fav_slots]] == 0 } { return "" }
     return [translate "Clear favorite profiles"]
 }
@@ -2610,24 +2902,159 @@ proc ::lumen::auto_check {} {
 # The schedule line on the picker: today's sunrise / sunset (0.59.0), or
 # the fixed fallback times while no position is known -- the words say
 # which. Display only; nothing on it is tappable any more.
+# 0.62.0 (F21): the times in the CLOCK row's 12/24 h ("Sunrise 06:10 AM"),
+# the word picked with if (never expr ?:).
 proc ::lumen::data::auto_light_text {} {
     set b [::lumen::auto_bounds]
     if { $b eq "day" } { return [translate "Light all day"] }
     if { $b eq "night" } { return [translate "Dark all day"] }
-    set w [expr {[::lumen::sun::today] eq "" ? "Light" : "Sunrise"}]
-    return "[translate $w] [::lumen::sun::hhmm [lindex $b 0]]"
+    if { [::lumen::sun::today] eq "" } { set w "Light" } else { set w "Sunrise" }
+    return "[translate $w] [::lumen::_fmt_hm [lindex $b 0]]"
 }
 proc ::lumen::data::auto_dark_text {} {
     set b [::lumen::auto_bounds]
     if { $b in {day night} } { return "" }
-    set w [expr {[::lumen::sun::today] eq "" ? "Dark" : "Sunset"}]
-    return "[translate $w] [::lumen::sun::hhmm [lindex $b 1]]"
+    if { [::lumen::sun::today] eq "" } { set w "Dark" } else { set w "Sunset" }
+    return "[translate $w] [::lumen::_fmt_hm [lindex $b 1]]"
 }
 
 proc ::lumen::date_format {} {
     if { [info exists ::settings(lumen_date_format)] \
              && $::settings(lumen_date_format) eq "mdy" } { return "mdy" }
     return "dmy"
+}
+
+# ---- 0.62.0 (F21) shared dates, times and picks ---------------------------
+#
+# The date helpers GrindAdvisor, MaintenanceTracker and DrinkMenu carry in the
+# same words (owner 2026-10-02: "Mon 29 Sep 21:29" following Lumen's clock
+# settings). Their copies look for ::lumen::time_format / date_format first,
+# so a plugin date and Lumen's own read identically; inside Lumen they simply
+# call them. Day and hour zero-padded like the taskbar ("Fri Oct 02 09:29
+# PM"), " 2025" added when the date is not this year, C-locale ASCII (never
+# -locale). Text is picked with if, never expr ?: (it canonicalises numeric-
+# looking strings). The taskbar clock (bar_time / bar_day) is unchanged.
+proc ::lumen::_clock_24h {} {
+    if {[llength [info commands ::lumen::time_format]]} {
+        if {[::lumen::time_format] == 12} { return 0 }
+        return 1
+    }
+    if {[info exists ::settings(enable_ampm)] && $::settings(enable_ampm) == 1} { return 0 }
+    return 1
+}
+proc ::lumen::_clock_mdy {} {
+    if {[llength [info commands ::lumen::date_format]] && [::lumen::date_format] eq "mdy"} { return 1 }
+    return 0
+}
+proc ::lumen::_fmt_when {ts} {
+    if {![string is wide -strict $ts] || $ts <= 0} { return {} }
+    if {[_clock_mdy]} { set f {%a %b %d} } else { set f {%a %d %b} }
+    if {[clock format $ts -format %Y] ne [clock format [clock seconds] -format %Y]} { append f { %Y} }
+    if {[_clock_24h]} { append f { %H:%M} } else { append f { %I:%M %p} }
+    return [clock format $ts -format $f]
+}
+proc ::lumen::_fmt_day {ts} {
+    if {![string is wide -strict $ts] || $ts <= 0} { return {} }
+    if {[_clock_mdy]} { set f {%b %d} } else { set f {%d %b} }
+    if {[clock format $ts -format %Y] ne [clock format [clock seconds] -format %Y]} { append f { %Y} }
+    return [clock format $ts -format $f]
+}
+proc ::lumen::_fmt_time {ts} {
+    if {![string is wide -strict $ts] || $ts <= 0} { return {} }
+    if {[_clock_24h]} { return [clock format $ts -format %H:%M] }
+    return [clock format $ts -format {%I:%M %p}]
+}
+# MaintenanceTracker's _fmt_ago, verbatim: the caption beside a date.
+proc ::lumen::_fmt_ago {ts} {
+    if {![string is wide -strict $ts] || $ts <= 0} { return "" }
+    set secs [expr {[clock seconds] - $ts}]
+    if {$secs < 60} { return [translate "just now"] }
+    set mins [expr {$secs / 60}]
+    if {$mins < 60} {
+        if {$mins == 1} { return "1 [translate {minute ago}]" }
+        return "$mins [translate {minutes ago}]"
+    }
+    set hours [expr {$secs / 3600}]
+    if {$hours < 24} {
+        if {$hours == 1} { return "1 [translate {hour ago}]" }
+        return "$hours [translate {hours ago}]"
+    }
+    set days [expr {$secs / 86400}]
+    if {$days == 1} { return "1 [translate {day ago}]" }
+    return "$days [translate {days ago}]"
+}
+# A time of day given in minutes past midnight (the sun times), as
+# _fmt_time would print it: arithmetic, no date, so no DST edge.
+proc ::lumen::_fmt_hm { m } {
+    if { ![string is integer -strict $m] || $m < 0 || $m > 1439 } { return {} }
+    set h [expr {$m / 60}] ; set mm [expr {$m % 60}]
+    if { [_clock_24h] } { return [format %02d:%02d $h $mm] }
+    if { $h < 12 } { set ap AM } else { set ap PM }
+    set h12 [expr {$h % 12}]
+    if { $h12 == 0 } { set h12 12 }
+    return [format "%02d:%02d %s" $h12 $mm $ap]
+}
+# a when c is true, else b -- for colours and other text (expr ?: rewrites
+# numeric-looking strings: "1.50" -> "1.5").
+proc ::lumen::_pick { c a b } {
+    if { $c } { return $a }
+    return $b
+}
+
+# ---- 0.62.0 (F8) measured text fits ---------------------------------------
+#
+# Text cut to fit `design_w` design px in `font`, an ellipsis on the cut:
+# the measured fit the favorite slots have used since 0.57.0 (_fit_caption),
+# for any of Lumen's fonts. Tk's font measure is PHYSICAL px, so the budget
+# is converted with the screen width (design x W / 1340; 1:1 on the tablet).
+# Without a measurement (no screen size, no Tk font: the offline harness)
+# the character cap `cap` stands in. One measure per call (the accessors run
+# on the 200 ms tick); a cut is memoised on the text, font, budget AND that
+# width, so a font change can never serve a stale cut. A fallback is never
+# memoised. 0.62.1 (F23): the cut ends in the real ellipsis (U+2026), and
+# every candidate is measured WITH that glyph, so the budget is the glyph's
+# own width, not three dots' (in the mono faces it frees two cells).
+namespace eval ::lumen { variable fit_memo [dict create] }
+proc ::lumen::_measure { font s } {
+    if { ![llength [info commands font]] } { return "" }
+    if { [catch { set w [font measure $font $s] }] || ![string is integer -strict $w] } { return "" }
+    return $w
+}
+proc ::lumen::_design_px { design_w } {
+    lassign [::lumen::custom::screen] W H
+    if { ![string is integer -strict $W] || $W <= 0 } { return "" }
+    return [expr {int($design_w * $W / 1340.0)}]
+}
+proc ::lumen::_fit_text { s font design_w cap } {
+    variable fit_memo
+    set max_px [_design_px $design_w]
+    if { $max_px eq "" } { return [::lumen::data::_ellipsis $s $cap] }
+    set w [_measure $font $s]
+    if { $w eq "" } { return [::lumen::data::_ellipsis $s $cap] }
+    if { $w <= $max_px } { return $s }
+    set key [list $font $max_px $w $s]
+    if { [dict exists $fit_memo $key] } { return [dict get $fit_memo $key] }
+    set ell [::lumen::glyph ellipsis]
+    set out $ell
+    set n [string length $s]
+    while { $n > 1 } {
+        incr n -1
+        set t "[string trimright [string range $s 0 [expr {$n - 1}]]]$ell"
+        set tw [_measure $font $t]
+        if { $tw eq "" } { return [::lumen::data::_ellipsis $s $cap] }
+        if { $tw <= $max_px } { set out $t ; break }
+    }
+    if { [dict size $fit_memo] > 128 } { set fit_memo [dict create] }
+    dict set fit_memo $key $out
+    return $out
+}
+# The width of `s` in `font`, in DESIGN px, or "" when it cannot be measured.
+proc ::lumen::_text_w { font s } {
+    set w [_measure $font $s]
+    if { $w eq "" } { return "" }
+    lassign [::lumen::custom::screen] W H
+    if { ![string is integer -strict $W] || $W <= 0 } { return "" }
+    return [expr {$w * 1340.0 / $W}]
 }
 
 # 0.31.0 taskbar clock. Rides the app's own 200ms onscreen-variable tick
@@ -2703,7 +3130,7 @@ namespace eval ::lumen {
     variable cbanner_on 0
     variable cbanner_fill ""
 }
-proc ::lumen::data::_sep {} { return "  [format %c 0xB7]  " }
+proc ::lumen::data::_sep {} { return "  [::lumen::glyph dot]  " }
 
 proc ::lumen::data::clean_loaded {} {
     set bev ""
@@ -2730,8 +3157,10 @@ proc ::lumen::data::mt_run {} {
     }
     set started 0
     catch { if { $::plugins::MaintenanceTracker::run_started } { set started 1 } }
+    # 0.62.0 (F21): in the CLOCK row's 12/24 h ("08:17 PM"); it was always
+    # 24 h, whatever the taskbar showed.
     return [dict create prev_title [dict get $rr prev_title] \
-        back_at [clock format [expr {$ts + $tmo}] -format %H:%M] started $started]
+        back_at [::lumen::_fmt_time [expr {$ts + $tmo}]] started $started]
 }
 
 # The banner's two lines of text; the left one also paints / blanks the
@@ -2742,29 +3171,58 @@ proc ::lumen::data::clean_banner_left {} {
     set on [clean_loaded]
     ::lumen::_cbanner_sync $on
     if { !$on } { return "" }
-    set t [_s ::settings(profile_title)]
-    if { $t eq "" } { set t [_s ::settings(profile_filename)] }
-    if { [string length $t] > 40 } { set t "[string range $t 0 36]..." }
-    return "[translate {CLEANING PROFILE LOADED}][_sep]$t"
+    return [lindex [_cbanner_texts] 0]
 }
 
 proc ::lumen::data::clean_banner_right {} {
     if { ![clean_loaded] } { return "" }
-    set run [mt_run]
-    if { $run eq "" } { return [translate "Pick your espresso profile before brewing"] }
-    set prev [dict get $run prev_title]
-    if { [string length $prev] > 28 } { set prev "[string range $prev 0 24]..." }
-    if { [dict get $run started] } {
-        return "$prev [translate {comes back after the run}]"
-    }
-    return "$prev [translate {comes back at}] [dict get $run back_at][_sep][translate {Tap to switch back now}]"
+    return [lindex [_cbanner_texts] 1]
 }
 
+# 0.62.0 (F8): the two lines share the banner's inner span (1240 px, x
+# 50..1290). At the design sizes the normal 12 h case -- "CLEANING PROFILE
+# LOADED . Cleaning/Forward Flush x5" (primary, ~620 px) and "Gentle and
+# sweet comes back at 08:17 PM . Tap to switch back now" (~610 px in body)
+# -- ran into each other, and long titles had overlapped since 0.58.0. So
+# the right line is in the caption size (16 px; body rendered 17 on the
+# tablet through 0.61.1), its profile name cut to 240 px, and the left
+# line's profile title gets what is left of the span less an xl gap.
+# Measured in the banner's own fonts (_text_w / _fit_text); off-tablet the
+# old 40 / 28 character caps stand in. Normal case now: ~60 px apart (the
+# pass 13 test, 3% wide glyphs); a long title is cut, never overlapped.
+proc ::lumen::data::_cbanner_texts {} {
+    variable ::lumen::L
+    set t [_s ::settings(profile_title)]
+    if { $t eq "" } { set t [_s ::settings(profile_filename)] }
+    set run [mt_run]
+    if { $run eq "" } {
+        set right [translate "Pick your espresso profile before brewing"]
+    } else {
+        set prev [::lumen::_fit_text [dict get $run prev_title] $L(font_caption) 240 28]
+        if { [dict get $run started] } {
+            set right "$prev [translate {comes back after the run}]"
+        } else {
+            set right "$prev [translate {comes back at}] [dict get $run back_at][_sep][translate {Tap to switch back now}]"
+        }
+    }
+    set lead "[translate {CLEANING PROFILE LOADED}][_sep]"
+    set span [expr {$L(chart_w) - 20 - 2 * $L(pad_x)}]
+    set rw [::lumen::_text_w $L(font_caption) $right]
+    set lw [::lumen::_text_w $L(font_primary) $lead]
+    if { $rw eq "" || $lw eq "" } { return [list "$lead[_ellipsis $t 40]" $right] }
+    set room [expr {int($span - $L(xl) - $rw - $lw)}]
+    if { $room < 0 } { set room 0 }
+    return [list "$lead[::lumen::_fit_text $t $L(font_primary) $room 40]" $right]
+}
+
+# 0.59.1: the face is danger_face -- danger stepped darker until the white
+# body line reads at 4.5:1 (white on the dark theme's danger was 3.95:1).
+# 0.62.0 (F21): pinned to the plugins' danger face #B3261E (white 6.54:1).
 proc ::lumen::_cbanner_sync { on } {
     variable cbanner_on
     variable cbanner_fill
     variable C
-    set fill [expr {$on ? $C(danger) : ""}]
+    set fill [_pick $on $C(danger_face) ""]
     if { $on == $cbanner_on && $fill eq $cbanner_fill } { return }
     set cbanner_on $on
     set cbanner_fill $fill
@@ -2844,7 +3302,7 @@ proc ::lumen::data::scale_weight_line {} {
         # No paired scale at all -- there is nothing to reconnect to.
         if { [_s ::settings(scale_bluetooth_address)] eq "" } {
             set connecting_since 0
-            return [translate "no scale"]
+            return [translate "No scale"]
         }
         if { [scale_connecting] } { return [_connecting_text] }
         set connecting_since 0
@@ -3435,9 +3893,11 @@ proc ::lumen::glass_material {} {
     if { $pg eq "" } { catch { set pg [dui page current] } }
     if { $pg ne "off" } { return {} }
 
-    set sw 0
-    set sh 0
-    catch { set sw [winfo screenwidth .]; set sh [winfo screenheight .] }
+    # 0.62.0 (F8): the folder is named for the app's screen (dui's
+    # 1340x800 on the tablet), as the page backgrounds are -- Tk's winfo
+    # says 1340x736 there, a folder that does not exist, which left the
+    # popup opaque whenever the Android bar shrank the window.
+    lassign [::lumen::custom::screen] sw sh
     if { $sw <= 0 || $sh <= 0 } { return {} }
 
     # 0.49.0: the custom theme serves its own material, painted on the
@@ -3754,8 +4214,9 @@ proc ::lumen::act::_switch_theme { new } {
         msg -ERROR "Lumen: could not save the theme preference: $err"
         return 0
     }
-    # 0.50.0: the wait pill covers the whole synchronous apply.
-    ::lumen::wait_show "[translate {Applying}] [::lumen::_theme_word $new] [translate {theme...}]"
+    # 0.50.0: the wait pill covers the whole synchronous apply. 0.62.1
+    # (F23): "in progress" ends in the real ellipsis, outside translate.
+    ::lumen::wait_show "[translate {Applying}] [::lumen::_theme_word $new] [translate {theme}][::lumen::glyph ellipsis]"
     set applied [::lumen::apply_theme $new]
     ::lumen::wait_hide
     if { $applied } { return 1 }
@@ -3778,7 +4239,7 @@ proc ::lumen::act::open_settings {} {
 # as the theme toggle above; the taskbar picks the change up on its next
 # 200ms tick -- no restart, unlike the theme.
 proc ::lumen::act::toggle_time_format {} {
-    set new [expr {[::lumen::time_format] == 24 ? "12" : "24"}]
+    if { [::lumen::time_format] == 24 } { set new "12" } else { set new "24" }
     if { [catch {
         set ::settings(lumen_time_format) $new
         save_settings
@@ -3788,7 +4249,7 @@ proc ::lumen::act::toggle_time_format {} {
 }
 
 proc ::lumen::act::toggle_date_format {} {
-    set new [expr {[::lumen::date_format] eq "dmy" ? "mdy" : "dmy"}]
+    if { [::lumen::date_format] eq "dmy" } { set new "mdy" } else { set new "dmy" }
     if { [catch {
         set ::settings(lumen_date_format) $new
         save_settings
@@ -3816,7 +4277,18 @@ proc ::lumen::machine_busy {} {
     return $name
 }
 
-namespace eval ::lumen::act { variable fav_send_id "" }
+namespace eval ::lumen::act {
+    variable fav_send_id ""
+    # 0.60.0 (F20): the Clear link's undo, RAM only -- never written to
+    # settings.tdb. Armed by a successful clear and live while
+    # now - fav_undo_at < fav_undo_ms: the 200 ms variable tick re-reads the
+    # link's label, so it blanks by itself. Leaving lumen_settings drops it.
+    variable fav_undo_armed 0
+    variable fav_undo_raw ""
+    variable fav_undo_at 0
+    variable fav_undo_ms 6000
+    variable fav_undo_guard_ms 500
+}
 
 # 0.58.0: the cleaning banner's tap. Only while the banner shows AND MT
 # holds a switch-back for the loaded profile; otherwise the band is inert
@@ -3892,16 +4364,101 @@ proc ::lumen::act::fav_tap { n } {
     msg -NOTICE "Lumen: favorite $n loaded profile '$fn'"
 }
 
+# 0.60.0 (F20): 1 while the last clear can still be undone. The label's
+# 200 ms tick calls this, so the label is what expires the undo (review: a
+# tap in the gap between expiry and the next tick found the label still
+# offering the undo and got nothing). A clock that steps backwards counts
+# as expired.
+proc ::lumen::act::_fav_undo_live {} {
+    variable fav_undo_armed
+    variable fav_undo_at
+    variable fav_undo_ms
+    if { $fav_undo_armed } {
+        set d [expr {[clock milliseconds] - $fav_undo_at}]
+        if { $d < 0 || $d >= $fav_undo_ms } { _fav_undo_drop }
+    }
+    return $fav_undo_armed
+}
+
+# 0.60.0 (F20): forget the undo. Also the lumen_settings hide action (dui
+# appends page_to_hide page_to_show), so leaving the page drops it.
+proc ::lumen::act::_fav_undo_drop { args } {
+    variable fav_undo_armed
+    variable fav_undo_raw
+    set fav_undo_armed 0
+    set fav_undo_raw ""
+}
+
+# One tap clears at once, as before. 0.60.0 (F20): for six seconds the link
+# then reads "Cleared. Undo", and a tap on it puts the three slots back.
 proc ::lumen::act::clear_favorites {} {
+    variable fav_undo_armed
+    variable fav_undo_raw
+    variable fav_undo_at
+    variable fav_undo_ms
+    # The tap trusts what the label last showed: armed means the screen read
+    # "Cleared. Undo" (the tick drops it at expiry), bounded to 1 s past the
+    # window in case the tick is late.
+    if { $fav_undo_armed } {
+        set d [expr {[clock milliseconds] - $fav_undo_at}]
+        if { $d >= 0 && $d < $fav_undo_ms + 1000 } { _fav_undo ; return }
+    }
+    _fav_undo_drop
     if { [dict size [::lumen::fav_slots]] == 0 } { return }
+    set raw [::lumen::data::_s ::settings(lumen_fav_profiles)]
+    # Cleared to an EMPTY value, not unset (review): the core's
+    # convert_legacy_to_v2 (shot.tcl, reached by DYE's export) loads an old
+    # shot's settings and then restores the current ones additively, which
+    # brought an unset key -- and the old favorites -- back.
     if { [catch {
-        unset -nocomplain ::settings(lumen_fav_profiles)
+        set ::settings(lumen_fav_profiles) ""
         save_settings
     } err] } {
+        # save_settings can throw before it writes (it re-reads settings.tdb
+        # first): put the slots back in memory so screen and disk agree.
+        set ::settings(lumen_fav_profiles) $raw
         msg -ERROR "Lumen: could not clear the favorite profiles: $err"
         return
     }
-    msg -NOTICE "Lumen: favorite profiles cleared"
+    set fav_undo_raw $raw
+    set fav_undo_at [clock milliseconds]
+    set fav_undo_armed 1
+    msg -NOTICE "Lumen: favorite profiles cleared (undo for [expr {$fav_undo_ms / 1000}] s)"
+    ::lumen::_fav_refresh_now
+}
+
+# 0.60.0 (F20): put back exactly what the clear removed (the raw value, as
+# fav_slots normalises). A tap within fav_undo_guard_ms of the clear is the
+# second half of a finger-down double tap (dbuttons do not debounce) and is
+# ignored. Favorites set again since the clear are never overwritten.
+proc ::lumen::act::_fav_undo {} {
+    variable fav_undo_raw
+    variable fav_undo_at
+    variable fav_undo_guard_ms
+    set d [expr {[clock milliseconds] - $fav_undo_at}]
+    if { $d >= 0 && $d < $fav_undo_guard_ms } {
+        msg -NOTICE "Lumen: a second tap right after Clear was ignored"
+        return
+    }
+    set raw $fav_undo_raw
+    _fav_undo_drop
+    if { [dict size [::lumen::fav_slots]] != 0 } {
+        msg -NOTICE "Lumen: favorites were set again since the clear, undo dropped"
+        ::lumen::_fav_refresh_now
+        return
+    }
+    if { [catch {
+        set ::settings(lumen_fav_profiles) $raw
+        save_settings
+    } err] } {
+        set ::settings(lumen_fav_profiles) ""
+        # The value goes into the log, so it can still be recovered by hand.
+        msg -ERROR "Lumen: could not restore the favorite profiles ($raw): $err"
+        ::lumen::_fav_refresh_now
+        return
+    }
+    msg -NOTICE "Lumen: favorite profiles restored"
+    ::lumen::_fav_refresh_now
 }
 
 # 0.47.0: Done is a plain page switch again. Until 0.46.1 a changed theme
@@ -4120,6 +4677,7 @@ proc ::lumen::act::toggle_steam_mode {} {
     } err] } {
         msg -ERROR "Lumen: could not save the steam row mode: $err"
     }
+    ::lumen::_mode_seg_sync steam   ;# 0.59.2: the pill moves now, not on the tick
 }
 
 proc ::lumen::act::toggle_water_mode {} {
@@ -4130,6 +4688,7 @@ proc ::lumen::act::toggle_water_mode {} {
     } err] } {
         msg -ERROR "Lumen: could not save the hot water row mode: $err"
     }
+    ::lumen::_mode_seg_sync water   ;# 0.59.2: the pill moves now, not on the tick
 }
 
 proc ::lumen::act::adjust_water_volume { delta } {
@@ -4372,6 +4931,11 @@ proc ::lumen::act::_bag_clocks { bag } {
 # startup, so the bag's cleaning runs are skipped here too.)
 
 proc ::lumen::act::cycle_bag { dir } {
+    # 0.61.0: the three early exits below are plain `return`s INSIDE the
+    # catch script, which catch reports as code 2 (TCL_RETURN), not 0 -- so
+    # "already at the newest bag" logged "could not cycle the bean bag: "
+    # with an empty message (found by the SHE Bags-view review, 2026-10-02).
+    # Only code 1 is an error.
     if { [catch {
         if { [info procs ::plugins::SDB::available_categories] eq "" } {
             error "the SDB plugin is not loaded"
@@ -4426,7 +4990,7 @@ proc ::lumen::act::cycle_bag { dir } {
         if { [catch { ::lumen::load_last_shot_curves 1 "" $want } lerr] } {
             msg -ERROR "Lumen: could not load '$want' last shot: $lerr"
         }
-    } err] } {
+    } err] == 1 } {
         msg -ERROR "Lumen: could not cycle the bean bag: $err"
     }
 }
@@ -4469,7 +5033,8 @@ proc ::lumen::txt { page x y text args } {
 proc ::lumen::var { page x y code args } {
     variable C
     variable L
-    array set o [list -font $L(font_body) -fill $C(ink) -anchor nw -justify left -width 0]
+    # 0.59.2: -tags too (own tags after the unique lumen_i_N), as txt has.
+    array set o [list -font $L(font_body) -fill $C(ink) -anchor nw -justify left -width 0 -tags ""]
     array set o $args
 
     set extra {}
@@ -4477,7 +5042,7 @@ proc ::lumen::var { page x y code args } {
 
     uplevel #0 [list dui add variable $page [X $x] [Y $y] -textvariable $code \
         -font $o(-font) -fill $o(-fill) -anchor $o(-anchor) \
-        -justify $o(-justify) -tags [_tags $o(-fill) ""] {*}$extra]
+        -justify $o(-justify) -tags [_tags $o(-fill) "" $o(-tags)] {*}$extra]
 }
 
 # Invisible tap target. Coordinates in DESIGN px.
@@ -4801,6 +5366,19 @@ proc ::lumen::tap { page x y w h command label {style zone} } {
         $x1 $y1 $x2 $y2
 }
 
+# 0.59.2 (F14): a -/+ pill's tap. The zone is the pill grown step_hit_in
+# toward the value it steps (side -1, the minus pill, grows right; +1, the
+# plus pill, grows left) and step_hit_v above and below; the press flash is
+# the chip on the drawn pill, so it looks exactly as it did when zone and
+# pill were one rect. All arguments in DESIGN px.
+proc ::lumen::step_tap { p sx sy sw sh side command label } {
+    variable L
+    set grow $L(step_hit_in) ; set v $L(step_hit_v)
+    set zx [expr {$side < 0 ? $sx : $sx - $grow}]
+    tap $p $zx [expr {$sy - $v}] [expr {$sw + $grow}] [expr {$sh + 2 * $v}] \
+        $command $label [list chip $sx $sy $sw $sh]
+}
+
 #############################################################################
 #  Custom theme (0.46.0)
 #
@@ -4995,6 +5573,553 @@ proc ::lumen::custom::_tone { rgb bright sat } {
 }
 proc ::lumen::custom::_tint { rgb tint a } { return [mix $rgb $tint $a] }
 
+# ---- 0.59.1: the text guard -----------------------------------------------
+#
+# Until 0.59.0 the guard in `palette` held ink_3 and the accent to their
+# floors against the plain glass TOKEN only. On the tablet text sits on
+# COMPOSITES -- the backdrop with the accent bloom behind it, the grind tile
+# (the accent wash over that bloom), pills over panels -- and on a light
+# base the bloom is the dark accent itself: the owner's custom Auto tile
+# (light half) sampled #C5B294..#D6BE9C and its texts read at 2.1-3.9:1
+# (tablet capture 2026-09-30). Every text role is now guarded against the
+# surfaces it is really drawn on:
+#
+#   * custom palettes: `spots` are points (design px) where Lumen draws
+#     text, each filed under a surface label; _surface_at repeats what
+#     page_photo paints at that pixel, in its own 8-bit arithmetic
+#     (gradient, quarter-scale bloom, then every panel and pill whose PNG
+#     covers the point, drop shadows included, each pasted the way Tk
+#     pastes), so the guard sees the pixel the bake draws -- a smooth
+#     model of the same layers came out 1-4 units light and let three
+#     tile and favorite texts slip to 4.2-4.49:1 (0.59.1 review);
+#   * the two baked presets: the same labels, sampled from their PNGs
+#     (baked_surfaces below; the Python bake's bloom is not this painter's);
+#   * both: the flat surfaces (_flat_surfaces: the picker page painted over
+#     its page colour, DYE's flat tokens, the graph backgrounds) and the
+#     favorite halo, modelled; the halo's tint is itself guarded, so the
+#     strongest ink always clears it (_guard_tint).
+#
+# rgb_hsl is the inverse of hsl_rgb (h in degrees, s and l in percent).
+proc ::lumen::custom::rgb_hsl { rgb } {
+    lassign $rgb r g b
+    set r [expr {$r / 255.0}] ; set g [expr {$g / 255.0}] ; set b [expr {$b / 255.0}]
+    set mx [expr {max($r, $g, $b)}] ; set mn [expr {min($r, $g, $b)}]
+    set l [expr {($mx + $mn) / 2.0}] ; set d [expr {$mx - $mn}]
+    if { $d < 1e-9 } { return [list 0.0 0.0 [expr {$l * 100.0}]] }
+    set s [expr {$d / (1.0 - abs(2.0 * $l - 1.0))}]
+    if { $mx == $r } {
+        set h [expr {60.0 * fmod(($g - $b) / $d + 6.0, 6.0)}]
+    } elseif { $mx == $g } {
+        set h [expr {60.0 * (($b - $r) / $d + 2.0)}]
+    } else {
+        set h [expr {60.0 * (($r - $g) / $d + 4.0)}]
+    }
+    return [list $h [expr {$s * 100.0}] [expr {$l * 100.0}]]
+}
+
+namespace eval ::lumen::custom {
+    # {label page x y}: the worst-placed point of each text group -- nearest
+    # its page's bloom, or at the gradient's ends -- filed under the surface
+    # it sits on: bg (backdrop), fav (backdrop under a favorite slot; the
+    # active one's halo is added on top), glass (plain panel), pill (plain
+    # inner pill), raised, accpill (accent pill), chip (the method chip, an
+    # accent pill on the tile), tile (the grind tile), dot (the confidence
+    # band's status dot), chart (the flat chart panel's legend band). A
+    # pill's point is its label's LOWEST row: the top lift fades downward,
+    # so that row is the pill's darkest on light glass. Where a text crosses
+    # the home bloom's column (x 336..343: its darkest pixels on light glass,
+    # brightest on dark) the column is sampled at the text's ink rows -- the
+    # grind note 193..210 (0.62.0, F8: the note at its design 19 px from
+    # gy+108 inks 196..215, so 214 joins), the band line 223..238, the
+    # legends from 289 --
+    # and the favorite name at slot 1's left end (407..411), where the halo
+    # meets the brightest ground (0.59.1 review: the slot centres and x 200
+    # on the band row missed them). Mirrors build_home / build_settings /
+    # build_flow_page / build_message_page; the harness pins every point
+    # inside a rect of the kind its label names.
+    variable spots {
+        bg      home        120  20    bg      home        250  20
+        bg      settings    670  50    bg      settings    670  80
+        bg      settings   1000  78
+        bg      flow_chart  670  50    bg      flow_chart  670 115
+        bg      flow_chart  670 708
+        bg      flow_plain  670 130    bg      flow_plain  670 250
+        bg      flow_plain  670 648
+        fav     home        486  24    fav     home        676  24
+        fav     home        866  24
+        fav     home        407  33    fav     home        410  24
+        fav     home        411  28
+        tile    home        100  92    tile    home        341 150
+        tile    home        341 198    tile    home        461 152
+        tile    home        200 236    tile    home        480 236
+        tile    home        600 236
+        tile    home        219  89
+        tile    home        338 193    tile    home        338 199
+        tile    home        338 205    tile    home        338 210
+        tile    home        338 214
+        tile    home        338 223    tile    home        338 230
+        dot     home         46 236
+        chip    home        515 104    chip    home        567 104
+        glass   home        706  92    glass   home        706 236
+        glass   home         60 600
+        glass   settings    620 140    glass   settings    700 140
+        glass   settings    700 180    glass   settings    620 300
+        glass   settings    700 300
+        glass   flow_chart  670 560    glass   flow_plain  670 470
+        glass   message     670 250    glass   message     670 300
+        glass   message     670 400    glass   message     670 452
+        pill    home        542 673    pill    home        176 754
+        pill    home        640 754
+        pill    settings    424 175    pill    settings    584 177
+        raised  settings   1071 177    raised  settings    959 445
+        raised  message     210 758
+        accpill home        910 754    accpill home       1180 754
+        accpill settings    670 734    accpill message    1130 758
+        chart   home         60 294    chart   home        250 294
+        chart   home        340 294    chart   home        580 294
+        chart   home        340 289
+    }
+    # role {labels floor ...}: the surfaces each ink is drawn on and its WCAG
+    # floor there -- 4.5 for text under 24 px (under 18.66 px bold), 3.0 for
+    # larger text and status graphics. (Through 0.61.1 the tablet drew every
+    # font at 0.92 of its size; 0.62.0's F8 draws them at their design size,
+    # which only puts more text over the large-text line -- every floor here
+    # stays as it was.) In order: crema_ink starts from the guarded
+    # crema, halo_ink (the active favorite's name, over its crema halo) from
+    # crema_ink; c_*_ink from the series colours, whose chart LINES keep
+    # theirs. 0.62.0 (F21): info, the shared info ink for plugins
+    # (::lumen::role_color), held to text on the backdrop and the glass.
+    variable roles {
+        ink          {{bg fav glass pill raised chart} 4.5}
+        ink_2        {{bg fav glass pill raised tile} 4.5}
+        ink_3        {{bg fav glass chart} 4.5}
+        crema        {{glass pill} 3.0}
+        crema_ink    {{bg glass tile chip accpill} 4.5}
+        halo_ink     {{halo} 4.5}
+        good         {{bg glass} 4.5 {dot} 3.0}
+        warn         {{bg glass} 4.5 {dot} 3.0}
+        danger       {{bg glass} 4.5}
+        info         {{bg glass} 4.5}
+        c_press_ink  {{chart} 4.5 {bg glass} 3.0}
+        c_flow_ink   {{chart} 4.5 {bg glass} 3.0}
+        c_temp_ink   {{chart} 4.5 {bg glass} 3.0}
+        c_weight_ink {{chart} 4.5 {bg glass} 3.0}
+    }
+    # A moved ink lands this far over its floor, so the 8-bit hex and the
+    # spots' approximation (a point, not the whole glyph box) still clear it.
+    variable guard_margin 0.1
+    # The two baked presets' surfaces, per label: the worst pixel under any
+    # text box of that kind on their 1340x800 PNGs -- darkest for the light
+    # theme's dark text, lightest for the dark theme's light text (sampled
+    # 2026-09-30; resample after a re-bake). ::lumen::set_palette guards the
+    # presets' text roles against these; the dark theme passes everywhere
+    # but its danger and the favorite halo, so it keeps its other colours.
+    variable baked_surfaces {
+        light {bg #DCE2EC fav #F4F3F0 glass #D8DBE1 pill #E0E2E6 raised #EEEFF2
+               accpill #D4C2A8 chip #E1C498 tile #D8C2A3 dot #D9C3A3 chart #DDE0E4}
+        dark  {bg #25262B fav #24262A glass #26282D pill #2B2B2D raised #2E2E30
+               accpill #1B1814 chip #2C2720 tile #282422 dot #1A1715 chart #1D1E20}
+    }
+}
+
+# One layer of the painter at row cy of an h-tall rect: the fill of `kind`
+# at its alpha plus the row's top lift (none when flat), over the rect's
+# shadow at alpha sa, over `under` -- panel_png's pixel, inside the rect,
+# in exact arithmetic. For the picker's photo panels over its flat page
+# colour (_flat_surfaces); the baked pages go through _surface_at.
+proc ::lumen::custom::_layer { P kind under cy h sa {flat 0} } {
+    set G [dict get $P gen]
+    switch -exact -- $kind {
+        raised  { set fill [dict get $G white] ; set fa [dict get $G raised_a] }
+        accent  { set fill [dict get $G accfill_rgb] ; set fa [dict get $G accfill_a] }
+        default { set fill [dict get $G white] ; set fa [dict get $G glass_a] }
+    }
+    set span [expr {$flat ? 0 : int($h * 0.85)}]
+    if { $cy < $span } {
+        set la [expr {[dict get $G lift_a] * pow(1.0 - double($cy) / $span, 1.15)}]
+        set fa [expr {$fa + $la - $fa * $la}]
+    }
+    return [over $fill $fa [over [dict get $G shadow_rgb] $sa $under]]
+}
+
+# ---- the painter at one pixel (0.59.1 review) -----------------------------
+# page_photo at 1340x800 (design px are the tablet's physical px), one pixel
+# at a time and in its own arithmetic: every paste is Tk's (_over8), every
+# alpha the PNG's byte. These repeat panel_png's and bloom_png's sums for
+# one pixel -- keep them in step with those two; the harness holds them to
+# the PNGs' bytes.
+
+# Tk's photo compositing (image copy, the overlay rule) of an 8-bit pixel
+# rgb at alpha a onto an opaque one: floor(s * a / 255) + floor((255 - a)
+# * d / 255) per channel, which is why a pasted layer comes out up to two
+# units darker than exact arithmetic (Tk 8.6; 3000 random pixels matched).
+proc ::lumen::custom::_over8 { rgb a dst } {
+    if { $a <= 0 } { return $dst }
+    if { $a >= 255 } { return $rgb }
+    set out {}
+    foreach s $rgb d $dst { lappend out [expr {$s * $a / 255 + (255 - $a) * $d / 255}] }
+    return $out
+}
+
+# _px's pixel as a list {r g b a}, 0..255 each.
+proc ::lumen::custom::_px_rgba { c rgb a shrgb sa } {
+    set ca [expr {$a * $c}]
+    set oa [expr {$ca + $sa * (1.0 - $ca)}]
+    if { $oa <= 0.0 } { return {0 0 0 0} }
+    set out {}
+    foreach t $rgb s $shrgb {
+        lappend out [expr {int(round(($t * $ca + $s * $sa * (1.0 - $ca)) / $oa))}]
+    }
+    lappend out [expr {int(round($oa * 255.0))}]
+    return $out
+}
+
+# panel_png's pixel {r g b a} at (cx, cy) from the top-left corner of a
+# w x h rect of `kind` (corner radius rr, flat: no top lift), anywhere in
+# its PNG -- inside, on the edge ring, or out in the shadow margin -- as
+# page_photo paints it at 1340x800 (S 18, offset 6, not soft). A straight
+# row repeats the first row painted with the same shadow and fill bytes,
+# and its middle stretch is one pixel repeated, as in panel_png.
+proc ::lumen::custom::_panel_px { P w h rr kind cx cy flat } {
+    set S 18 ; set dy 6
+    set G [dict get $P gen]
+    set white [dict get $G white]
+    set shrgb [dict get $G shadow_rgb] ; set sha [dict get $G shadow_a]
+    switch -exact -- $kind {
+        raised  { set fill $white ; set fa [dict get $G raised_a]
+                  set brd [dict get $G brd_rgb] ; set ba [dict get $G brd_a] }
+        accent  { set fill [dict get $G accfill_rgb] ; set fa [dict get $G accfill_a]
+                  set brd [dict get $G brdacc_rgb] ; set ba [dict get $G brdacc_a] }
+        default { set fill $white ; set fa [dict get $G glass_a]
+                  set brd [dict get $G brd_rgb] ; set ba [dict get $G brd_a] }
+    }
+    set hi [dict get $G lift_a]
+    if { $rr * 2 > $w } { set rr [expr {$w / 2}] }
+    if { $rr * 2 > $h } { set rr [expr {$h / 2}] }
+    set W [expr {$w + 2 * $S}]
+    set hw [expr {$w / 2.0}] ; set hh [expr {$h / 2.0}]
+    set zone [expr {$S + $rr + 2}]
+    if { 2 * $zone >= $W } { set zone -1 }
+    set span [expr {$flat ? 0 : int($h * 0.85)}]
+    set inner_row [expr {$cy >= 0 && $cy < $h}]
+    set fy [_fall [expr {max($dy - ($cy + 0.5), ($cy + 0.5) - ($h + $dy))}] $S]
+    set la 0.0
+    if { $inner_row && $cy < $span } { set la [expr {$hi * pow(1.0 - double($cy) / $span, 1.15)}] }
+    set fa_row [expr {int(round(($fa + $la - $fa * $la) * 255.0)) / 255.0}]
+    set straight [expr {$inner_row && $cy > $rr && $cy < $h - $rr - 1}]
+    if { $straight } {
+        # Only the first straight rows (shadow factor under 1) can share a
+        # key with a later row; the later one is that row's copy.
+        set key "[expr {int(round($fy * 255.0))}]|[expr {int(round($fa_row * 255.0))}]"
+        for { set c0 [expr {$rr + 1}] } { $c0 < $cy && $c0 < 24 } { incr c0 } {
+            set f0 [_fall [expr {max($dy - ($c0 + 0.5), ($c0 + 0.5) - ($h + $dy))}] $S]
+            set l0 [expr {$c0 < $span ? $hi * pow(1.0 - double($c0) / $span, 1.15) : 0.0}]
+            set a0 [expr {int(round(($fa + $l0 - $fa * $l0) * 255.0)) / 255.0}]
+            if { "[expr {int(round($f0 * 255.0))}]|[expr {int(round($a0 * 255.0))}]" eq $key } {
+                set fy $f0 ; break
+            }
+        }
+    }
+    set spec_row [expr {$cy == 1 || $cy == 2}]
+    set x [expr {$cx + $S}]
+    if { !$spec_row && $zone >= 0 && $x >= $zone && $x < $W - $zone } {
+        set sa [expr {$sha * $fy}]
+        if { $straight } { return [_px_rgba 1.0 $fill $fa_row $shrgb $sa] }
+        if { !$inner_row } { return [_px_rgba 0.0 $fill $fa_row $shrgb $sa] }
+        if { abs($cy + 0.5 - $hh) - $hh > -1.0 } { return [_px_rgba 1.0 $brd $ba $shrgb $sa] }
+        return [_px_rgba 1.0 $fill $fa_row $shrgb $sa]
+    }
+    set qx [expr {abs($cx + 0.5 - $hw) - ($hw - $rr)}]
+    set qy [expr {abs($cy + 0.5 - $hh) - ($hh - $rr)}]
+    set mx [expr {$qx > 0.0 ? $qx : 0.0}] ; set my [expr {$qy > 0.0 ? $qy : 0.0}]
+    set d [expr {sqrt($mx * $mx + $my * $my) + min(max($qx, $qy), 0.0) - $rr}]
+    set c [expr {0.5 - $d}]
+    if { $c > 1.0 } { set c 1.0 } elseif { $c < 0.0 } { set c 0.0 }
+    set sa [expr {$sha * $fy * [_fall [expr {max(-($cx + 0.5), ($cx + 0.5) - $w)}] $S]}]
+    if { $c > 0.0 && $d > -1.0 } { return [_px_rgba $c $brd $ba $shrgb $sa] }
+    if { $spec_row && $c > 0.0 && $cx >= $rr && $cx < $w - $rr } {
+        set t [expr {double($cx - $rr) / max(1, $w - 2 * $rr - 1)}]
+        set sp [expr {[dict get $G spec_a] * pow(1.0 - abs(2.0 * $t - 1.0), 0.8) * ($cy == 1 ? 1.0 : 0.5)}]
+        set a [expr {$fa_row + $sp - $fa_row * $sp}]
+        return [_px_rgba $c [mix $fill $white [expr {$a > 0 ? $sp / $a : 0.0}]] $a $shrgb $sa]
+    }
+    return [_px_rgba $c $fill $fa_row $shrgb $sa]
+}
+
+# bloom_png's pixel {r g b a} over design point (x, y) of a page whose
+# bloom is {cx cy rx ry}: the quarter-scale pixel page_photo zooms x4 over
+# it from the ellipse's corner (a corner cut off at the page's top or left
+# edge leaves the pixels before its first whole source pixel unpainted).
+proc ::lumen::custom::_bloom_px { P bloom x y } {
+    lassign $bloom bcx bcy brx bry
+    set rx [expr {int(round($brx / 4.0))}] ; set ry [expr {int(round($bry / 4.0))}]
+    set tx [expr {$bcx - 4 * $rx}] ; set ty [expr {$bcy - 4 * $ry}]
+    set i [expr {($x - $tx) / 4}] ; set j [expr {($y - $ty) / 4}]
+    if { $i < 0 || $j < 0 || $i >= 2 * $rx || $j >= 2 * $ry } { return {0 0 0 0} }
+    if { ($tx < 0 && $i < (3 - $tx) / 4) || ($ty < 0 && $j < (3 - $ty) / 4) } { return {0 0 0 0} }
+    set nx [expr {($i + 0.5 - $rx) / $rx}] ; set ny [expr {($j + 0.5 - $ry) / $ry}]
+    set dd [expr {$nx * $nx + $ny * $ny}]
+    if { $dd >= 1.0 } { return {0 0 0 0} }
+    set t [expr {1.0 - $dd}]
+    set G [dict get $P gen]
+    set out {}
+    foreach v [dict get $G bloom_rgb] { lappend out [expr {int($v)}] }
+    lappend out [expr {int(round(255.0 * [dict get $G bloom_a] * $t * $t))}]
+    return $out
+}
+
+# The painted colour at design point (x, y) of a page of the pages table:
+# the gradient row, the bloom, then every panel and inner pill whose PNG
+# (the rect and its 18 px shadow margin) covers the point, in page_photo's
+# order -- the same bytes page_photo paints (checked under Tk against
+# every page of eleven palettes, edges and shadows included).
+proc ::lumen::custom::_surface_at { P page x y } {
+    variable pages
+    set spec [dict get $pages $page]
+    set G [dict get $P gen]
+    set rgb {}
+    foreach v [mix [dict get $G top] [dict get $G bot] [expr {$y / 799.0}]] {
+        lappend rgb [expr {max(0, min(255, int(round($v))))}]
+    }
+    set b [_bloom_px $P [dict get $spec bloom] $x $y]
+    set rgb [_over8 [lrange $b 0 2] [lindex $b 3] $rgb]
+    set out [dict get $spec out]
+    foreach group {panels inner} {
+        set i 0
+        foreach item [dict get $spec $group] {
+            lassign $item rx ry rw rh rr kind
+            set flat [expr {$group eq "panels" && (($out eq "lumen_home" && $i == 2) \
+                                                || ($out eq "lumen_flow_chart" && $i == 0))}]
+            incr i
+            set cx [expr {$x - $rx}] ; set cy [expr {$y - $ry}]
+            if { $cx < -18 || $cy < -18 || $cx >= $rw + 18 || $cy >= $rh + 18 } { continue }
+            set p [_panel_px $P $rw $rh $rr $kind $cx $cy $flat]
+            set rgb [_over8 [lrange $p 0 2] [lindex $p 3] $rgb]
+        }
+    }
+    return $rgb
+}
+
+# The surfaces that are flat colours or painted over one, as {label rgb
+# ...}: the picker page (never baked) -- its flat page colour, the
+# painter's glass cards and Done pill over it (a label row near the top and
+# one near the bottom of a card), the vector base pills' fills -- the flat
+# tokens DYE's pages are drawn on (g1: dialog glass), and the two graph
+# widgets' backgrounds under the axis labels (charts: rgb list).
+proc ::lumen::custom::_flat_surfaces { P flat g1 g2 lo charts } {
+    set sha [dict get $P gen shadow_a]
+    set out [list bg $flat \
+        glass [_layer $P plain $flat 18 80 $sha] glass [_layer $P plain $flat 140 152 $sha] \
+        glass $g1 raised $g2 \
+        accpill [_layer $P accent $flat 44 72 $sha] accpill $lo]
+    foreach c $charts { lappend out chart $c }
+    return $out
+}
+
+# Every label's surfaces (dict label -> rgb list) for a custom palette P,
+# whose bg / glass / glass_2 / crema_lo and painter parameters are set.
+proc ::lumen::custom::surfaces { P } {
+    variable spots
+    set out [dict create]
+    foreach {lab page x y} $spots {
+        dict lappend out $lab [_surface_at $P $page $x $y]
+    }
+    foreach {lab rgb} [_flat_surfaces $P [hex_rgb [dict get $P bg]] [hex_rgb [dict get $P glass]] \
+                           [hex_rgb [dict get $P glass_2]] [hex_rgb [dict get $P crema_lo]] \
+                           [list [hex_rgb [dict get $P chart_bg]] [hex_rgb [dict get $P chart_bg_flow]]]] {
+        dict lappend out $lab $rgb
+    }
+    return $out
+}
+
+# The active favorite's halo tint (rgb) as fav_glow_photo derived it until
+# 0.59.1: the crema, lifted half way to white when the page colour is light.
+proc ::lumen::custom::_halo_tint { crema bg } {
+    lassign $bg gr gg gb
+    if { (0.2126 * $gr + 0.7152 * $gg + 0.0722 * $gb) / 255.0 > 0.45 } {
+        return [hex_rgb [rgb_hex [mix $crema {255 255 255} 0.5]]]
+    }
+    return [hex_rgb [rgb_hex $crema]]
+}
+
+# The halo over each slot ground (rgb lists) as fav_glow_photo paints it:
+# the tint at 0.36 inside the pill.
+proc ::lumen::custom::_halo_over { tint grounds } {
+    set out {}
+    foreach g $grounds { lappend out [over $tint 0.36 $g] }
+    return $out
+}
+
+# The halo's worst luminance for its text: the brightest on a dark base,
+# the darkest on a light one.
+proc ::lumen::custom::_halo_worst { tint grounds dark } {
+    set w [expr {$dark ? 0.0 : 1.0}]
+    foreach h [_halo_over $tint $grounds] {
+        set l [luminance $h]
+        if { $dark ? $l > $w : $l < $w } { set w $l }
+    }
+    return $w
+}
+
+# The tint, its lightness moved just far enough that the strongest ink
+# there is -- white on a dark base, black on a light one -- clears 4.5:1
+# plus the margin on every halo (hue and saturation kept). On dark glass a
+# vivid yellow or green accent over a rich backdrop lit slot 1's halo past
+# what even white reads on (4.2:1); every other tint comes back unchanged.
+proc ::lumen::custom::_guard_tint { tint dark grounds } {
+    variable guard_margin
+    set f [expr {4.5 + $guard_margin + 0.01}]
+    set lim [expr {$dark ? 1.05 / $f - 0.05 : 0.05 * $f - 0.05}]
+    set w [_halo_worst $tint $grounds $dark]
+    if { $dark ? $w <= $lim : $w >= $lim } { return $tint }
+    lassign [rgb_hsl $tint] h s a
+    set b [expr {$dark ? 0.0 : 100.0}]
+    for { set i 0 } { $i < 12 } { incr i } {
+        set m [expr {($a + $b) / 2.0}]
+        set w [_halo_worst [hsl_rgb $h $s $m] $grounds $dark]
+        if { $dark ? $w <= $lim : $w >= $lim } { set b $m } else { set a $m }
+    }
+    return [hsl_rgb $h $s $b]
+}
+
+# The worst margin of luminance lt over spec's floors on lum (label ->
+# {darkest lightest} luminance): min of contrast - floor. A label's two
+# extremes stand for all of its surfaces: an ink that clears a floor lies
+# beyond every surface on one side, where the nearer extreme is the worst.
+proc ::lumen::custom::_ink_margin { lt spec lum } {
+    set worst 99.0
+    foreach {labels floor} $spec {
+        foreach lab $labels {
+            if { ![dict exists $lum $lab] } { continue }
+            foreach ls [dict get $lum $lab] {
+                set r [expr {$lt > $ls ? ($lt + 0.05) / ($ls + 0.05) : ($ls + 0.05) / ($lt + 0.05)}]
+                if { $r - $floor < $worst } { set worst [expr {$r - $floor}] }
+            }
+        }
+    }
+    return $worst
+}
+
+# lum (label -> luminance list) reduced to each label's two extremes.
+proc ::lumen::custom::_lum_extremes { lum } {
+    set out [dict create]
+    dict for {lab lst} $lum {
+        dict set out $lab [list [tcl::mathfunc::min {*}$lst] [tcl::mathfunc::max {*}$lst]]
+    }
+    return $out
+}
+
+# One ink against lum: its hue and saturation kept, its lightness moved
+# away from the surfaces (lighter on a dark base, darker on a light one)
+# just far enough for every label of spec to clear its floor plus the
+# margin. A seed that already clears the floors (plus `keep`) is returned
+# untouched, so a colour that passes keeps its exact value. The luminance
+# needed follows from each label's extremes, and luminance grows with HSL
+# lightness, so the lightness is found by bisection. Should that direction
+# run out (a vivid halo on dark glass, brighter than any light ink can
+# clear), the other one is tried, and failing both the best lightness of
+# the hue's whole range is taken.
+proc ::lumen::custom::_guard_ink { seed dark spec lum keep } {
+    variable guard_margin
+    if { [_ink_margin [luminance $seed] $spec $lum] >= $keep } { return $seed }
+    lassign [rgb_hsl $seed] h s l0
+    foreach up [list $dark [expr {!$dark}]] {
+        set need [expr {$up ? -1.0 : 2.0}]
+        foreach {labels floor} $spec {
+            set f [expr {$floor + $guard_margin}]
+            foreach lab $labels {
+                if { ![dict exists $lum $lab] } { continue }
+                lassign [dict get $lum $lab] lo hi
+                if { $up } {
+                    set need [expr {max($need, ($hi + 0.05) * $f - 0.05)}]
+                } else {
+                    set need [expr {min($need, ($lo + 0.05) / $f - 0.05)}]
+                }
+            }
+        }
+        if { $up ? $need > 1.0 : $need < 0.0 } { continue }
+        # b always satisfies (the bound, white or black, does); a never.
+        # Ten halvings leave b within 0.1 of the least lightness needed.
+        set a $l0 ; set b [expr {$up ? 100.0 : 0.0}]
+        for { set i 0 } { $i < 10 } { incr i } {
+            set m [expr {($a + $b) / 2.0}]
+            set lm [luminance [hsl_rgb $h $s $m]]
+            if { $up ? $lm >= $need : $lm <= $need } { set b $m } else { set a $m }
+        }
+        return [hsl_rgb $h $s $b]
+    }
+    set best $seed ; set bestm -99.0
+    for { set l 0 } { $l <= 100 } { incr l } {
+        set rgb [hsl_rgb $h $s $l]
+        set m [_ink_margin [luminance $rgb] $spec $lum]
+        if { $m > $bestm } { set best $rgb ; set bestm $m }
+    }
+    return $best
+}
+
+# The text roles from seeds (dict role -> rgb: ink ink_2 ink_3 crema good
+# warn danger info c_press c_flow c_temp c_weight, and bg for the halo's
+# tint) on surf (label -> rgb list), for a dark or light base. Returns dict
+# role -> #hex for every role of `roles`, plus danger_face: the cleaning
+# banner's face (0.62.0: the pinned ::lumen::danger_face); and halo_tint:
+# the favorite halo's colour (_guard_tint), which halo_ink is then guarded
+# on.
+# `sampled` 1: the surfaces are exact pixels of the baked presets, so a
+# seed that meets the bare floors keeps its value (the dark preset keeps
+# every colour that passes); 0: modelled surfaces, a seed stays only if it
+# clears floor + margin.
+proc ::lumen::custom::text_roles { seeds surf dark {sampled 0} } {
+    variable roles
+    variable guard_margin
+    set keep [expr {$sampled ? 0.0 : $guard_margin}]
+    set lum [dict create]
+    dict for {lab lst} $surf {
+        foreach rgb $lst { dict lappend lum $lab [luminance $rgb] }
+    }
+    set lum [_lum_extremes $lum]
+    set out [dict create]
+    foreach {role spec} $roles {
+        if { $role eq "crema_ink" } {
+            set seed [hex_rgb [dict get $out crema]]
+            if { [dict exists $surf fav] } {
+                set tint [_guard_tint [_halo_tint $seed [dict get $seeds bg]] $dark [dict get $surf fav]]
+                dict set out halo_tint [rgb_hex $tint]
+                set hl {}
+                foreach h [_halo_over $tint [dict get $surf fav]] {
+                    lappend hl [luminance $h]
+                }
+                dict set lum halo [list [tcl::mathfunc::min {*}$hl] [tcl::mathfunc::max {*}$hl]]
+            }
+        } elseif { $role eq "halo_ink" } {
+            set seed [hex_rgb [dict get $out crema_ink]]
+        } elseif { [string match c_*_ink $role] } {
+            set seed [dict get $seeds [string range $role 0 end-4]]
+        } else {
+            set seed [dict get $seeds $role]
+        }
+        dict set out $role [rgb_hex [_guard_ink $seed $dark $spec $lum $keep]]
+    }
+    # The hierarchy survives the guard: ink_2 stays stronger than ink_3 and
+    # ink stronger than ink_2 (a heavily tinted light page pushed ink_3 as
+    # far as ink_2 even before 0.59.1). The stronger ink steps on, which
+    # only ever adds contrast.
+    foreach {strong quiet} {ink_2 ink_3 ink ink_2} {
+        set q [luminance [hex_rgb [dict get $out $quiet]]]
+        set rgb [hex_rgb [dict get $out $strong]]
+        lassign [rgb_hsl $rgb] h s l
+        while { ($dark ? [luminance $rgb] <= $q : [luminance $rgb] >= $q) && $l > 0 && $l < 100 } {
+            set l [expr {$dark ? $l + 1 : $l - 1}]
+            set rgb [hsl_rgb $h $s $l]
+        }
+        dict set out $strong [rgb_hex $rgb]
+    }
+    # The banner face. 0.62.0 (F21): pinned to the plugins' danger face
+    # (white 6.54:1) instead of danger stepped darker -- with the shared
+    # dark seed #FF8A80 that derivation changed the banner's hue.
+    dict set out danger_face $::lumen::danger_face
+    return $out
+}
+
 # The painter parameters for the frosted SLAB: the bake's recipe
 # (saturation and brightness up, then the tint) applied to the ground
 # and the panel fills, no borders, no specular, no lift -- a blur has
@@ -5070,8 +6195,11 @@ proc ::lumen::custom::suffix { {base ""} } {
 # Contrast guard: ink_3 (the 15-16 px labels) is pushed away from the glass
 # until it reads at >= 4.5:1, the accent until >= 3:1 -- the same floors
 # the 0.43.1 palette review used. Semantic colours (good / warn / danger)
-# and the four chart colours come from the matching baked theme and never
-# change: they carry meaning, not style.
+# and the four chart colours come from the matching baked theme: they carry
+# meaning, not style. 0.59.1: the text roles -- inks, crema_ink, the
+# semantic colours, the legend inks -- then pass text_roles, which moves
+# only their LIGHTNESS, and only where the composited surface they sit on
+# needs it; the chart lines keep the series colours.
 proc ::lumen::custom::palette { base bh bs ah as } {
     # 0.56.0: an auto base is the one the schedule wants right now.
     if { $base eq "auto" } { set base [::lumen::auto_wanted] }
@@ -5093,7 +6221,8 @@ proc ::lumen::custom::palette { base bh bs ah as } {
         set acc_l 59 ; set acc_step 4 ; set acc_max 78
         set lo_rgb [hsl_rgb $ah [expr {$as * 0.6}] 20] ; set lo_a 0.35
         set brdacc_rgb [hsl_rgb $ah $as 45] ; set brdacc_a 0.55
-        dict set P good "#2FD3A4" ; dict set P warn "#E8B34C" ; dict set P danger "#DA515E"
+        # 0.62.0 (F21): the shared status seeds (good warn danger info).
+        foreach {k v} [dict get $::lumen::status_seeds dark] { dict set P $k $v }
         dict set P c_press "#17C29A" ; dict set P c_flow "#6C9BFF"
         dict set P c_temp "#FF7880" ; dict set P c_weight "#E6C9A8" ; dict set P grid "#1C2129"
     } else {
@@ -5111,7 +6240,7 @@ proc ::lumen::custom::palette { base bh bs ah as } {
         set acc_l 44 ; set acc_step -4 ; set acc_max 18
         set lo_rgb [hsl_rgb $ah $as 78] ; set lo_a 0.45
         set brdacc_rgb [hsl_rgb $ah [expr {$as * 0.8}] 55] ; set brdacc_a 0.60
-        dict set P good "#12805F" ; dict set P warn "#B4761A" ; dict set P danger "#B23641"
+        foreach {k v} [dict get $::lumen::status_seeds light] { dict set P $k $v }
         dict set P c_press "#0E9E7C" ; dict set P c_flow "#3F72E0"
         dict set P c_temp "#E04F5C" ; dict set P c_weight "#A8763F" ; dict set P grid "#D5DBE3"
     }
@@ -5185,6 +6314,20 @@ proc ::lumen::custom::palette { base bh bs ah as } {
         acc $acc lo_rgb $lo_rgb lo_a $lo_a brdacc_rgb $brdacc_rgb brdacc_a $brdacc_a \
         accfill_rgb $accfill_rgb accfill_a $accfill_a \
         bloom_rgb $acc bloom_a [expr {$dark ? 0.16 : 0.28}]]
+
+    # 0.59.1: every text role guarded on the surfaces it is drawn on (see
+    # text_roles), which adds crema_ink, halo_ink, the c_*_ink legend inks
+    # and the banner's danger_face. The painter's own accent (gen acc: the
+    # bloom and the wash) is untouched, so no custom background needs
+    # drawing again and the signature stays 4.
+    set seeds [dict create]
+    foreach k {ink ink_2 ink_3 crema good warn danger info c_press c_flow c_temp c_weight bg} {
+        dict set seeds $k [hex_rgb [dict get $P $k]]
+    }
+    set surf [surfaces $P]
+    dict for {k v} [text_roles $seeds $surf $dark] { dict set P $k $v }
+    # Kept with the palette (label -> rgb list) for the harness's audit.
+    dict set P surf $surf
     return $P
 }
 
@@ -5489,11 +6632,18 @@ proc ::lumen::custom::page_photo { P spec W H } {
 }
 
 # The screen in physical px, from dui or Tk, or 0 0 when neither answers.
+# 0.62.0 (F8): dui first through ::lumen::app_screen (validated, never
+# caught); Tk's winfo only where dui has no answer at all (the offline
+# harness, a desktop sketch) -- for pixel sizes and asset folders, never
+# for fonts (_init_layout reads dui alone).
 proc ::lumen::custom::screen {} {
-    set W 0 ; set H 0
-    catch { set W [expr {int([dui cget screen_size_width])}] ; set H [expr {int([dui cget screen_size_height])}] }
-    if { $W <= 0 || $H <= 0 } { catch { set W [winfo screenwidth .] ; set H [winfo screenheight .] } }
-    if { $W <= 0 || $H <= 0 } { return {0 0} }
+    lassign [::lumen::app_screen] W H
+    if { $W > 0 && $H > 0 } { return [list $W $H] }
+    if { ![llength [info commands winfo]] } { return {0 0} }
+    set W [winfo screenwidth .] ; set H [winfo screenheight .]
+    if { ![string is integer -strict $W] || ![string is integer -strict $H] || $W <= 0 || $H <= 0 } {
+        return {0 0}
+    }
     return [list $W $H]
 }
 
@@ -5627,7 +6777,7 @@ proc ::lumen::apply_theme { mode } {
     # they retint without files.)
     set word [_theme_word $mode]
     if { $mode eq "custom" && !$_flat_pages } {
-        wait_step "[translate {Applying}] $word: [translate {drawing backgrounds...}]"
+        wait_step "[translate {Applying}] $word: [translate {drawing backgrounds}][::lumen::glyph ellipsis]"
         set baked 0
         if { [catch { set baked [::lumen::custom::ensure_bake] } err] } {
             msg -ERROR "Lumen: custom theme bake threw: $err"
@@ -5647,7 +6797,7 @@ proc ::lumen::apply_theme { mode } {
         custom  { set ::lumen::_bg_suffix [::lumen::custom::suffix] }
         default { set ::lumen::_bg_suffix "" }
     }
-    wait_step "[translate {Applying}] $word: [translate {colours and backgrounds...}]"
+    wait_step "[translate {Applying}] $word: [translate {colours and backgrounds}][::lumen::glyph ellipsis]"
 
     set problems 0
     if { [catch { set can [dui canvas] ; $can configure -bg $C(bg) } err] } {
@@ -5766,6 +6916,13 @@ proc ::lumen::_redraw_photo_panels {} {
 # Skipped, with a NOTICE, if a DYE page is the one on screen (dui refuses
 # to delete the current page); nothing else is ever on screen while the
 # THEME row or the picker's Done runs, so this is a guard, not a path.
+# 0.62.0 (F21 counts): the wait pill's progress reads "DYE page 3 of 7"
+# (was "DYE pages 3 / 7"); only the fixed words go through translate.
+# 0.62.1 (F23): ends in the real ellipsis.
+proc ::lumen::_dye_progress { word i total } {
+    return "[translate {Applying}] $word: [translate {DYE page}] $i [translate of] $total[::lumen::glyph ellipsis]"
+}
+
 proc ::lumen::_retheme_dye {} {
     if { ![string is true -strict [dui theme exists DYE_Lumen]] } { return 0 }
     dye_aspects
@@ -5798,7 +6955,7 @@ proc ::lumen::_retheme_dye {} {
     # 0.50.0: one page per call so the wait pill can count them off.
     set word [_theme_word $::lumen::theme_mode]
     foreach p $pages {
-        wait_step "[translate {Applying}] $word: [translate {DYE pages}] [incr i] / $total..."
+        wait_step [_dye_progress $word [incr i] $total]
         foreach ok [dui page retheme $p DYE_Lumen 1] {
             if { [string is true -strict $ok] } { incr n }
         }
@@ -5952,8 +7109,13 @@ proc ::lumen::build_home {} {
     #  Taskbar (0.31.0 geometry + time; 0.32.0 tappables + dot)
     #
     #  Sits naked on the baked gradient -- no glass pill, so the bar
-    #  bakes nothing. 0.57.0 (owner's mockup): Sleep (moon) ALONE at
-    #  the far left, where a stray tap finds nothing else; the clock on
+    #  bakes nothing. 0.57.0 (owner's mockup): Sleep ALONE at the far
+    #  left, where a stray tap finds nothing else (0.62.1, F25, owner
+    #  2026-10-02: the standard power symbol, Font Awesome power-off
+    #  U+F011 -- in the cmap of the app's FA6 Pro Regular 6.4.2 and in
+    #  dui's own symbol table; the moon U+F186 it replaces is the
+    #  plugins' dark-theme toggle, so it no longer means two things on
+    #  one screen; same zone, same start_sleep, same "Sleep"); the clock on
     #  two rows (time over date) with the water reading beside it; the
     #  three favorite slots as NAMES across the middle; the other four
     #  tappables closed up at the right edge in escalating consequence
@@ -5976,22 +7138,23 @@ proc ::lumen::build_home {} {
     # corner -- machine status belongs on the status bar. Same accessor,
     # same blue, blank when the machine has not reported recently.
     # 0.57.0: on the time's row, anchored w after the widest time.
+    # 0.59.1: text, so the flow blue's text ink (c_flow_ink).
     var $p $L(bar_water_x) $L(bar_time_y) {[::lumen::data::water_ml]} \
-        -font $L(font_data) -fill $C(c_flow) -anchor w -justify left
+        -font $L(font_data) -fill $C(c_flow_ink) -anchor w -justify left
     # 0.43.1: the same value in amber when the tank runs low.
     var $p $L(bar_water_x) $L(bar_time_y) {[::lumen::data::water_ml_low]} \
         -font $L(font_data) -fill $C(warn) -anchor w -justify left
 
     set sym_ok [_font_family_ok symbol]
-    set bar_font [expr {$sym_ok ? $L(font_bt) : $L(font_label)}]
+    set bar_font [_pick $sym_ok $L(font_bt) $L(font_label)]
     foreach {xkey glyph fallback action label} [list \
         bar_drinkmenu_x 0xF7B6 "CUP" {::lumen::act::open_drinkmenu}  "Drink menu" \
         bar_wrench_x  0xF0AD "MNT" {::lumen::act::open_maintenance}  "Maintenance" \
         bar_gear_x    0xF013 "SET" {::lumen::act::open_settings}     "Settings" \
-        bar_moon_x    0xF186 "ZZZ" {start_sleep}                     "Sleep" ] {
+        bar_sleep_x   0xF011 "ZZZ" {start_sleep}                     "Sleep" ] {
         set ix $L($xkey)
         txt $p [expr {$ix + $L(bar_icon_w) / 2.0}] $bar_mid \
-            [expr {$sym_ok ? [format %c $glyph] : $fallback}] \
+            [_pick $sym_ok [format %c $glyph] $fallback] \
             -font $bar_font -fill $C(ink_2) -anchor center -justify center
         tap $p $ix $L(bar_y) $L(bar_icon_w) $L(bar_h) $action $label
     }
@@ -6024,10 +7187,12 @@ proc ::lumen::build_home {} {
                 -image $::lumen::fav_glow_blank -anchor nw \
                 -tags [_tags "" "" [list lumen_favglow_$n]]]
         }
+        # 0.59.1: the active name in halo_ink -- crema_ink stepped until it
+        # reads on the halo (plain crema was 3.5:1 there on dark glass).
         foreach {code col font} [list \
             "\[::lumen::data::fav_empty $n\]"  $C(ink_3) $L(font_data) \
             "\[::lumen::data::fav_set $n\]"    $C(ink_2) $L(font_caption) \
-            "\[::lumen::data::fav_active $n\]" $C(crema) $L(font_caption)] {
+            "\[::lumen::data::fav_active $n\]" $C(halo_ink) $L(font_caption)] {
             var $p $fcx $bar_mid $code \
                 -font $font -fill $col -anchor center -justify center
         }
@@ -6067,55 +7232,75 @@ proc ::lumen::build_home {} {
     # GrindAdvisor 3.13.0's new-bag estimate, because the plugin's display
     # contract forbids captioning an estimate "Recommended". Same position,
     # font and ink as the static label it replaces (both texts are 17 chars).
+    # 0.59.1: the secondary ink, not ink_3 -- the tile is the darkest
+    # surface on a light base (the bloom peaks under it) and ink_3 read at
+    # 3.6:1 there; ink_2 is the ink guarded on the tile.
     var $p $gx $gy {[::lumen::data::grind_header]} \
-        -font $L(font_label) -fill $C(ink_3)
+        -font $L(font_label) -fill $C(ink_2)
 
-    # Vertical budget inside the 190-tall tile (0.23.0; content 36..192):
-    #   label 36..51   hero 56..140   note 142..161   row 176..192
-    # 14 clear to the tile edge at 206.
-    # Hero and note are CENTRED on the tile (owner request); the delta sits
-    # to the right of the widest hero the grind range allows ("50.0" is
-    # ~101px half-width at the 84px mono size, so +120 clears it).
+    # Vertical budget inside the 190-tall tile (0.62.0, F8, design sizes;
+    # page y with gy = 84): header 84..104, hero digits' ink 127..189 (the
+    # 84 px hero from gy+14), note ink 196..215 (gy+108), bottom row from
+    # 220 (ink 223..), the tile ends 254. See grind_hero_dy in _init_layout.
+    # Hero and note are CENTRED on the tile (owner request).
     set gmid [expr {$L(grind_x) + $L(grind_w) / 2.0}]
-    var $p $gmid [expr {$gy + 20}] {[::lumen::data::grind_next]} \
-        -font $L(font_hero) -fill $C(crema) -anchor n -justify center
+    # 0.59.1: crema_ink -- text on the accent tile (plain crema read at
+    # 2.8:1 over the bloom on a light base).
+    var $p $gmid [expr {$gy + $L(grind_hero_dy)}] {[::lumen::data::grind_next]} \
+        -font $L(font_hero) -fill $C(crema_ink) -anchor n -justify center
     # 0.43.1: the delta in the secondary ink, not green -- it is a
     # direction, not a verdict.
-    var $p [expr {$gmid + 120}] [expr {$gy + 60}] {[::lumen::data::grind_delta]} \
-        -font $L(font_primary) -fill $C(ink_2)
+    # 0.61.1: right-aligned to the tile's inner edge, growing leftward. The
+    # hero can now be five characters ("12.25" on a 0.25 step) and the move
+    # is words ("coarser by 2.25"); from gmid+120 the two came within ~10 px
+    # on the tablet and touched at font_scale 1.0.
+    # 0.62.0 (F8): in the body size (19 px; it drew at 20 on the tablet
+    # through 0.61.1). At the design 22 px "coarser by 2.25" (~168 px, from
+    # 474) met a five-character hero (~252 px, 215..467) within ~5 px;
+    # at 19 px (~140 px) it starts near 500, ~27-35 px clear.
+    var $p [expr {$L(grind_x) + $L(grind_w) - $L(pad_x)}] [expr {$gy + $L(grind_delta_dy)}] {[::lumen::data::grind_delta]} \
+        -font $L(font_body) -fill $C(ink_2) -anchor ne -justify right
 
-    var $p $gmid [expr {$gy + 106}] {[::lumen::data::grind_note]} \
-        -font $L(font_body) -fill $C(ink_2) -width 560 \
+    var $p $gmid [expr {$gy + $L(grind_note_dy)}] {[::lumen::data::grind_note]} \
+        -font $L(font_body) -fill $C(ink_2) -width $L(grind_note_w) \
         -anchor n -justify center
 
-    # Method chip, top right. Blank until there is a recommendation.
+    # The chip, top right: how sure the number is (0.61.1, plain words; it
+    # named the rung until 0.60.0). The pill is baked into the home art --
+    # this glass call draws only on an unbaked page.
     set mchip_x [expr {$L(grind_x) + $L(grind_w) - $L(pad_x) - 150}]
     glass $p $mchip_x $gy 150 26 -radius 13 \
         -fill $C(crema_lo) -outline $C(crema_brd) -spec 0
     var $p [expr {$mchip_x + 75}] [expr {$gy + 13}] {[::lumen::data::grind_method]} \
-        -font $L(font_label) -fill $C(crema) -anchor center -justify center
+        -font $L(font_label) -fill $C(crema_ink) -anchor center -justify center
 
-    # Confidence band: three stacked items, coloured by what it says.
+    # Confidence band: stacked items, coloured by what it says.
     # 0.56.1: the whole bottom row sits on L(hist_y), the same row the
     # last-shot tile uses, so the two tiles' footers line up (they were
     # 4 px apart: gy + 140 = 224 against 220).
-    foreach {code col} [list \
-        {[::lumen::data::grind_band_good]}    $C(good) \
-        {[::lumen::data::grind_band_poor]}    $C(warn) \
-        {[::lumen::data::grind_band_neutral]} $C(ink_2)] {
-        var $p $gx $L(hist_y) $code -font $L(font_caption) -fill $col
+    # 0.59.1: the verdict is a status dot (good / warn) at the tile's edge
+    # and the words of a rated band follow it in the secondary ink; the
+    # neutral line (starting estimate, Fair, anything unrecognised) keeps
+    # the edge, dotless. See ::lumen::data::_band_dot.
+    foreach {code col dx} [list \
+        {[::lumen::data::grind_band_dot_good]} $C(good)  0 \
+        {[::lumen::data::grind_band_dot_poor]} $C(warn)  0 \
+        {[::lumen::data::grind_band_rated]}    $C(ink_2) $L(band_dot_dx) \
+        {[::lumen::data::grind_band_neutral]}  $C(ink_2) 0] {
+        var $p [expr {$gx + $dx}] $L(hist_y) $code -font $L(font_caption) -fill $col
     }
 
+    # 0.59.1: the links in crema_ink (crema read at 2.8:1 on the tile).
     txt $p [expr {$L(grind_x) + $L(grind_w) - $L(pad_x)}] \
         $L(hist_y) \
-        [translate "Shot analysis"] -font $L(font_caption) -fill $C(crema) \
+        [translate "Shot analysis"] -font $L(font_caption) -fill $C(crema_ink) \
         -anchor ne -justify right
 
     # "Curve" sits on the same baseline as "Shot analysis", one lg gap to its
     # left, and opens GrindAdvisor's calibration plot directly.
     set gcv_r [expr {$L(grind_x) + $L(grind_w) - $L(pad_x) - 130}]
     txt $p $gcv_r $L(hist_y) \
-        [translate "Curve"] -font $L(font_caption) -fill $C(crema) \
+        [translate "Curve"] -font $L(font_caption) -fill $C(crema_ink) \
         -anchor ne -justify right
 
     # The tile tap is carved into three rectangles around the Curve target,
@@ -6182,7 +7367,7 @@ proc ::lumen::build_home {} {
         [translate "DOSE"]  {[::lumen::data::last_dose]} \
         [translate "YIELD"] {[::lumen::data::last_yield]} \
         [translate "TIME"]  {[::lumen::data::last_time]} ] {
-        set cx [expr {$L(last_met_x) + $i * $L(last_met_pitch)}]
+        set cx [::lumen::last_met_col $i]
         txt $p $cx $L(last_met_label_y) $k -font $L(font_label) -fill $C(ink_3)
         var $p $cx $L(last_met_val_y) $code -font $L(font_section) -fill $C(ink)
         if { $k eq [translate "YIELD"] } {
@@ -6197,16 +7382,17 @@ proc ::lumen::build_home {} {
     # card, which gave it more weight than a history shortcut deserves.
     set lh_r [expr {$L(last_x) + $L(last_w) - $L(pad_x)}]
     txt $p $lh_r $L(hist_y) [translate "Shot history"] \
-        -font $L(font_caption) -fill $C(crema) -anchor ne -justify right
+        -font $L(font_caption) -fill $C(crema_ink) -anchor ne -justify right
     tap $p [expr {$lh_r - 150}] [expr {$L(hist_y) - 8}] 150 40 \
         {::lumen::act::shot_history} "Shot history" label
 
     # 0.43.1: WHEN the shot was pulled, on the same bottom row at the
     # card's left edge -- the card can now legitimately describe a shot
     # from days ago (a bag with only a cleaning run since, or a fresh bag
-    # showing the previous bag's last shot), and it never said so. Widest
-    # string "Wed 12 Sep 12:40 PM" is ~150 px at the caption size, ending
-    # near 860; the Shot history zone starts at 1150.
+    # showing the previous bag's last shot), and it never said so.
+    # 0.62.0 (F21): date + age on this one row (see last_shot_when); the
+    # widest, "Wed Sep 30 2025 12:40 PM . 368 days ago", is ~340 px at the
+    # caption size, ending near 1046; the Shot history zone starts at 1150.
     var $p $lx $L(hist_y) {[::lumen::data::last_shot_when]} \
         -font $L(font_caption) -fill $C(ink_3)
 
@@ -6223,12 +7409,15 @@ proc ::lumen::build_home {} {
     # readable -- 9.3 on the temperature line is 93 degrees, 3.8 on the
     # weight line is 38 g. Plain words until there is a shot. Pitch 170
     # (was 110) for the longer strings; 4 x 170 = 680 of the 1260 inside.
+    # 0.59.1: each legend in its series' INK (c_*_ink: the series hue,
+    # guarded to 4.5:1 on the panel); the lines keep the series colours,
+    # which read at 2.5-3.4:1 as 16 px text on light glass.
     set i 0
     foreach {code col} [list \
-        {[::lumen::data::legend_pressure]} $C(c_press) \
-        {[::lumen::data::legend_flow]}     $C(c_flow) \
-        {[::lumen::data::legend_weight]}   $C(c_weight) \
-        {[::lumen::data::legend_temp]}     $C(c_temp) ] {
+        {[::lumen::data::legend_pressure]} $C(c_press_ink) \
+        {[::lumen::data::legend_flow]}     $C(c_flow_ink) \
+        {[::lumen::data::legend_weight]}   $C(c_weight_ink) \
+        {[::lumen::data::legend_temp]}     $C(c_temp_ink) ] {
         var $p [expr {$cx + $i * 170}] $cy $code \
             -font $L(font_caption) -fill $col
         incr i
@@ -6279,9 +7468,10 @@ proc ::lumen::build_home {} {
         -textvariable {[::lumen::data::clean_banner_left]} \
         -font $L(font_primary) -fill white -anchor w -justify left \
         -tags [_tags "" "" lumen_cbanner_l]]
+    # 0.62.0 (F8): the right line in the caption size (see _cbanner_texts).
     uplevel #0 [list dui add variable $p [X [expr {$bx2 - $L(pad_x)}]] [Y $bmid] \
         -textvariable {[::lumen::data::clean_banner_right]} \
-        -font $L(font_body) -fill white -anchor e -justify right \
+        -font $L(font_caption) -fill white -anchor e -justify right \
         -tags [_tags "" "" lumen_cbanner_r]]
     # style none: no flash (the banner switching off is the answer), the
     # 0.57.3 favorite-slot precedent.
@@ -6343,8 +7533,14 @@ proc ::lumen::build_home {} {
             [expr {$L(cyc_y) + $L(cyc_h) / 2.0}] $glyph \
             -font $L(font_caption) -fill $C(crema) \
             -anchor center -justify center
-        tap $p $ax $L(cyc_y) $L(cyc_w) $L(cyc_h) \
-            "::lumen::act::cycle_bag $dir" $lbl
+        # 0.59.2 (F14): a 70x80 zone -- cyc_hit_out outward, cyc_hit_in
+        # toward Edit -- with the flash still on the arrow's pill.
+        set zx [expr {$ax - ($dir < 0 ? $L(cyc_hit_out) : $L(cyc_hit_in))}]
+        tap $p $zx [expr {$L(cyc_y) - $L(step_hit_v)}] \
+            [expr {$L(cyc_w) + $L(cyc_hit_out) + $L(cyc_hit_in)}] \
+            [expr {$L(cyc_h) + 2 * $L(step_hit_v)}] \
+            "::lumen::act::cycle_bag $dir" $lbl \
+            [list chip $ax $L(cyc_y) $L(cyc_w) $L(cyc_h)]
     }
 
     glass $p $L(id_edit_x) $L(id_act_y) $L(id_edit_w) $L(id_edit_h) \
@@ -6398,7 +7594,8 @@ proc ::lumen::build_home {} {
                 [expr {$mid_y + ($glyph eq "-" ? $L(step_minus_dy) : 0)}] $glyph \
                 -font $L(font_section) -fill $C(crema) \
                 -anchor center -justify center
-            tap $p $sx $L(step_y) $L(step_w) $L(step_h) $scode $lbl
+            step_tap $p $sx $L(step_y) $L(step_w) $L(step_h) \
+                [expr {$glyph eq "-" ? -1 : 1}] $scode $lbl
         }
 
         # The value, centred between the pills. YIELD carries the derived
@@ -6443,9 +7640,10 @@ proc ::lumen::build_home {} {
 
     glass $p $L(scale_set_x) $L(scale_y) $L(scale_set_w) $L(scale_h) \
         -radius $L(radius_sm) -fill $C(crema_lo) -outline $C(crema_brd)
+    # 0.59.1: accent-pill labels in crema_ink (crema read at 2.9-3.1:1).
     txt $p [expr {$L(scale_set_x) + $L(scale_set_w) / 2.0}] $mid \
         [translate "Set dose"] \
-        -font $L(font_button) -fill $C(crema) -anchor center -justify center
+        -font $L(font_button) -fill $C(crema_ink) -anchor center -justify center
     tap $p $L(scale_set_x) $L(scale_y) $L(scale_set_w) $L(scale_h) \
         {::lumen::act::set_dose_from_scale} "Set dose"
 
@@ -6461,7 +7659,7 @@ proc ::lumen::build_home {} {
         -radius $L(radius_sm) -fill $C(crema_lo) -outline $C(crema_brd)
     txt $p [expr {$L(act_scan_x) + $L(act_w) / 2.0}] \
         [expr {$L(scale_y) + $L(act_h) / 2.0}] \
-        [translate "Scan bag"] -font $L(font_button) -fill $C(crema) \
+        [translate "Scan bag"] -font $L(font_button) -fill $C(crema_ink) \
         -anchor center -justify center
     tap $p $L(act_scan_x) $L(scale_y) $L(act_w) $L(act_h) \
         {::lumen::act::scan_bag} "Scan bag"
@@ -6505,9 +7703,10 @@ proc ::lumen::build_flow_page { page timer_code temp_code {with_chart 0} {temp_l
         -font $L(font_title) -fill $C(ink) -anchor n -justify center \
         -width $panel_w
 
-    # Elapsed time, the thing you actually watch.
+    # Elapsed time, the thing you actually watch. 0.59.1: crema_ink -- it
+    # sits on the page's bloom, which on a light custom base is the accent.
     var $page $L(center_x) $timer_y $timer_code \
-        -font $L(font_hero) -fill $C(crema) -anchor n -justify center
+        -font $L(font_hero) -fill $C(crema_ink) -anchor n -justify center
 
     # Live curves, drawn as the shot runs. Same vectors and the same
     # smoothing setting as the home chart; the toggle drives both.
@@ -6535,12 +7734,14 @@ proc ::lumen::build_flow_page { page timer_code temp_code {with_chart 0} {temp_l
     set px [expr {$panel_x + $L(pad_x)}]
     set cw [expr {($panel_w - 2 * $L(pad_x)) / 4.0}]
 
+    # 0.59.1: the readings in the series INKS (c_*_ink), as the home
+    # legend: on light glass the line colours read at 2.5-3.0:1.
     set i 0
     foreach {label code colour} [list \
-        [translate "PRESSURE"]   {[pressure_text]}              $C(c_press) \
-        [translate "FLOW"]       {[waterflow_text]}             $C(c_flow) \
-        [translate "WEIGHT"]     {[::lumen::data::live_weight]} $C(c_weight) \
-        [translate $temp_label]  $temp_code                     $C(c_temp) ] {
+        [translate "PRESSURE"]   {[pressure_text]}              $C(c_press_ink) \
+        [translate "FLOW"]       {[waterflow_text]}             $C(c_flow_ink) \
+        [translate "WEIGHT"]     {[::lumen::data::live_weight]} $C(c_weight_ink) \
+        [translate $temp_label]  $temp_code                     $C(c_temp_ink) ] {
         set cx [expr {$px + $i * $cw}]
         txt $page $cx [expr {$panel_y + 30}] $label \
             -font $L(font_label) -fill $C(ink_3)
@@ -6593,24 +7794,26 @@ proc ::lumen::build_message_page {} {
             -width [expr {$L(msg_panel_w) - 2 * $L(xl)}]
         # The core's own retry hint ("Touch screen to retry" once the
         # machine reports a substate), exactly as the stock page shows it.
+        # 0.59.1: crema_ink (the panel sits on the page's bloom).
         var $p $L(center_x) $L(msg_retry_y) {[refill_kit_retry_button]} \
-            -font $L(font_body) -fill $C(crema) -anchor n -justify center
+            -font $L(font_body) -fill $C(crema_ink) -anchor n -justify center
         # Live tank level, the taskbar's two stacked items (blue / amber).
         var $p $L(center_x) $L(msg_water_y) {[::lumen::data::water_ml]} \
-            -font $L(font_data) -fill $C(c_flow) -anchor n -justify center
+            -font $L(font_data) -fill $C(c_flow_ink) -anchor n -justify center
         var $p $L(center_x) $L(msg_water_y) {[::lumen::data::water_ml_low]} \
             -font $L(font_data) -fill $C(warn) -anchor n -justify center
     }
 
-    # Button labels. Exit App exists on tankempty only (as in the stock
-    # file); Ok on both.
+    # Button labels. Exit exists on tankempty only (as in the stock
+    # file); Ok on both. 0.62.1 (F23): "Exit app", sentence case (the
+    # stock file's "Exit App").
     txt tankempty [expr {$L(msg_exit_x) + $L(msg_btn_w) / 2.0}] \
-        [expr {$L(msg_btn_y) + $L(msg_btn_h) / 2.0}] [translate "Exit App"] \
+        [expr {$L(msg_btn_y) + $L(msg_btn_h) / 2.0}] [translate "Exit app"] \
         -font $L(font_button) -fill $C(ink_2) -anchor center -justify center
     foreach p $pages {
         txt $p [expr {$L(msg_ok_x) + $L(msg_btn_w) / 2.0}] \
             [expr {$L(msg_btn_y) + $L(msg_btn_h) / 2.0}] [translate "Ok"] \
-            -font $L(font_button) -fill $C(crema) -anchor center -justify center
+            -font $L(font_button) -fill $C(crema_ink) -anchor center -justify center
     }
 
     # The three stock zones, VERBATIM from standard_includes.tcl (virtual
@@ -6700,7 +7903,7 @@ proc ::lumen::act::theme_apply {} {
         theme_cancel
         return
     }
-    ::lumen::theme_page_status [translate "Drawing your theme..."]
+    ::lumen::theme_page_status "[translate {Drawing your theme}][::lumen::glyph ellipsis]"
     if { ![::lumen::act::_switch_theme custom] } {
         ::lumen::theme_page_status [translate "Could not draw this theme. See the log."]
         return
@@ -6717,9 +7920,10 @@ proc ::lumen::act::theme_apply {} {
 proc ::lumen::act::_bake_other_half {} {
     set pr [::lumen::custom::prefs]
     if { [dict get $pr base] ne "auto" || $::lumen::_flat_pages } { return }
-    set other [expr {[dict get $pr eff] eq "light" ? "dark" : "light"}]
-    ::lumen::theme_page_status "[translate {Drawing the}] [translate $other] [translate {glass for later...}]"
-    ::lumen::wait_show "[translate {Drawing the}] [translate $other] [translate {glass for later...}]"
+    set other [::lumen::_pick [expr {[dict get $pr eff] eq "light"}] dark light]
+    set line "[translate {Drawing the}] [translate $other] [translate {glass for later}][::lumen::glyph ellipsis]"
+    ::lumen::theme_page_status $line
+    ::lumen::wait_show $line
     if { [catch { set ok [::lumen::custom::ensure_bake $other] } err] } { set ok 0 ; msg -ERROR "Lumen: other half bake threw: $err" }
     ::lumen::wait_hide
     if { !$ok } { msg -ERROR "Lumen: the $other half of the auto set could not be drawn now; it will be drawn at the first flip" }
@@ -6750,18 +7954,20 @@ proc ::lumen::refresh_preview {} {
     if { [catch {
         set P [::lumen::custom::palette $pend(base) $pend(bh) $pend(bs) $pend(ah) $pend(as)]
         set can [dui canvas]
-        foreach tok {bg glass glass_2 glass_brd ink ink_2 ink_3 crema crema_lo crema_brd good} {
+        # 0.59.1: + crema_ink (the miniature's hero).
+        foreach tok {bg glass glass_2 glass_brd ink ink_2 ink_3 crema crema_ink crema_lo crema_brd good} {
             set v [dict get $P $tok]
             $can itemconfigure lumen_thp_$tok -fill $v
             $can itemconfigure lumen_tho_$tok -outline $v
         }
         # Base pills: the selected one takes the accent look (0.56.0: Auto
-        # is a third base, one of the three is selected).
+        # is a third base, one of the three is selected). 0.59.1: its label
+        # in crema_ink (crema on the wash read at 2.7-3.1:1 on light glass).
         foreach b {dark light auto} {
             set on [expr {$pend(base) eq $b}]
-            $can itemconfigure lumen_thb_$b -fill [expr {$on ? $C(crema_lo) : $C(glass_2)}] \
-                -outline [expr {$on ? $C(crema_brd) : $C(glass_brd)}]
-            $can itemconfigure lumen_thbt_$b -fill [expr {$on ? $C(crema) : $C(ink_2)}]
+            $can itemconfigure lumen_thb_$b -fill [::lumen::_pick $on $C(crema_lo) $C(glass_2)] \
+                -outline [::lumen::_pick $on $C(crema_brd) $C(glass_brd)]
+            $can itemconfigure lumen_thbt_$b -fill [::lumen::_pick $on $C(crema_ink) $C(ink_2)]
         }
         # 0.51.0: a swatch is selected when BOTH its hue and saturation are
         # the pending ones (a preset's values may match none).
@@ -6772,16 +7978,28 @@ proc ::lumen::refresh_preview {} {
                 lassign $sw h s
                 set on [expr {$pend($key) == $h && $pend($sk) == $s}]
                 $can itemconfigure lumen_ths_${key}_$i \
-                    -outline [expr {$on ? $C(ink) : $C(glass_brd)}] -width [expr {$on ? 6 : 2}]
+                    -outline [::lumen::_pick $on $C(ink) $C(glass_brd)] -width [expr {$on ? 6 : 2}]
                 incr i
             }
         }
+        # 0.59.1: each preset pill also gets its OWN page colour back. The
+        # pill is drawn through rounded_rect, so when a preset's bg equals
+        # the live theme's bg (the owner's saved set is the Lumen light
+        # preset) _tags files it under lumen_c_bg, and apply_theme's role
+        # walk then repainted it with the NEW page colour after a live
+        # switch or an Auto flip -- under a label still in the preset's
+        # own ink. apply_theme calls this proc last, so the fill is restored
+        # after every walk.
+        variable ::lumen::preset_bg
         for { set i 0 } { $i < [llength $presets] / 6 } { incr i } {
             lassign [lrange $presets [expr {$i * 6 + 1}] [expr {$i * 6 + 5}]] pb ph ps pa pas
             set on [expr {$pend(base) eq $pb && $pend(bh) == $ph && $pend(bs) == $ps \
                           && $pend(ah) == $pa && $pend(as) == $pas}]
             $can itemconfigure lumen_thpr_$i \
-                -outline [expr {$on ? $C(ink) : $C(glass_brd)}] -width [expr {$on ? 6 : 2}]
+                -outline [::lumen::_pick $on $C(ink) $C(glass_brd)] -width [expr {$on ? 6 : 2}]
+            if { [info exists preset_bg] && $i < [llength $preset_bg] } {
+                $can itemconfigure lumen_thpr_$i -fill [lindex $preset_bg $i]
+            }
         }
         _preview_render $P
     } err] } {
@@ -6826,7 +8044,7 @@ proc ::lumen::build_theme_page {} {
 
     txt $p $L(center_x) 24 [translate "Custom theme"] \
         -font $L(font_title) -fill $C(ink) -anchor n -justify center
-    var $p $L(center_x) 72 {[::lumen::data::version_line]} \
+    var $p $L(center_x) $L(hdr_ver_y) {[::lumen::data::version_line]} \
         -font $L(font_caption) -fill $C(ink_3) -anchor n -justify center
 
     set lx $L(thp_x) ; set lw $L(thp_w) ; set ix [expr {$lx + $L(pad_x)}]
@@ -6834,20 +8052,25 @@ proc ::lumen::build_theme_page {} {
     # ---- BASE, with the Auto schedule (0.55.0) ----
     # Three pills right-aligned to the card's inner edge: Dark and Light
     # (the pending custom base, as before) and Auto (the schedule toggle,
-    # persisted at once). The second line is the schedule itself: "Auto:"
-    # then today's sunrise and sunset (0.59.0; display only -- the 0.56.0
-    # tap-to-step time zones are gone).
+    # persisted at once). The second line is the schedule itself: today's
+    # sunrise and sunset (0.59.0; display only -- the 0.56.0 tap-to-step
+    # time zones are gone). 0.62.0 (F21): the times follow the CLOCK row's
+    # 12/24 h, and "Sunrise 06:10 AM  Sunset 06:06 PM" did not fit after an
+    # "Auto:" lead before the Dark pill -- the lead is gone (the Auto pill
+    # beside the line names the schedule) and sunset sits thp_sun_dx in.
     set by $L(thp_base_y)
     glass $p $lx $by $lw $L(thp_base_h)
     txt $p $ix [expr {$by + 18}] [translate "BASE"] -font $L(font_label) -fill $C(ink_3)
-    txt $p $ix [expr {$by + 44}] [translate "Auto:"] -font $L(font_caption) -fill $C(ink_2)
-    foreach which {light dark} dx {52 172} {
+    foreach which {light dark} dx [list 0 $L(thp_sun_dx)] {
         var $p [expr {$ix + $dx}] [expr {$by + 44}] "\[::lumen::data::auto_[set which]_text\]" \
             -font $L(font_caption) -fill $C(ink_2)
     }
     set pr [expr {$lx + $lw - $L(pad_x)}]
-    foreach {b bx bw lbl} [list dark [expr {$pr - 304}] 96 "Dark" light [expr {$pr - 200}] 96 "Light" \
-                               auto [expr {$pr - 96}] 96 "Auto"] {
+    # 0.62.0: pill width and gap are layout tokens (88 / 8; 96 / 8 before).
+    set bw0 $L(thp_base_pill_w) ; set bg0 $L(thp_base_pill_gap)
+    foreach {b bx bw lbl} [list dark [expr {$pr - 3 * $bw0 - 2 * $bg0}] $bw0 "Dark" \
+                               light [expr {$pr - 2 * $bw0 - $bg0}] $bw0 "Light" \
+                               auto [expr {$pr - $bw0}] $bw0 "Auto"] {
         set py [expr {$by + 16}]
         rounded_rect $p [X $bx] [Y $py] [X [expr {$bx + $bw}]] [Y [expr {$py + 48}]] [X 32] \
             -fill $C(glass_2) -outline $C(glass_brd) -width 2 -tags [list lumen_thi_[incr n] lumen_thb_$b]
@@ -6886,16 +8109,22 @@ proc ::lumen::build_theme_page {} {
     glass $p $lx $ry $lw $L(thp_pre_h)
     txt $p $ix [expr {$ry + 18}] [translate "PRESETS"] -font $L(font_label) -fill $C(ink_3)
     set pw $L(thp_pre_w) ; set pg $L(thp_pre_gap) ; set pph $L(thp_pre_ph)
+    # 0.59.1: each pill's own page colour, for refresh_preview to restore
+    # after a role walk (see there).
+    variable ::lumen::preset_bg
+    set preset_bg {}
     for { set i 0 } { $i < [llength $presets] / 6 } { incr i } {
         lassign [lrange $presets [expr {$i * 6}] [expr {$i * 6 + 5}]] name pb ph ps pa pas
         set PP [::lumen::custom::palette $pb $ph $ps $pa $pas]
+        lappend preset_bg [dict get $PP bg]
         set px [expr {$ix + ($i % 3) * ($pw + $pg)}]
         set py [expr {$ry + $L(thp_row1) + ($i / 3) * ($pph + $pg)}]
         rounded_rect $p [X $px] [Y $py] [X [expr {$px + $pw}]] [Y [expr {$py + $pph}]] [X 24] \
             -fill [dict get $PP bg] -outline $C(glass_brd) -width 2 \
             -tags [list lumen_thi_[incr n] lumen_thpr_$i]
+        # 0.59.1: the preset's own crema_ink (text), guarded on its page.
         dui add dtext $p [X [expr {$px + $pw / 2.0}]] [Y [expr {$py + $pph / 2.0}]] -text [translate $name] \
-            -font $L(font_label) -fill [dict get $PP crema] -anchor center -justify center \
+            -font $L(font_label) -fill [dict get $PP crema_ink] -anchor center -justify center \
             -tags [list lumen_thi_[incr n]]
         tap $p $px $py $pw $pph "::lumen::act::theme_preset $i" $name
     }
@@ -6925,20 +8154,34 @@ proc ::lumen::build_theme_page {} {
     # placed from the card's TOP in design px, the hero one size down
     # (primary), and neither bbox crosses the other or the card edge.
     set gc_top [expr {$my + 64 * $k}]
-    dui add dtext $p [X [expr {$mx + (16 + 325) * $k}]] [Y [expr {$gc_top + 13.5}]] -text "2.8" \
-        -font $L(font_primary) -fill $C(crema) -anchor center -justify center \
-        -tags [list lumen_thi_[incr n] lumen_thp_crema]
-    dui add dtext $p [X [expr {$mx + 40 * $k}]] [Y [expr {$gc_top + 36.5}]] -text "[translate Good] - 12 [translate shots]" \
+    # 0.59.1: the miniature follows the real tile -- the hero in crema_ink,
+    # the band as a good dot and the words in ink_2, one dot-width in.
+    # 0.62.0: it follows the 0.61.1 tile -- the chip word ("High") on the
+    # chip, top right, and the footer "12 shots on this bag" (the stale
+    # "High - 12 shots" went). F8: the two rows at +11.5 / +38.5 (were
+    # +13.5 / +36.5): the 22 px hero's box (28 tall) reached the footer's.
+    dui add dtext $p [X [expr {$mx + (16 + 325) * $k}]] [Y [expr {$gc_top + 11.5}]] -text "2.8" \
+        -font $L(font_primary) -fill $C(crema_ink) -anchor center -justify center \
+        -tags [list lumen_thi_[incr n] lumen_thp_crema_ink]
+    dui add dtext $p [X [expr {$mx + (16 + 650 - 24 - 75) * $k}]] [Y [expr {$gc_top + (20 + 13) * $k}]] \
+        -text [translate High] \
+        -font $L(font_label) -fill $C(crema_ink) -anchor center -justify center \
+        -tags [list lumen_thi_[incr n] lumen_thp_crema_ink]
+    dui add dtext $p [X [expr {$mx + 40 * $k}]] [Y [expr {$gc_top + 38.5}]] -text [format %c 0x25CF] \
         -font $L(font_caption) -fill $C(good) -anchor w -justify left \
         -tags [list lumen_thi_[incr n] lumen_thp_good]
+    dui add dtext $p [X [expr {$mx + 40 * $k + $L(band_dot_dx)}]] [Y [expr {$gc_top + 38.5}]] \
+        -text "12 [translate {shots on this bag}]" \
+        -font $L(font_caption) -fill $C(ink_2) -anchor w -justify left \
+        -tags [list lumen_thi_[incr n] lumen_thp_ink_2]
     # last-shot card (682,64 642x190). 0.53.1: the two lines sit on the
-    # grind card's baselines (+13.5 / +36.5 from the card top) -- at the
-    # 282-wide scale their old 84-design-px pitch was 17.7 px, and the
-    # verify run flagged the caption against the values row.
-    dui add dtext $p [X [expr {$mx + 706 * $k}]] [Y [expr {$gc_top + 13.5}]] -text [translate "LAST SHOT"] \
+    # grind card's baselines (+11.5 / +38.5 from the card top since 0.62.0)
+    # -- at the 282-wide scale their old 84-design-px pitch was 17.7 px, and
+    # the verify run flagged the caption against the values row.
+    dui add dtext $p [X [expr {$mx + 706 * $k}]] [Y [expr {$gc_top + 11.5}]] -text [translate "LAST SHOT"] \
         -font $L(font_caption) -fill $C(ink_3) -anchor w -justify left \
         -tags [list lumen_thi_[incr n] lumen_thp_ink_3]
-    dui add dtext $p [X [expr {$mx + 706 * $k}]] [Y [expr {$gc_top + 36.5}]] -text "2.1  19.0  38.0" \
+    dui add dtext $p [X [expr {$mx + 706 * $k}]] [Y [expr {$gc_top + 38.5}]] -text "2.1  19.0  38.0" \
         -font $L(font_caption) -fill $C(ink) -anchor w -justify left \
         -tags [list lumen_thi_[incr n] lumen_thp_ink]
     # next-shot strip (16,574 1308x210): the bean name only. 0.52.1: the
@@ -6969,6 +8212,11 @@ proc ::lumen::build_theme_page {} {
     }
 
     # Token chips: the derived colours themselves, labelled.
+    # 0.59.1: the chip captions and the two notes sit on the CURRENT
+    # theme's glass card, so they take the current inks (role tags); in the
+    # pending palette's inks they went unreadable whenever the pending base
+    # differed (a light-glass ink_3 read at ~2.6:1 on dark glass). Only the
+    # miniature's labels, drawn over the pending home page, stay pending.
     set cy $L(thp_chip_y) ; set cw $L(thp_chip_w) ; set ch $L(thp_chip_h)
     set i 0
     foreach {tok lbl} [list bg "Page" glass "Glass" ink "Text" crema "Accent" crema_lo "Chip"] {
@@ -6978,29 +8226,31 @@ proc ::lumen::build_theme_page {} {
             -tags [list lumen_thi_[incr n] lumen_thp_$tok lumen_tho_glass_brd]
         dui add dtext $p [X [expr {$cx + $cw / 2.0}]] [Y [expr {$cy + $ch + 6}]] -text [translate $lbl] \
             -font $L(font_caption) -fill $C(ink_3) -anchor n -justify center \
-            -tags [list lumen_thi_[incr n] lumen_thp_ink_3]
+            -tags [_tags $C(ink_3) ""]
         incr i
     }
 
     dui add dtext $p [X $mx] [Y $L(thp_note_y)] -width [X $mw] -anchor nw -justify left \
         -text [translate "Tap Done: every page switches to these colours at once. New colours take a few seconds to draw."] \
-        -font $L(font_caption) -fill $C(ink_2) -tags [list lumen_thi_[incr n] lumen_thp_ink_2]
+        -font $L(font_caption) -fill $C(ink_2) -tags [_tags $C(ink_2) ""]
     dui add dtext $p [X $mx] [Y $L(thp_note2_y)] -width [X $mw] -anchor nw -justify left \
         -text [translate "Contrast is guarded: labels and the accent always stay readable on the glass."] \
-        -font $L(font_caption) -fill $C(ink_3) -tags [list lumen_thi_[incr n] lumen_thp_ink_3]
+        -font $L(font_caption) -fill $C(ink_3) -tags [_tags $C(ink_3) ""]
     # Status line for the live apply ("Drawing your theme..." / the
-    # failure), in the CURRENT theme's accent, blank otherwise.
-    txt $p $mx $L(thp_status_y) "" -font $L(font_caption) -fill $C(crema) -width $mw -tags lumen_th_status
+    # failure), in the CURRENT theme's accent ink, blank otherwise.
+    txt $p $mx $L(thp_status_y) "" -font $L(font_caption) -fill $C(crema_ink) -width $mw -tags lumen_th_status
 
     # ---- Cancel / Done (0.53.1: under the taller presets card) ----
+    # 0.59.1: both labels in crema_ink (Cancel sits on the page, Done on
+    # the accent pill; crema read at 2.0-3.1:1 there on light glass).
     set dy $L(thp_done_y)
-    txt $p 194 [expr {$dy + 26}] [translate "Cancel"] -font $L(font_button) -fill $C(crema)
+    txt $p 194 [expr {$dy + 26}] [translate "Cancel"] -font $L(font_button) -fill $C(crema_ink)
     tap $p 170 [expr {$dy + 10}] 120 56 {::lumen::act::theme_cancel} "Cancel" label
     set dw $L(set_done_w) ; set dh $L(set_done_h)
     set dx [expr {$L(center_x) - $dw / 2}]
     glass $p $dx $dy $dw $dh -radius $L(radius_sm) -fill $C(crema_lo) -outline $C(crema_brd)
     txt $p [expr {$dx + $dw / 2.0}] [expr {$dy + $dh / 2.0}] [translate "Done"] \
-        -font $L(font_button) -fill $C(crema) -anchor center -justify center
+        -font $L(font_button) -fill $C(crema_ink) -anchor center -justify center
     tap $p $dx $dy $dw $dh {::lumen::act::theme_apply} "Done"
 }
 
@@ -7046,29 +8296,29 @@ proc ::lumen::settings_stepper_row { p x y w label notecode valcode \
             [expr {$gmid_y + ($glyph eq "-" ? $L(step_minus_dy) : 0)}] $glyph \
             -font $L(font_section) -fill $C(crema) \
             -anchor center -justify center
-        tap $p $sx $gy $sw $sh $scode $lbl
+        step_tap $p $sx $gy $sw $sh [expr {$glyph eq "-" ? -1 : 1}] $scode $lbl
     }
     var $p [expr {$gx + $sw + $sg + $svw / 2.0}] $gmid_y $valcode \
         -font $L(font_data) -fill $C(ink) -anchor center -justify center
 }
 
 # A settings row whose -/+ pills drive one of TWO settings, with a tappable
-# mode line choosing which (0.26.0, owner request: STEAM alternates time and
-# flow, HOT WATER temperature and volume).
+# mode control choosing which (0.26.0, owner request: STEAM alternates time
+# and flow, HOT WATER temperature and volume).
 #
 # Same panel, same pills, same x geometry as settings_stepper_row -- so the
 # baked background does not change and nothing was re-rendered for this. What
 # differs is inside the row:
 #
-#   * the caption line becomes MODE | other, in two text items. A canvas text
-#     item's -fill is fixed at creation, so the words move between a crema
-#     item and a dim one rather than the colours moving between fixed words.
+#   * 0.59.2 (F14): the mode control is a two-segment pill, [TIME | FLOW] or
+#     [TEMP | VOL], drawn live where the "TIME | flow" caption was (the same
+#     180x48 footprint its tap zone already had). See _mode_seg_sync.
 #   * the value stacks: the selected setting at 26px on the pill band's upper
 #     line, the other at 16px beneath it -- the same two-line arrangement the
 #     home strip's YIELD column already uses for its ratio.
 #
 # All arguments in DESIGN px.
-proc ::lumen::settings_dual_row { p x y w label active_code other_code \
+proc ::lumen::settings_dual_row { p x y w label name \
                                   valcode altcode dir_cmd toggle_cmd what } {
     variable C
     variable L
@@ -7081,16 +8331,32 @@ proc ::lumen::settings_dual_row { p x y w label active_code other_code \
     txt $p [expr {$x + $L(pad_x)}] [expr {$y + 26}] $label \
         -font $L(font_label) -fill $C(ink_3)
 
-    # Mode line. The selected half is the accent colour, the other dim.
-    var $p [expr {$x + $L(pad_x)}] [expr {$y + 56}] $active_code \
-        -font $L(font_label) -fill $C(crema)
-    var $p [expr {$x + $L(pad_x) + $L(set_mode_dx)}] [expr {$y + 56}] $other_code \
-        -font $L(font_label) -fill $C(ink_3)
-    # One tap over both words: with two modes, "tap the other one" and "toggle"
-    # are the same action, and one target cannot be mis-hit the way two 60px
-    # ones side by side can.
-    tap $p [expr {$x + $L(pad_x)}] [expr {$y + 40}] \
-        $L(set_mode_w) $L(set_mode_h) $toggle_cmd $what label
+    # The mode pill: a plain track (glass_2, role-tagged like the theme
+    # picker's pills), two halves inset 4px and 2px either side of the centre,
+    # and the two words centred on their halves -- created in that order, so
+    # each lies on the one before. Halves and words start with no fill;
+    # _mode_seg_sync paints them from the mode. Below the row label (see
+    # set_mode_dy).
+    set mx [expr {$x + $L(pad_x)}] ; set my [expr {$y + $L(set_mode_dy)}]
+    set mw $L(set_mode_w) ; set mh $L(set_mode_h) ; set hw [expr {$mw / 2.0}]
+    rounded_rect $p [X $mx] [Y $my] [X [expr {$mx + $mw}]] [Y [expr {$my + $mh}]] [X 32] \
+        -fill $C(glass_2) -outline $C(glass_brd) -width 2 -tags [list lumen_mtrack_$name]
+    foreach s {l r} hx0 [list [expr {$mx + 4}] [expr {$mx + $hw + 2}]] \
+            hx1 [list [expr {$mx + $hw - 2}] [expr {$mx + $mw - 4}]] {
+        rounded_rect $p [X $hx0] [Y [expr {$my + 4}]] [X $hx1] [Y [expr {$my + $mh - 4}]] [X 28] \
+            -fill "" -outline "" -width 2 -tags [list lumen_mseg_${name}_$s]
+    }
+    foreach s {l r} cx [list [expr {$mx + $hw / 2.0}] [expr {$mx + 1.5 * $hw}]] {
+        var $p $cx [expr {$my + $mh / 2.0}] "\[::lumen::data::mode_seg $name $s\]" \
+            -font $L(font_label) -fill "" -anchor center -justify center \
+            -tags [list lumen_mword_${name}_$s]
+    }
+    # One tap over the whole pill, set_mode_hit_v taller above and below
+    # (60 in all): with two modes, "tap the other one" and "toggle" are the
+    # same action. No press chip -- the pill shows its own state (the picker
+    # swatches' `none` rule).
+    tap $p $mx [expr {$my - $L(set_mode_hit_v)}] $mw [expr {$mh + 2 * $L(set_mode_hit_v)}] \
+        $toggle_cmd $what none
 
     set gx [expr {$x + $w - $L(pad_x) - (2 * $sw + 2 * $sg + $svw)}]
     set gy [expr {$y + ($rh - $sh) / 2}]
@@ -7103,7 +8369,7 @@ proc ::lumen::settings_dual_row { p x y w label active_code other_code \
             [expr {$gmid_y + ($glyph eq "-" ? $L(step_minus_dy) : 0)}] $glyph \
             -font $L(font_section) -fill $C(crema) \
             -anchor center -justify center
-        tap $p $sx $gy $sw $sh "$dir_cmd $d" $lbl
+        step_tap $p $sx $gy $sw $sh $d "$dir_cmd $d" $lbl
     }
 
     # Selected value on top, the other beneath it -- the YIELD column's
@@ -7122,11 +8388,14 @@ proc ::lumen::settings_dual_row { p x y w label active_code other_code \
 proc ::lumen::build_settings {} {
     variable C
     variable L
+    variable mode_seg_state
     set p "lumen_settings"
+    # 0.59.2: new mode-pill items start unpainted, so forget what was painted.
+    array unset mode_seg_state
 
     txt $p $L(center_x) 24 [translate "Lumen"] \
         -font $L(font_title) -fill $C(ink) -anchor n -justify center
-    var $p $L(center_x) 72 {[::lumen::data::version_line]} \
+    var $p $L(center_x) $L(hdr_ver_y) {[::lumen::data::version_line]} \
         -font $L(font_caption) -fill $C(ink_3) -anchor n -justify center
 
     # 0.53.0: the favorite slots' one management control, a text link in
@@ -7135,7 +8404,7 @@ proc ::lumen::build_settings {} {
     var $p [expr {$L(set_favclr_x) + $L(set_favclr_w)}] \
         [expr {$L(set_favclr_y) + $L(set_favclr_h) / 2.0}] \
         {[::lumen::data::fav_clear_label]} \
-        -font $L(font_caption) -fill $C(crema) -anchor e -justify right
+        -font $L(font_caption) -fill $C(crema_ink) -anchor e -justify right
     tap $p $L(set_favclr_x) $L(set_favclr_y) $L(set_favclr_w) $L(set_favclr_h) \
         {::lumen::act::clear_favorites} "Clear favorite profiles" label
 
@@ -7171,13 +8440,11 @@ proc ::lumen::build_settings {} {
             $minus_code $plus_code $what
     }
 
-    settings_dual_row $p $lx $ry2 $lw [translate "STEAM"] \
-        {[::lumen::data::steam_mode_active]} {[::lumen::data::steam_mode_other]} \
+    settings_dual_row $p $lx $ry2 $lw [translate "STEAM"] steam \
         {[::lumen::data::steam_value]} {[::lumen::data::steam_value_alt]} \
         ::lumen::act::adjust_steam ::lumen::act::toggle_steam_mode "Steam"
 
-    settings_dual_row $p $lx $ry4 $lw [translate "HOT WATER"] \
-        {[::lumen::data::water_mode_active]} {[::lumen::data::water_mode_other]} \
+    settings_dual_row $p $lx $ry4 $lw [translate "HOT WATER"] water \
         {[::lumen::data::water_value]} {[::lumen::data::water_value_alt]} \
         ::lumen::act::adjust_water ::lumen::act::toggle_water_mode "Hot water"
 
@@ -7231,7 +8498,7 @@ proc ::lumen::build_settings {} {
             [expr {$gmid_y + ($glyph eq "-" ? $L(step_minus_dy) : 0)}] $glyph \
             -font $L(font_section) -fill $C(crema) \
             -anchor center -justify center
-        tap $p $sx $gy $sw $sh $scode $lbl
+        step_tap $p $sx $gy $sw $sh [expr {$glyph eq "-" ? -1 : 1}] $scode $lbl
     }
     var $p [expr {$gx + $sw + $sg + $svw / 2.0}] $gmid_y \
         {[::lumen::data::bag_count_value]} \
@@ -7290,7 +8557,7 @@ proc ::lumen::build_settings {} {
             [expr {$gmid_y4 + ($glyph eq "-" ? $L(step_minus_dy) : 0)}] $glyph \
             -font $L(font_section) -fill $C(crema) \
             -anchor center -justify center
-        tap $p $sx $gy4 $sw $sh $scode $lbl
+        step_tap $p $sx $gy4 $sw $sh [expr {$glyph eq "-" ? -1 : 1}] $scode $lbl
     }
     var $p [expr {$gx + $sw + $sg + $svw / 2.0}] $gmid_y4 \
         {[::lumen::data::water_low_value]} \
@@ -7301,8 +8568,9 @@ proc ::lumen::build_settings {} {
     set dy $L(set_done_y)
     glass $p $dx $dy $dw $dh -radius $L(radius_sm) \
         -fill $C(crema_lo) -outline $C(crema_brd)
+    # 0.59.1: crema_ink (crema read at 3.0:1 on the accent pill).
     txt $p [expr {$dx + $dw / 2.0}] [expr {$dy + $dh / 2.0}] \
-        [translate "Done"] -font $L(font_button) -fill $C(crema) \
+        [translate "Done"] -font $L(font_button) -fill $C(crema_ink) \
         -anchor center -justify center
     tap $p $dx $dy $dw $dh {::lumen::act::close_settings} "Done"
 }
@@ -7373,6 +8641,10 @@ proc ::lumen::dye_aspects {} {
     set C_ink2    $::lumen::C(ink_2)
     set C_ink3    $::lumen::C(ink_3)
     set C_accent  $::lumen::C(crema)
+    # 0.59.1: DYE's accent TEXT (remarks) and the listbox selection, whose
+    # text is the page colour, take the accent's text ink; the accent itself
+    # stays on the entry focus ring and cursor. warn is guarded as text.
+    set C_accent_ink $::lumen::C(crema_ink)
     set C_err     $::lumen::C(warn)
 
     set font  [::lumen::_font_family sans]
@@ -7397,7 +8669,7 @@ proc ::lumen::dye_aspects {} {
         dtext.disabledfill $C_ink3
         dtext.anchor nw
         dtext.justify left
-        dtext.fill.remark $C_accent
+        dtext.fill.remark $C_accent_ink
         dtext.fill.error $C_err
         dtext.font_family.section_title "$fontb"
         dtext.font_family.page_title "$fontb"
@@ -7454,7 +8726,7 @@ proc ::lumen::dye_aspects {} {
         listbox.foreground $C_ink
         listbox.relief flat
         listbox.borderwidth 1
-        listbox.selectbackground $C_accent
+        listbox.selectbackground $C_accent_ink
         listbox.selectforeground $C_bg
         listbox.disabledforeground $C_ink3
 
@@ -7528,6 +8800,13 @@ proc ::lumen::hook_sdb_save {} {
 # page indicator reads the cached list (0.27.0).
 if { [catch { dui page add_action off show ::lumen::refresh_bag_list } err] } {
     msg -ERROR "Lumen: could not hook the bag-list refresh: $err"
+}
+
+# 0.60.0 (F20): leaving the settings page drops the favorites undo. dui runs
+# a page's hide actions after idle on every dui page load away from it
+# (dui.tcl ~6513); the undo also expires on its own after six seconds.
+if { [catch { dui page add_action lumen_settings hide ::lumen::act::_fav_undo_drop } err] } {
+    msg -ERROR "Lumen: could not hook the favorites undo drop: $err"
 }
 
 # Core dui dialogs cannot be reached by theming, and recolouring them once at

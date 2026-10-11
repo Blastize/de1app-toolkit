@@ -38,6 +38,10 @@
 # Deliberately theme-INdependent: ok/amber/red state colors and all
 # button faces (dbutton compounds are not restyled at runtime).
 # The choice persists in settings(theme).
+# v0.29.3 (contrast polish): ok/amber/red/unset/unknown are per theme
+# now, the primary/danger button faces are their own fixed tokens, and
+# normal button labels follow the theme (dark ink on the light face);
+# every one of them lives in _apply_palette.
 #
 # Pass 19 (v0.18.0): icon meaning + Detail header icon. The Add/Edit
 # "Icon:" label now reads "Icon:  <name>" for the current selection
@@ -93,9 +97,13 @@
 # - Edit = top-right header slot on Detail (the mode-button slot).
 #   Hide = Detail bottom-center, normal style (reversible), disabled
 #   with an explanatory grey note when hide_max trackers are hidden.
-# - Prev/Next = paired top-right toolbar, disabled at the ends.
+# - Prev/Next = paired bottom-right of the bottom bar, disabled at the
+#   ends (v0.29.2: the cross-plugin pager standard, owner 2026-09-30;
+#   it was the top-right toolbar). The list page's bottom-right is
+#   therefore the pager, not a positive action.
 # - Buttons wear text labels, not icons: on a 60px touch target a word
-#   is unambiguous; glyphs decorate cards and the picker only.
+#   is unambiguous; glyphs decorate cards and the picker only (the
+#   pager's arrows sit beside their words, never instead of them).
 #
 # Pass 15 (v0.14.0): 12 more picker icons. picker_icons doubles to 24
 # and the shared _build_picker_row wraps at picker_cols (12) into two
@@ -152,9 +160,11 @@
 #
 # Every mechanism in this file is copied from a proven source in this
 # workspace rather than invented:
-# - Layout/font system: ShotHistoryEditor v0.7.1 _init_layout (two scale
-#   sources: virtual 2560x1600 for coordinates, physical screen for fonts;
-#   ShotHistoryEditor.tcl:157-296).
+# - Layout/font system: ShotHistoryEditor v0.7.1 _init_layout (virtual
+#   2560x1600 for coordinates; ShotHistoryEditor.tcl:157-296). v0.31.0
+#   (F8): fonts follow the canvas size dui settled on (dui cget
+#   screen_size_height, 800 on the tablet) -- ONE scale source with the
+#   coordinates, never winfo screenheight (736 there: fonts at 92%).
 # - Page background + aspect style with -theme default: ShotHistoryEditor
 #   _page_bg / she_btn (BeanScanner v0.1.2 lesson; ShotHistoryEditor.tcl
 #   :289-308).
@@ -243,9 +253,15 @@ namespace eval ::plugins::MaintenanceTracker {
         return $b
     }
 
+    # v0.31.1: 1 once the burr-install hide (below) ran this session.
+    variable burr_hide_session 0
+
     # Make sure every settings key exists and every item dict has every
-    # field it should. `plugins load_settings` replaces the whole array
-    # from settings.tdb, which may have been written by an older version.
+    # field it should. `plugins load_settings` sets the array from
+    # settings.tdb (`array set`: keys the file lacks keep their in-memory
+    # value), which may have been written by an older version. Runs in
+    # memory only, at preload and again at main (v0.31.1: nothing saves
+    # here), so every step must give the same result on each load.
     #
     # v0.5.0 migration (idempotent): an item dict without an `events` key
     # is a v0.4.x dict -- seed the log from its last_done (one manual
@@ -398,8 +414,15 @@ namespace eval ::plugins::MaintenanceTracker {
         # not routine maintenance -- burrs last ~30k shots -- so it
         # starts hidden. The flag makes this run exactly once, so a
         # deliberate later un-hide sticks across restarts.
-        if {![info exists settings(hide_burr_done)]} {
+        # v0.31.1: preload no longer saves, so main's reload of a
+        # settings.tdb without the flag brings back its old hidden_ids
+        # while the in-memory flag stays set. burr_hide_session re-applies
+        # the same hide on that second start-up load (apply_defaults runs
+        # only in preload and main); the first real save stores the flag.
+        variable burr_hide_session
+        if {![info exists settings(hide_burr_done)] || $burr_hide_session} {
             set settings(hide_burr_done) 1
+            set burr_hide_session 1
             if {"burr_install" ni $settings(hidden_ids)} {
                 lappend settings(hidden_ids) burr_install
             }
@@ -1253,9 +1276,11 @@ namespace eval ::plugins::MaintenanceTracker {
     #  Coordinates: virtual 2560x1600 canvas space (fixed constants; the
     #  framework rescales to the physical screen itself -- never feed
     #  winfo screenwidth/height into coordinates, that double-scales).
-    #  Fonts: physical pixels from the real detected screen (negative Tk
-    #  size = pixels), all through the shared MT_* font objects including
-    #  font_button, passed per-instance via -label_font.
+    #  Fonts: pixel sizes (negative Tk size = pixels) scaled by the canvas
+    #  height dui settled on (v0.31.0, F8: dui cget screen_size_height,
+    #  the value the coordinate rescale uses -- not winfo screenheight),
+    #  all through the shared MT_* font objects including font_button,
+    #  passed per-instance via -label_font.
     # ------------------------------------------------------------------
 
     variable L
@@ -1268,6 +1293,14 @@ namespace eval ::plugins::MaintenanceTracker {
     #  ok/amber/red state colors and all button colors are the same in
     #  both themes. Called from _init_layout at startup and from
     #  toggle_theme at runtime.
+    #  v0.29.3 (contrast polish, WCAG 2.1 at the tablet's rendered
+    #  sizes): EVERY color lives here now. The state colors are per
+    #  theme -- a 16px bold state word needs 4.5:1 on the card, and no
+    #  single ok/amber/red reaches that on both cards. A state color
+    #  never carries a label any more: the primary/danger button faces
+    #  (and the step badges) use the fixed btn_primary_fill /
+    #  btn_danger_fill with a white label. Normal button labels follow
+    #  the theme (white on the dark indigo, #2b2b2b on the light face).
     # ------------------------------------------------------------------
 
     proc _apply_palette {} {
@@ -1281,18 +1314,41 @@ namespace eval ::plugins::MaintenanceTracker {
             set L(card_outline) "#464b58"
             set L(text_hi)      "#e8e9ee"
             set L(text_body)    "#c2c5cf"
-            set L(text_mut)     "#8d92a0"
+            # v0.29.3: muted text #8d92a0 -> #9aa0ad, the shared plugin
+            # value (5.82:1 on the page, 4.66:1 on the card; was 3.93).
+            set L(text_mut)     "#9aa0ad"
             set L(icon_idle)    "#b8bcc8"
             set L(icon_sel)     "#a8bdf0"
             set L(entry_bg)     "#3a3e4a"
             set L(bar_track)    "#454a57"
             set L(bar_tick)     "#5b6170"
-            set L(col_unset)    "#8f95a3"
-            set L(col_unknown)  "#7d828f"
+            # v0.29.3: state colors per theme (they were one fixed set,
+            # #0CA581 / #fe7e00 / #DA515E): the 16px bold state words
+            # need 4.5:1 on the card -- ok 6.39, amber 4.78, red 5.36.
+            # unset/unknown: "NEVER RECORDED" / "NO DATA" reach 4.5:1 as
+            # text (were 4.08 / 3.18) and their plate glyphs 3:1 on their
+            # tints, and they stay two DIFFERENT greys, unset the brighter
+            # one as before: 7.15 / 5.83 text, 3.67 / 3.24 plate.
+            # v0.31.0 (design review F21): ok / amber / red are the shared
+            # status roles ok / warn / danger of every owner plugin (dark:
+            # ok #2FD3A4, warn #E8B34C, danger #ff8a80). amber #fe7e00 ->
+            # #E8B34C (6.40:1 on the card, was 4.78). col_info is the
+            # shared info role (#8ab4ff, 5.86:1 on the card) for the
+            # AUTO-RECORD / AUTO-COUNT tags.
+            set L(col_ok)       "#2FD3A4"
+            set L(col_amber)    "#E8B34C"
+            set L(col_red)      "#ff8a80"
+            set L(col_unset)    "#c2c6d0"
+            set L(col_unknown)  "#aeb3bf"
+            set L(col_info)     "#8ab4ff"
             # v0.19.1: buttons follow the theme too (muted indigo on
-            # dark; the white label reads on both).
+            # dark; the white label reads on both -- v0.29.3: it did not
+            # on the light face, see btn_label_fill).
             set L(btn_fill)          "#4a5473"
             set L(btn_disabled_fill) "#3a3e4a"
+            # v0.29.3: the normal button label is a palette token (white
+            # here, 7.48:1 on the indigo face).
+            set L(btn_label_fill)    "#ffffff"
             # Tints need a stronger blend to show on the dark card.
             set tint_frac 0.30
         } else {
@@ -1301,21 +1357,67 @@ namespace eval ::plugins::MaintenanceTracker {
             set L(card_outline) "#dcdcdc"
             set L(text_hi)      "#2b2b2b"
             set L(text_body)    "#444444"
-            set L(text_mut)     "#777777"
+            # v0.29.3: muted text #777777 -> #595959, the shared plugin
+            # value (4.86:1 on the page, 6.78:1 on the card; was 3.10
+            # on the page).
+            set L(text_mut)     "#595959"
             set L(icon_idle)    "#4a4f59"
             set L(icon_sel)     "#3b4a6b"
             set L(entry_bg)     "#fbfaff"
             set L(bar_track)    "#e7e9ee"
             set L(bar_tick)     "#c2c6d0"
-            set L(col_unset)    "#b8b8b8"
-            set L(col_unknown)  "#999999"
+            # v0.29.3: state colors per theme, darker for the white card:
+            # ok 5.13, amber 5.40, red 6.32 (4.53 on the page, where the
+            # step editor's error line sits). unset/unknown: 4.5:1 as
+            # text (were 1.92 / 2.76), two different greys, unset the
+            # paler one as before: 4.52 / 6.78 text, 3.72 / 5.36 plate.
+            # v0.31.0 (F21): the shared light roles, each >= 4.5:1 on the
+            # page too (16px caption text sits there): ok #0a7a5f ->
+            # #086750 (4.75:1 on the page, was 3.67), warn #a35200 ->
+            # #7a4b00 (5.14, was 3.87), danger #b3261e -> #962219 (5.73,
+            # was 4.53), info #2753bb. The danger FACE stays #b3261e.
+            set L(col_ok)       "#086750"
+            set L(col_amber)    "#7a4b00"
+            set L(col_red)      "#962219"
+            set L(col_unset)    "#747474"
+            set L(col_unknown)  "#595959"
+            set L(col_info)     "#2753bb"
             set L(btn_fill)          "#c0c5e3"
             set L(btn_disabled_fill) "#dddddd"
+            # v0.29.3: dark ink on the light face (8.32:1; white was
+            # 1.70:1).
+            set L(btn_label_fill)    "#2b2b2b"
             set tint_frac 0.16
         }
+        # v0.29.3: faces that carry a white label never borrow a state
+        # color -- fixed in both themes: primary 5.30:1 and danger
+        # 6.54:1 with white. The numbered step badges wear the primary
+        # face. The disabled label is the unchanged #999999 (exempt,
+        # always quieter than the enabled label).
+        set L(btn_primary_fill)   "#0a7a5f"
+        set L(btn_danger_fill)    "#b3261e"
+        set L(btn_accent_label)   "#ffffff"
+        set L(btn_label_disabled) "#999999"
         foreach st {ok amber red unset unknown} {
             set L(tint_$st) [_blend $L(card_bg) $L(col_$st) $tint_frac]
         }
+        # v0.30.0 (design review F9): press tones -- the face a button
+        # wears while a finger is on it (GrindAdvisor's tones: same faces).
+        # Labels stay readable: white on #5f6a8c 5.35:1, #2b2b2b on #a6acd1
+        # 6.37:1, white on the pressed green 7.97:1 and red 8.9:1. A card
+        # or picker cell tapped through its invisible rect tints its own
+        # background toward the button face instead.
+        if {$dark} {
+            set L(btn_press) "#5f6a8c"
+        } else {
+            set L(btn_press) "#a6acd1"
+        }
+        set L(btn_primary_press) "#075c48"
+        set L(btn_danger_press)  "#8f1e18"
+        # 1.33:1 against the card; card text 7.5:1 dark / 10.3:1 light
+        # (muted text 3.5:1 dark for the moment a finger is down).
+        set L(card_press) [_blend $L(card_bg) $L(btn_fill) 0.6]
+        set L(press_ms) 120
     }
 
     # The theme button's face: moon in light mode (tap for dark), sun
@@ -1325,13 +1427,16 @@ namespace eval ::plugins::MaintenanceTracker {
         variable settings
         set dark 0
         catch { if {$settings(theme) eq "dark"} { set dark 1 } }
+        # v0.31.0: text and names picked with if, never expr ?: (owner rule).
         if {[info exists L(have_icons)] && $L(have_icons)} {
             # v0.19.1: sun-bright, not the plain FA sun glyph -- that
             # one is an eight-spiked star the owner read as a shuriken.
-            set g [_glyph_for [expr {$dark ? "sun-bright" : "moon"}]]
+            if {$dark} { set nm sun-bright } else { set nm moon }
+            set g [_glyph_for $nm]
             if {$g ne ""} { return $g }
         }
-        return [expr {$dark ? [translate "Light"] : [translate "Dark"]}]
+        if {$dark} { return [translate "Light"] }
+        return [translate "Dark"]
     }
 
     proc toggle_theme {} {
@@ -1366,7 +1471,10 @@ namespace eval ::plugins::MaintenanceTracker {
         foreach p $all_pages {
             catch { dui item config $p page_bg -fill $L(page_bg) -outline $L(page_bg) }
         }
-        # Text roles: {page tag role} triplets.
+        # Text roles: {page tag role} triplets. v0.29.3: the last nine
+        # were missing -- seven kept the start-up theme's colour after a
+        # toggle (e.g. dark ink on the dark card), and the two red
+        # messages must now follow the per-theme col_red.
         foreach {p tag role} {
             MaintenanceTracker_settings page_title text_hi
             MaintenanceTracker_settings subtitle text_mut
@@ -1419,6 +1527,15 @@ namespace eval ::plugins::MaintenanceTracker {
             MaintenanceTracker_edit edit_note text_mut
             MaintenanceTracker_diagnostics page_title text_hi
             MaintenanceTracker_diagnostics subtitle text_mut
+            MaintenanceTracker_detail det_auto col_info
+            MaintenanceTracker_add add_error_text col_red
+            MaintenanceTracker_edit edit_error_text col_red
+            MaintenanceTracker_steps steps_count text_mut
+            MaintenanceTracker_steps steps_msg text_hi
+            MaintenanceTracker_steps steps_hint text_hi
+            MaintenanceTracker_stepedit se_count text_mut
+            MaintenanceTracker_stepedit se_fcap text_hi
+            MaintenanceTracker_stepedit se_fhint text_mut
         } {
             catch { dui item config $p $tag -fill $L($role) }
         }
@@ -1453,7 +1570,22 @@ namespace eval ::plugins::MaintenanceTracker {
         for {set i 0} {$i < 8} {incr i} {
             catch { dui item config MaintenanceTracker_steps stepd$i -fill $L(card_outline) }
             catch { dui item config MaintenanceTracker_stepedit se_d$i -fill $L(card_outline) }
+            # v0.29.3: the step texts were missing from the walk.
+            catch { dui item config MaintenanceTracker_steps stept$i -fill $L(text_hi) }
+            catch { dui item config MaintenanceTracker_stepedit se_t$i -fill $L(text_hi) }
         }
+        # v0.29.3: state-green decorations, now that col_ok is per theme:
+        # the Linked profile bullets and the group-head cup (its slot is
+        # a cut-out that _show_ghc_cup refills on every show). The step
+        # badges wear the fixed primary face and need no walk.
+        for {set k 0} {$k < 2} {incr k} {
+            catch { dui item config MaintenanceTracker_detail auto_dot$k \
+                -fill $L(col_ok) -outline $L(col_ok) }
+        }
+        catch { dui item config MaintenanceTracker_steps steps_ghc_body \
+            -fill $L(col_ok) -outline $L(col_ok) }
+        catch { dui item config MaintenanceTracker_steps steps_ghc_ring -outline $L(col_ok) }
+        catch { dui item config MaintenanceTracker_steps steps_ghc_saucer -fill $L(col_ok) }
         catch { dui item config MaintenanceTracker_add add_c1_vdiv -fill $L(card_outline) }
         catch { dui item config MaintenanceTracker_add thr_box -fill $L(entry_bg) -outline $L(entry_bg) }
         catch { dui item config MaintenanceTracker_edit thr_box -fill $L(entry_bg) -outline $L(entry_bg) }
@@ -1474,7 +1606,7 @@ namespace eval ::plugins::MaintenanceTracker {
                 -fill $L(card_bg) -outline $L(card_outline) }
             catch { dui item config MaintenanceTracker_settings row${i}_line1 -fill $L(text_hi) }
             catch { dui item config MaintenanceTracker_settings row${i}_line3 -fill $L(text_mut) }
-            catch { dui item config MaintenanceTracker_settings row${i}_auto -fill $L(icon_sel) }
+            catch { dui item config MaintenanceTracker_settings row${i}_auto -fill $L(col_info) }
             catch { dui item config MaintenanceTracker_settings row${i}_tick \
                 -fill $L(bar_tick) -outline $L(bar_tick) }
         }
@@ -1497,12 +1629,20 @@ namespace eval ::plugins::MaintenanceTracker {
             -bg $L(entry_bg) -foreground $L(text_hi) }
         catch { dui item config MaintenanceTracker_edit edit_entry \
             -bg $L(entry_bg) -foreground $L(text_hi) }
+        # v0.29.3: the step editor's entry was missing.
+        catch { dui item config MaintenanceTracker_stepedit se_entry \
+            -bg $L(entry_bg) -foreground $L(text_hi) }
         # v0.19.1: normal-style buttons follow the theme. A round
         # dbutton's shape is several ovals/rects all tagged
         # ${tag}-btn with -fill AND -outline (dui.tcl:8476-8478), so
         # one bare-tag config recolors the whole face. Danger buttons
         # (red) and every label (white) stay as they are; the invisible
         # tap zones (picker cells, card text) are never touched.
+        # v0.29.3: the label follows too -- its text item is tagged
+        # ${tag}-lbl (dui.tcl:9957); white on the dark face, #2b2b2b
+        # on the light one. Primary/danger buttons keep their fixed
+        # faces and white labels, so they stay off this list (bar_undo
+        # and the Steps action swap face + label in their refreshes).
         set btn_list {
             MaintenanceTracker_settings {btn_theme prev_page next_page mt_done bar_add bar_diag
                                          row0_btn row1_btn row2_btn row3_btn row4_btn}
@@ -1526,8 +1666,16 @@ namespace eval ::plugins::MaintenanceTracker {
                 catch { dui item config $p ${tag}-btn \
                     -fill $L(btn_fill) -outline $L(btn_fill) \
                     -disabledfill $L(btn_disabled_fill) -disabledoutline $L(btn_disabled_fill) }
+                catch { dui item config $p ${tag}-lbl -fill $L(btn_label_fill) }
             }
         }
+        # v0.29.3: the walk repaints the Detail wear bar (det_seg*)
+        # behind _cfg's back, so _cfg's skip-if-unchanged memory no
+        # longer matches the canvas -- after two toggles the filled
+        # segments kept the walk's empty track. Forget it; every page's
+        # next refresh then paints its dynamic items for real.
+        variable cfg_cache
+        array unset cfg_cache *
     }
 
     proc _init_layout {} {
@@ -1540,19 +1688,32 @@ namespace eval ::plugins::MaintenanceTracker {
         set sh 1600
         set scale [expr {double($sh) / 800.0}]
 
-        # Real physical screen, used ONLY for font pixel sizes.
+        # v0.31.0 (design review F8): ONE scale source. Font pixel sizes
+        # (and the vector-icon boxes) follow the canvas size dui itself
+        # settled on -- `dui cget screen_size_width/height`, 1340x800 on
+        # the tablet, the values the coordinate rescale uses (dui.tcl
+        # 188-191, 346-347). Never winfo screenheight: it is 736 there
+        # (the screen minus the Android bar) and drew every font at 92%.
+        # A missing dui or an empty / non-numeric value falls back to the
+        # 1340x800 reference; a precondition, not a catch.
         set psw 1340
         set psh 800
-        catch { set psw [winfo screenwidth .] }
-        catch { set psh [winfo screenheight .] }
-        if {$psw <= 1} { set psw 1340 }
-        if {$psh <= 1} { set psh 800 }
+        if {[llength [info commands ::dui::cget]]} {
+            set v [::dui::cget screen_size_width]
+            if {[string is double -strict $v] && $v > 1} { set psw $v }
+            set v [::dui::cget screen_size_height]
+            if {[string is double -strict $v] && $v > 1} { set psh $v }
+        }
         set font_scale [expr {double($psh) / 800.0}]
 
         set L(screen_w) $sw
         set L(screen_h) $sh
         set L(scale) $scale
         set L(font_scale) $font_scale
+        # Virtual -> physical x (1340/2560 on the tablet): `font measure`
+        # answers in PHYSICAL px, so a fit check converts the virtual
+        # width it must fit into, never the other way round (v0.25.0).
+        set L(v2p) [expr {double($psw) / $sw}]
 
         # Spacing tokens (reference px at 1340x800, scaled).
         foreach {tok ref} {xs 6 sm 10 md 16 lg 24 xl 32 xxl 48} {
@@ -1571,7 +1732,8 @@ namespace eval ::plugins::MaintenanceTracker {
         set L(list_top) [expr {int(round(168 * $scale))}]
         set L(diag_row_h) [expr {int(round(34 * $scale))}]
 
-        # Toolbar zone (count status left, Prev/Next right).
+        # Toolbar zone (count status; v0.29.2 moved Prev/Next to the
+        # bottom bar's right end).
         set L(toolbar_y0) [expr {int(round(104 * $scale))}]
         set L(toolbar_y1) [expr {int(round(152 * $scale))}]
 
@@ -1596,8 +1758,12 @@ namespace eval ::plugins::MaintenanceTracker {
         set L(vec_box_plate) [expr {int(round(max(16, 26 * $font_scale) * $px2v))}]
         set L(vec_box_pick)  [expr {int(round(max(16, 24 * $font_scale) * $px2v))}]
         set L(plate_radius) [expr {int(round(14 * $scale))}]
-        set L(card_name_dy)  [expr {int(round(24 * $scale))}]
-        set L(card_state_dy) [expr {int(round(47 * $scale))}]
+        # v0.31.0 (F8): name 24 -> 22, state 47 -> 48 ref. At the design
+        # sizes the 22px name line is ~27px tall; at 24/47 it would touch
+        # the 16px state line (pass_36's min_gap 4 virtual). 22/48 leaves
+        # ~3px (6 virtual) on the list card and the Detail status card.
+        set L(card_name_dy)  [expr {int(round(22 * $scale))}]
+        set L(card_state_dy) [expr {int(round(48 * $scale))}]
         set L(card_bar_dy)   [expr {int(round(64 * $scale))}]
         set L(card_cap_dy)   [expr {int(round(82 * $scale))}]
         set L(bar_h) [expr {int(round(8 * $scale))}]
@@ -1609,9 +1775,10 @@ namespace eval ::plugins::MaintenanceTracker {
         # ok/amber/red are theme-INdependent (legible on both palettes);
         # everything else color-related lives in _apply_palette (Pass
         # 20) so the theme toggle can swap it at runtime.
-        set L(col_ok) "#0CA581"
-        set L(col_amber) "#fe7e00"
-        set L(col_red) "#DA515E"
+        # v0.29.3: ok/amber/red moved into _apply_palette as well, per
+        # theme -- the fixed #0CA581 / #fe7e00 / #DA515E were NOT legible
+        # on both palettes (five of the six state words 2.48-3.91:1,
+        # 4.5 needed).
         _apply_palette
 
         set L(btn_w_std) [expr {int(round(200 * $scale))}]
@@ -1687,9 +1854,14 @@ namespace eval ::plugins::MaintenanceTracker {
         # a round dbutton carries it with -fill AND -outline
         # (de1app-core/dui.tcl:9896, 8476-8478), and dui item config
         # itemconfigures all matches (dui.tcl:7440-7452).
-        set L(btn_label_fill) white
+        # v0.29.3: btn_label_fill moved into _apply_palette too (white
+        # on the light face was 1.70:1); labels restyle at toggle via
+        # their ${tag}-lbl tag. The primary/danger faces, their white
+        # label and the disabled label are palette tokens as well.
 
-        # Pixel-exact fonts, floored at 16px, all on font_scale. Named
+        # Pixel-exact fonts, floored at 16px, all on font_scale (v0.31.0:
+        # 1.0 on the tablet, so title 40, primary 22, body 19, caption 16,
+        # button 20 -- the design sizes; they were 37/20/17/16/18). Named
         # Helv_* fallbacks first so every key is valid even if the "font"
         # command is unavailable.
         set L(font_title) Helv_20_bold
@@ -1716,6 +1888,7 @@ namespace eval ::plugins::MaintenanceTracker {
         # (dui::font::add_or_get_familyname is the core's loader). Same
         # physical-pixel sizing rule as every other font. If the font is
         # unavailable, have_icons stays 0 and plates render glyph-less.
+        # v0.31.0: 26 / 24 px on the tablet (were 24 / 22).
         set L(have_icons) 0
         set L(font_icon_plate) $L(font_primary)
         set L(font_icon_pick) $L(font_primary)
@@ -1745,22 +1918,27 @@ namespace eval ::plugins::MaintenanceTracker {
                 shape round radius $L(btn_radius) \
                 fill $L(btn_fill) disabledfill $L(btn_disabled_fill)]
             dui aspect set -theme default -type dbutton_label -style mt_btn [list \
-                fill $L(btn_label_fill) disabledfill "#999999"]
+                fill $L(btn_label_fill) disabledfill $L(btn_label_disabled)]
             # Danger style (destructive actions: Undo), same geometry,
             # state-red fill -- the design system's danger slot.
+            # v0.29.3: its own fixed red (btn_danger_fill, white 6.54:1),
+            # no longer the per-theme state red.
             dui aspect set -theme default -type dbutton -style mt_btn_danger [list \
                 shape round radius $L(btn_radius) \
-                fill $L(col_red) disabledfill $L(btn_disabled_fill)]
+                fill $L(btn_danger_fill) disabledfill $L(btn_disabled_fill)]
             dui aspect set -theme default -type dbutton_label -style mt_btn_danger [list \
-                fill white disabledfill "#999999"]
+                fill $L(btn_accent_label) disabledfill $L(btn_label_disabled)]
             # v0.25.0: primary style -- the page's ONE go-ahead action
             # (Detail's Record), state-green in both themes so it reads
             # at a glance. No pressfill (the flash would stick).
+            # v0.29.3: its own fixed green (btn_primary_fill, white
+            # 5.30:1); the dark theme's state green is too light for a
+            # white label.
             dui aspect set -theme default -type dbutton -style mt_btn_primary [list \
                 shape round radius $L(btn_radius) \
-                fill $L(col_ok) disabledfill $L(btn_disabled_fill)]
+                fill $L(btn_primary_fill) disabledfill $L(btn_disabled_fill)]
             dui aspect set -theme default -type dbutton_label -style mt_btn_primary [list \
-                fill white disabledfill "#999999"]
+                fill $L(btn_accent_label) disabledfill $L(btn_label_disabled)]
         }
     }
 
@@ -1825,14 +2003,17 @@ namespace eval ::plugins::MaintenanceTracker {
 
     # Numbered badge: a state-green disc with the white number. Tags
     # <tag> (disc) and <tag>_n (number).
+    # v0.29.3: the disc is the fixed primary green (white 16px bold
+    # number 5.30:1, was 3.13 on the state green), identical in both
+    # themes, so the theme walk never has to touch it.
     proc _sec_badge {page tag cx cy args} {
         variable L
         set r [expr {$L(badge) / 2}]
         dui add canvas_item oval $page [expr {$cx - $r}] [expr {$cy - $r}] \
             [expr {$cx + $r}] [expr {$cy + $r}] \
-            -fill $L(col_ok) -outline $L(col_ok) -width 1 -tags $tag {*}$args
+            -fill $L(btn_primary_fill) -outline $L(btn_primary_fill) -width 1 -tags $tag {*}$args
         dui add dtext $page $cx $cy -tags ${tag}_n -text "0" -font $L(font_caption_b) \
-            -fill white -anchor center -justify center {*}$args
+            -fill $L(btn_accent_label) -anchor center -justify center {*}$args
     }
 
     # Row chevron (">", two round-capped strokes) -- says "tap me".
@@ -1853,8 +2034,14 @@ namespace eval ::plugins::MaintenanceTracker {
     proc preload_pages {} {
         package require de1_dui 1.0
         catch { plugins load_settings MaintenanceTracker }
+        # v0.31.1 (CLAUDE.md "No save_settings in preload", review fix): the
+        # defaults and migrations live in memory only. apply_defaults is
+        # idempotent (every fill and the event-log seeding are derived from
+        # what is loaded; the one-shot burr hide re-applies the same result
+        # until its flag is saved), and the first real save (any tap that
+        # writes, an auto record, the water meter) stores the whole array,
+        # every default with it. load_settings' result is never read.
         apply_defaults
-        catch { plugins save_settings MaintenanceTracker }
         _init_layout
         dui page add MaintenanceTracker_settings -namespace true -theme default -type fpdialog
         dui page add MaintenanceTracker_diagnostics -namespace true -theme default -type fpdialog
@@ -1897,21 +2084,24 @@ namespace eval ::plugins::MaintenanceTracker {
 
     # One line of event history: date/time + how it was recorded.
     # `auto` is reserved for a future pass; tolerate and display it now.
-    # v0.29.1: one history row as two texts for the card's two columns:
-    # {"<date time>  (<ago>)" "recorded automatically|manually"}.
+    # v0.29.1: one history row as two texts for the card's two columns.
+    # v0.31.0 (design review F21): {"<_fmt_when>" "recorded <how>   .
+    # <_fmt_ago>"} -- the date in the shared day/time format on the left,
+    # the age joined to how it was recorded on the right (was the ISO
+    # "<%Y-%m-%d %H:%M>  (<ago>)" | "recorded <how>").
     proc _event_parts {ev} {
         set ts 0
         catch { set ts [dict get $ev ts] }
         if {![string is wide -strict $ts] || $ts <= 0} { return [list "" ""] }
-        set when [clock format $ts -format {%Y-%m-%d %H:%M}]
-        set ago [_fmt_ago $ts]
-        if {$ago ne ""} { append when "  ($ago)" }
+        set when [_fmt_when $ts]
         set src manual
         catch { set src [dict get $ev source] }
         if {$src eq "auto"} {
-            return [list $when [translate {recorded automatically}]]
+            set how [translate {recorded automatically}]
+        } else {
+            set how [translate {recorded manually}]
         }
-        return [list $when [translate {recorded manually}]]
+        return [list $when [_dot_join $how [_fmt_ago $ts]]]
     }
 
     # ------------------------------------------------------------------
@@ -2043,6 +2233,98 @@ namespace eval ::plugins::MaintenanceTracker {
         if {$can eq ""} { return }
         foreach id $ids { catch { $can itemconfigure $id {*}$args } }
         set cfg_cache($page,$tag) $args
+    }
+
+    # ------------------------------------------------------------------
+    #  v0.30.0 (design review F9): every button reacts to the finger.
+    #
+    #  dui runs a dbutton's -command at touch-down, synchronously, and Tk
+    #  repaints only after it returns, so a slow command (a page open, the
+    #  status refresh behind Confirm) looked like a missed tap. Every MT
+    #  button is created with -command [list ::plugins::MaintenanceTracker::
+    #  _tap $page $tag <cmd>]: the face it wears NOW (<tag>-btn on this
+    #  page only, through _ids) picks the press tone -- normal, green or
+    #  red, so an armed Undo or a pending Start presses in its own colour
+    #  -- the tone is painted at once (update idletasks, never a full
+    #  update), the 120 ms restore is armed BEFORE the command runs (an
+    #  error cannot strand it), then the command runs. The restore puts the
+    #  face back from the CURRENT palette, and only if the button still
+    #  wears the press tone: a command that repainted it (the theme toggle,
+    #  arming Undo, a run starting) wins. Card taps (row<i>_open) and icon
+    #  picker cells (pick<k>_tap) are invisible rects over drawn art: their
+    #  art takes card_press instead (never the empty rect, which would
+    #  become an opaque square). The history and step-editor rows repaint
+    #  themselves on the tap and are not wrapped. Never the core
+    #  -pressfill: it restores the creation fill and recolours same-named
+    #  buttons in other plugins (prev_page / next_page / btn_theme ...).
+    # ------------------------------------------------------------------
+    variable press_after
+    array set press_after {}
+
+    proc _tap {page tag cmd} {
+        _press_tint $page ${tag}-btn button
+        uplevel #0 $cmd
+    }
+
+    # A card or picker cell: the invisible rect's art takes the tone.
+    proc _tap_art {page art cmd} {
+        _press_tint $page $art card
+        uplevel #0 $cmd
+    }
+
+    proc _press_tint {page tag kind} {
+        variable L
+        variable press_after
+        set ids [_ids $page $tag]
+        if {[llength $ids] == 0} { return }
+        set can [dui canvas]
+        set cur [$can itemcget [lindex $ids 0] -fill]
+        if {$kind eq "card"} {
+            set role card
+            set p $L(card_press)
+        } elseif {$cur eq $L(btn_primary_fill) || $cur eq $L(btn_primary_press)} {
+            set role primary
+            set p $L(btn_primary_press)
+        } elseif {$cur eq $L(btn_danger_fill) || $cur eq $L(btn_danger_press)} {
+            set role danger
+            set p $L(btn_danger_press)
+        } else {
+            set role normal
+            set p $L(btn_press)
+        }
+        set key $page,$tag
+        if {[info exists press_after($key)]} { after cancel $press_after($key) }
+        foreach id $ids {
+            if {$kind eq "card"} {
+                $can itemconfigure $id -fill $p
+            } else {
+                $can itemconfigure $id -fill $p -outline $p
+            }
+        }
+        update idletasks
+        set press_after($key) [after $L(press_ms) \
+            [list ::plugins::MaintenanceTracker::_press_restore $page $tag $role $p]]
+    }
+
+    proc _press_restore {page tag role press} {
+        variable L
+        variable press_after
+        unset -nocomplain press_after($page,$tag)
+        switch -- $role {
+            card    { set f $L(card_bg) }
+            primary { set f $L(btn_primary_fill) }
+            danger  { set f $L(btn_danger_fill) }
+            default { set f $L(btn_fill) }
+        }
+        set can [dui canvas]
+        foreach id [_ids $page $tag] {
+            if {[$can itemcget $id -fill] ne $press} { continue }
+            if {$role eq "card"} {
+                $can itemconfigure $id -fill $f
+            } else {
+                $can itemconfigure $id -fill $f -outline $f
+            }
+        }
     }
 
     # ------------------------------------------------------------------
@@ -2387,11 +2669,15 @@ namespace eval ::plugins::MaintenanceTracker {
             return ""
         }
         set left [expr {$threshold - $value}]
-        if {$left <= 0} { return [translate "Nothing left -- change it now."] }
+        if {$left <= 0} { return [translate "Nothing left. Change it now."] }
         return "[translate {About}] [_fmt_ml $left] [translate {left}]"
     }
 
-    proc _item_detail {id entry} {
+    # v0.31.1 (design review F23): `tail` 0 leaves the ml "left" part off
+    # -- the Detail status card's line 1 (its caption already says it). It
+    # replaces the " -- " split Detail used to cut the joined line with;
+    # the left part now joins with the middle dot (_dot_join).
+    proc _item_detail {id entry {tail 1}} {
         set state [dict get $entry state]
         if {$state eq "unset"} {
             if {[dict exists $entry unit] && [dict get $entry unit] eq "ml"} {
@@ -2400,21 +2686,21 @@ namespace eval ::plugins::MaintenanceTracker {
             return [translate "Tap Record after you do this the next time."]
         }
         if {$state eq "unknown"} {
-            return [translate "Shot database unavailable -- see Diagnostics."]
+            return [translate "Shot database unavailable. See Diagnostics."]
         }
         set unit [dict get $entry unit]
         set value [dict get $entry value]
         set threshold [dict get $entry threshold]
+        # v0.31.1: the unit agrees with the threshold ("1 of 1 day").
         if {$unit eq "days"} {
-            return "$value [translate {of}] $threshold [translate {days since last done}]"
+            return "$value [translate {of}] $threshold [_unit_word days $threshold] [translate {since last done}]"
         }
         if {$unit eq "ml"} {
             set line "[_fmt_ml $value] [translate {of}] [_fmt_ml $threshold] [translate {dispensed since last change}]"
-            set left [_ml_left_text $value $threshold]
-            if {$left ne ""} { append line " -- $left" }
+            if {$tail} { set line [_dot_join $line [_ml_left_text $value $threshold]] }
             return $line
         }
-        return "$value [translate {of}] $threshold [translate {shots since last done}]"
+        return "$value [translate {of}] $threshold [_unit_word shots $threshold] [translate {since last done}]"
     }
 
     # The card's counter, caption and filled wear-bar segment count for
@@ -2433,7 +2719,7 @@ namespace eval ::plugins::MaintenanceTracker {
             set cap [_item_detail $id $entry]
         } elseif {$state eq "unknown"} {
             set cnt "?"
-            set cap [translate "Shot database unavailable -- see Diagnostics."]
+            set cap [translate "Shot database unavailable. See Diagnostics."]
         } else {
             set value [dict get $entry value]
             set threshold [dict get $entry threshold]
@@ -2447,15 +2733,12 @@ namespace eval ::plugins::MaintenanceTracker {
                 } else {
                     set cnt "$value / $threshold ml"
                 }
-                set cap [_ml_left_text $value $threshold]
-                set ld [_item_last_done_line $entry]
-                if {$cap eq ""} {
-                    set cap $ld
-                } elseif {$ld ne ""} {
-                    append cap "   ·   $ld"
-                }
+                # v0.31.0: the separator dot comes from _dot_join (the
+                # literal U+00B7 broke the ASCII-only source rule).
+                set cap [_dot_join [_ml_left_text $value $threshold] \
+                    [_item_last_done_line $entry]]
             } else {
-                set cnt "$value / $threshold [translate $unit]"
+                set cnt "$value / $threshold [_unit_word $unit $threshold]"
                 set cap [_item_last_done_line $entry]
             }
             if {[string is double -strict $value] && [string is double -strict $threshold] \
@@ -2493,13 +2776,132 @@ namespace eval ::plugins::MaintenanceTracker {
         return "$days [translate {days ago}]"
     }
 
+    # v0.31.0 (F21): "Last done Fri 02 Oct 21:29   .   4 days ago" (on the
+    # owner's Lumen, 12 h + month-first: "Last done Fri Oct 02 09:29 PM
+    # .   4 days ago"); was "Last done: <ISO>  (4 days ago)".
     proc _item_last_done_line {entry} {
         set ts [dict get $entry last_done]
         if {![string is wide -strict $ts] || $ts <= 0} { return "" }
-        set line "[translate {Last done:}] [clock format $ts -format {%Y-%m-%d %H:%M}]"
-        set ago [_fmt_ago $ts]
-        if {$ago ne ""} { append line "  ($ago)" }
-        return $line
+        return [_dot_join "[translate {Last done}] [_fmt_when $ts]" [_fmt_ago $ts]]
+    }
+
+    # ------------------------------------------------------------------
+    #  v0.31.0 (design review F21): the shared date, time and count
+    #  helpers. _clock_24h .. _fmt_time are copied verbatim from the
+    #  batch spec (GrindAdvisor, DrinkMenu and Lumen carry the same set),
+    #  so a date reads the same in every owner plugin and in Lumen's
+    #  taskbar; _fmt_ago above is the shared relative caption. Machine
+    #  timestamps -- the remove_event log line, Diagnostics' refresh
+    #  time -- stay ISO. Text is picked with if, never expr ?: (it
+    #  canonicalises numeric-looking strings).
+    # ------------------------------------------------------------------
+
+    # F21 (shared): dates follow Lumen's clock settings when Lumen is the skin, else the
+    # core's enable_ampm; day first unless Lumen says mdy. Text is picked with if, never expr ?:.
+    proc _clock_24h {} {
+        if {[llength [info commands ::lumen::time_format]]} {
+            if {[::lumen::time_format] == 12} { return 0 }
+            return 1
+        }
+        if {[info exists ::settings(enable_ampm)] && $::settings(enable_ampm) == 1} { return 0 }
+        return 1
+    }
+    proc _clock_mdy {} {
+        if {[llength [info commands ::lumen::date_format]] && [::lumen::date_format] eq "mdy"} { return 1 }
+        return 0
+    }
+    # Same day/time strings as Lumen's own taskbar (zero-padded day and 12 h hour), so a
+    # plugin date and Lumen read identically: "Fri 02 Oct 21:29", "Fri Oct 02 09:29 PM".
+    # " 2025" is added when the date is not in the current year.
+    proc _fmt_when {ts} {
+        if {![string is wide -strict $ts] || $ts <= 0} { return {} }
+        if {[_clock_mdy]} { set f {%a %b %d} } else { set f {%a %d %b} }
+        if {[clock format $ts -format %Y] ne [clock format [clock seconds] -format %Y]} { append f { %Y} }
+        if {[_clock_24h]} { append f { %H:%M} } else { append f { %I:%M %p} }
+        return [clock format $ts -format $f]
+    }
+    # Date only, for ranges and tight columns: "29 Sep" / "Sep 29" (+ " 2025" if not this year).
+    proc _fmt_day {ts} {
+        if {![string is wide -strict $ts] || $ts <= 0} { return {} }
+        if {[_clock_mdy]} { set f {%b %d} } else { set f {%d %b} }
+        if {[clock format $ts -format %Y] ne [clock format [clock seconds] -format %Y]} { append f { %Y} }
+        return [clock format $ts -format $f]
+    }
+    # Time only (e.g. "comes back at 21:39" / "09:39 PM"): same 12/24 h rule.
+    proc _fmt_time {ts} {
+        if {![string is wide -strict $ts] || $ts <= 0} { return {} }
+        if {[_clock_24h]} { return [clock format $ts -format %H:%M] }
+        return [clock format $ts -format {%I:%M %p}]
+    }
+
+    # F21 counts (shared): one pattern per list type.
+    proc _plural {n one {many ""}} {
+        if {$many eq ""} { set many "${one}s" }
+        if {$n == 1} { return "$n $one" }
+        return "$n $many"
+    }
+    # v0.31.1: a counting unit as it reads after the number n -- "day" /
+    # "shot" when n is 1 ("0 / 1 day", "1 of 1 shot since last done"),
+    # else the stored unit; ml and L have no plural. Picked with if.
+    proc _unit_word {unit n} {
+        if {[string is double -strict $n] && $n == 1} {
+            if {$unit eq "days"} { return [translate "day"] }
+            if {$unit eq "shots"} { return [translate "shot"] }
+        }
+        return [translate $unit]
+    }
+    # Card lists: "1-5 of 188 shots" (en dash); "No shots" when empty.
+    proc _range_count {first last total one {many ""}} {
+        if {$many eq ""} { set many "${one}s" }
+        if {$total <= 0} { return "No $many" }
+        set word $many
+        if {$total == 1} { set word $one }
+        return "$first[format %c 0x2013]$last of $total $word"
+    }
+    # MT's step count, shared by the Steps card and the step editor:
+    # "1 step" / "N steps", "" for none (the empty card says it).
+    proc _step_count {n} {
+        if {![string is integer -strict $n] || $n <= 0} { return "" }
+        return [_plural $n [translate step] [translate steps]]
+    }
+
+    # One glyph from its code point: the source stays ASCII-only (a
+    # literal U+00B7 sat in four strings until v0.31.0). Call it fully
+    # qualified from the page namespaces.
+    proc _u {code} { return [format %c $code] }
+
+    # Two texts on one line joined by the middle-dot separator (toolbar,
+    # card captions, history rows); an empty side drops the dot.
+    proc _dot_join {a b} {
+        if {$a eq ""} { return $b }
+        if {$b eq ""} { return $a }
+        return "$a   [_u 0xB7]   $b"
+    }
+
+    # v0.31.0 (F8 tight spots): cut a one-line text with an ellipsis so it
+    # measures at most max_px PHYSICAL px in font -- `font measure` is
+    # physical, so callers convert the virtual width they fit into with
+    # L(v2p), never the reverse. Text that fits, or no Tk font command
+    # (offline harnesses), comes back as is.
+    # v0.31.1 (design review F23): the ellipsis is the one character
+    # U+2026 (was three dots); every candidate is measured WITH it.
+    proc _fit_text {txt font max_px} {
+        if {![llength [info commands ::font]]} { return $txt }
+        if {[::font measure $font $txt] <= $max_px} { return $txt }
+        set ell [_u 0x2026]
+        for {set n [expr {[string length $txt] - 1}]} {$n > 0} {incr n -1} {
+            set cut "[string trimright [string range $txt 0 [expr {$n - 1}]]]$ell"
+            if {[::font measure $font $cut] <= $max_px} { return $cut }
+        }
+        return $ell
+    }
+
+    # pre + txt + post on one line: txt alone is cut to what the fixed
+    # parts leave of max_px (physical px, see _fit_text).
+    proc _fit_between {pre txt post font max_px} {
+        if {![llength [info commands ::font]]} { return "$pre$txt$post" }
+        set room [expr {$max_px - [::font measure $font "$pre$post"]}]
+        return "$pre[_fit_text $txt $font $room]$post"
     }
 
     # v0.20.0: an item's validated auto-record source ("" = manual only).
@@ -2513,19 +2915,22 @@ namespace eval ::plugins::MaintenanceTracker {
 
     # Human name for an auto source, shared by the Edit page's value
     # text and the Detail page's auto line.
+    # v0.31.1 (F23): values in sentence case like their neighbours ("off",
+    # "every espresso shot"): "clean cycle", "off (record manually)".
     proc _auto_src_label {src} {
         switch -- $src {
-            clean   { return [translate "Clean cycle"] }
-            descale { return [translate "Descale cycle"] }
+            clean   { return [translate "clean cycle"] }
+            descale { return [translate "descale cycle"] }
         }
-        return [translate "off -- record manually"]
+        return [translate "off (record manually)"]
     }
 
-    # Short form for button faces (the Add page's header toggle).
+    # Short form for button faces (the Add page's header toggle):
+    # "Auto: off" / "Auto: clean cycle" / "Auto: descale cycle".
     proc _auto_src_short {src} {
         switch -- $src {
-            clean   { return [translate "Clean cycle"] }
-            descale { return [translate "Descale cycle"] }
+            clean   { return [translate "clean cycle"] }
+            descale { return [translate "descale cycle"] }
         }
         return [translate "off"]
     }
@@ -2935,7 +3340,7 @@ namespace eval ::plugins::MaintenanceTracker {
                     -font $L(font_icon_pick) -fill $L(icon_idle) -anchor center -justify center
             }
             dui add dbutton $page $cx1 $ry1 $cx2 $ry2 -tags pick${k}_tap \
-                -command [list {*}$select_cmd $k]
+                -command [list ::plugins::MaintenanceTracker::_tap_art $page pick${k}_bg [list {*}$select_cmd $k]]
         }
     }
 
@@ -2962,8 +3367,9 @@ namespace eval ::plugins::MaintenanceTracker {
         }
         # v0.18.0: say what the selected icon depicts, right on the
         # "Icon:" label (one item -- no new layout zone to collide).
+        # v0.31.1 (F23 rule 1): ": " between label and value (was two spaces).
         catch { dui item config $page icon_label \
-            -text "[translate {Icon:}]  [_icon_label $selected]" }
+            -text "[translate {Icon:}] [_icon_label $selected]" }
     }
 
     # ------------------------------------------------------------------
@@ -3084,10 +3490,13 @@ namespace eval ::plugins::MaintenanceTracker {
     }
 
     # Human text for a link draft (Edit page value).
+    # v0.31.1: the app's two cycles are named one way everywhere, "clean
+    # cycle" / "descale cycle" (the auto values), capitalised only at the
+    # start of a line or label (was "Descale (app)" beside "descale cycle").
     proc _link_text {link} {
         switch -- [lindex $link 0] {
             profile { return [_short_text [lindex $link 2] 40] }
-            descale { return [translate "Descale (app)"] }
+            descale { return [translate "Descale cycle (app)"] }
             clean   { return [translate "Clean cycle (app)"] }
         }
         return [translate "none"]
@@ -3245,10 +3654,12 @@ namespace eval ::plugins::MaintenanceTracker {
         return [list $fn $title]
     }
 
-    # Ellipsis cut for one-line value cells (pure).
+    # Ellipsis cut for one-line value cells (pure). v0.31.1 (F23): the
+    # ellipsis is the one character U+2026, so the cut keeps max - 1
+    # characters plus it (was max - 3 plus three dots); max in, max out.
     proc _short_text {s max} {
         if {[string length $s] <= $max} { return $s }
-        return "[string range $s 0 [expr {$max - 4}]]..."
+        return "[string range $s 0 [expr {$max - 2}]][_u 0x2026]"
     }
 
     proc _set_prof_note {txt} {
@@ -3392,9 +3803,9 @@ namespace eval ::plugins::MaintenanceTracker {
         save_settings
         catch { msg "MaintenanceTracker: linked the app's $kind action to '$id'" }
         if {$kind eq "descale"} {
-            _set_prof_note [translate "Linked: the app's Descale."]
+            _set_prof_note [translate "Linked: the app's descale cycle."]
         } else {
-            _set_prof_note [translate "Linked: the app's Clean cycle."]
+            _set_prof_note [translate "Linked: the app's clean cycle."]
         }
         return 1
     }
@@ -3798,7 +4209,8 @@ namespace eval ::plugins::MaintenanceTracker {
     # ------------------------------------------------------------------
     #  Instructions (Pass 32, v0.26.0). Every tracker gets a Steps page:
     #  numbered instructions plus ONE coloured action (the link's: Load
-    #  profile / Open Descale / Start Clean, or Mark done). Steps come
+    #  profile / Open Descale / Start Clean, or Record -- "Mark done"
+    #  until v0.31.1, which named the same confirm two ways). Steps come
     #  from the item's own `steps` list when it has one (the Pass 34
     #  editor writes it; nothing writes it yet) or from a built-in
     #  template picked by keywords in the tracker's name, so every user,
@@ -3886,12 +4298,12 @@ namespace eval ::plugins::MaintenanceTracker {
         water_supply {
             "Swap the empty water bottle for a full one."
             "Check that the intake tube reaches the bottom and the lid seals."
-            "Tap Mark done to restart the bottle meter."
+            "Tap Record to restart the bottle meter."
         }
         generic {
             "Do the maintenance task."
             "Check that everything is refitted, clean and dry."
-            "Tap Mark done to record it."
+            "Tap Record to mark it done."
         }
     }
 
@@ -3952,12 +4364,21 @@ namespace eval ::plugins::MaintenanceTracker {
     # The Steps page's coloured action for a tracker's link.
     proc _steps_action_label {id} {
         variable clean_armed
+        # v0.31.0: labels picked with if, never expr ?: (owner rule).
         switch -- [lindex [_item_link $id] 0] {
-            profile { return [expr {[_run_pending_for $id] ? [translate "Switch back now"] : [translate "Start"]}] }
+            profile {
+                if {[_run_pending_for $id]} { return [translate "Switch back now"] }
+                return [translate "Start"]
+            }
             descale { return [translate "Open Descale"] }
-            clean   { return [expr {$clean_armed ? [translate "Yes, start Clean"] : [translate "Start Clean"]}] }
+            clean   {
+                if {$clean_armed} { return [translate "Yes, start Clean"] }
+                return [translate "Start Clean"]
+            }
         }
-        return [translate "Mark done"]
+        # v0.31.1 (F23 rule 7): the list card's and Detail's "Record" --
+        # it opens the same record confirm.
+        return [translate "Record"]
     }
 
     proc open_steps {id} {
@@ -4289,25 +4710,15 @@ namespace eval ::dui::pages::MaintenanceTracker_settings {
         dui add dbutton $page [expr {$rx - $L(btn_h)}] $th_y1 \
             $rx [expr {$th_y1 + $L(btn_h)}] \
             -tags btn_theme -label [::plugins::MaintenanceTracker::_theme_button_face] \
-            -command ::plugins::MaintenanceTracker::toggle_theme \
+            -command [list ::plugins::MaintenanceTracker::_tap $page btn_theme ::plugins::MaintenanceTracker::toggle_theme] \
             -label_font [expr {$L(have_icons) ? $L(font_icon_plate) : $L(font_button)}] \
             -style mt_btn
 
-        # Toolbar: paging status left, Prev/Next right (SHE toolbar zone).
+        # Toolbar: paging status only; the pager lives bottom-right
+        # (v0.29.2, see the bottom bar below).
         dui add dtext $page $lx $L(toolbar_y0) -tags toolbar_status -text "" \
-            -font $L(font_caption) \
-            -width [expr {$L(content_w) - 2 * ($L(btn_w_std) + $L(sm))}] \
+            -font $L(font_caption) -width $L(content_w) \
             -fill $L(text_mut) -anchor nw -justify left
-        set next_x1 [expr {$rx - $L(btn_w_std)}]
-        set prev_x1 [expr {$next_x1 - $L(sm) - $L(btn_w_std)}]
-        dui add dbutton $page $prev_x1 $L(toolbar_y0) [expr {$prev_x1 + $L(btn_w_std)}] $L(toolbar_y1) \
-            -tags prev_page -label [translate "Prev"] \
-            -command {::dui::pages::MaintenanceTracker_settings::scroll_cards -1} \
-            -label_font $L(font_button) -style mt_btn
-        dui add dbutton $page $next_x1 $L(toolbar_y0) $rx $L(toolbar_y1) \
-            -tags next_page -label [translate "Next"] \
-            -command {::dui::pages::MaintenanceTracker_settings::scroll_cards 1} \
-            -label_font $L(font_button) -style mt_btn
 
         # Card rows (Pass 10 Service Bay): bg + tinted icon plate + name
         # + state word + counter + segmented wear bar with amber tick +
@@ -4371,7 +4782,7 @@ namespace eval ::dui::pages::MaintenanceTracker_settings {
             # Non-empty creation label (v0.7.1 rule) + -initial_state
             # hidden (v0.10.1 no-flash rule for start-hidden items).
             dui add dtext $page $bar_x2 [expr {$top + $L(card_state_dy)}] -tags row${i}_auto \
-                -text [translate "AUTO"] -font $L(font_caption_b) -fill $L(icon_sel) \
+                -text [translate "AUTO"] -font $L(font_caption_b) -fill $L(col_info) \
                 -anchor e -justify right -initial_state hidden
 
             # Wear bar: fixed segment rects whose -fill reconfigures (the
@@ -4395,7 +4806,7 @@ namespace eval ::dui::pages::MaintenanceTracker_settings {
             set btn_y1 [expr {$top + ($L(card_h) - $L(card_btn_h)) / 2}]
             dui add dbutton $page $btn_x1 $btn_y1 $btn_x2 [expr {$btn_y1 + $L(card_btn_h)}] \
                 -tags row${i}_btn -label [translate "Record"] \
-                -command "::dui::pages::MaintenanceTracker_settings::card_record $i" \
+                -command [list ::plugins::MaintenanceTracker::_tap $page row${i}_btn "::dui::pages::MaintenanceTracker_settings::card_record $i"] \
                 -label_font $L(font_button) -style mt_btn
 
             # v0.5.0: invisible tap zone over the card's text area, opening
@@ -4408,30 +4819,46 @@ namespace eval ::dui::pages::MaintenanceTracker_settings {
             # the two interactive rectangles never overlap (v0.3.0 rule).
             dui add dbutton $page $lx $top [expr {$btn_x1 - $L(xl)}] $bottom \
                 -tags row${i}_open \
-                -command "::dui::pages::MaintenanceTracker_settings::card_open $i"
+                -command [list ::plugins::MaintenanceTracker::_tap_art $page row${i}_bg "::dui::pages::MaintenanceTracker_settings::card_open $i"]
         }
 
-        # Bottom bar: Done left, Add Tracker center (v0.7.0), Diagnostics
-        # right. All three fit with room to spare: Done ends at lx+400,
-        # the wide center button spans cx +/- 240, Diagnostics starts at
-        # rx-400 (virtual px) -- every gap is far beyond the md minimum.
+        # Bottom bar (v0.29.2, owner decision 2026-09-30): Done, New
+        # Tracker and Diagnostics side by side from the left (btn_w_std
+        # each, sm gaps: they end at lx+3*400+2*sm = 1332 virtual); the
+        # standard pager -- the same one ShotHistoryEditor and GrindAdvisor
+        # use -- holds the bottom-right corner (Prev starts at 1648).
         # v0.21.2: mt_ prefix on tags that DrinkMenu also used (done/
         # back/cancel/save/hide). Tk canvas tags are canvas-GLOBAL, and
         # the core's press flash (dui.tcl:9181) itemconfigures by bare
         # <tag>-btn -- a same-named pressfill button in ANY plugin
         # repaints ours to its color on every press.
-        dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
+        set bw $L(btn_w_std)
+        set x $lx
+        dui add dbutton $page $x $L(bar_y0) [expr {$x + $bw}] $L(bar_y1) \
             -tags mt_done -label [translate "Done"] \
-            -command ::plugins::MaintenanceTracker::page_done \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_done ::plugins::MaintenanceTracker::page_done] \
             -label_font $L(font_button) -style mt_btn
-        dui add dbutton $page [expr {$cx - $L(btn_w_wide) / 2}] $L(bar_y0) \
-            [expr {$cx + $L(btn_w_wide) / 2}] $L(bar_y1) \
-            -tags bar_add -label [translate "New Tracker"] \
-            -command ::plugins::MaintenanceTracker::open_add \
+        incr x [expr {$bw + $L(sm)}]
+        dui add dbutton $page $x $L(bar_y0) [expr {$x + $bw}] $L(bar_y1) \
+            -tags bar_add -label [translate "New tracker"] \
+            -command [list ::plugins::MaintenanceTracker::_tap $page bar_add ::plugins::MaintenanceTracker::open_add] \
             -label_font $L(font_button) -style mt_btn
-        dui add dbutton $page [expr {$rx - $L(btn_w_std)}] $L(bar_y0) $rx $L(bar_y1) \
+        incr x [expr {$bw + $L(sm)}]
+        dui add dbutton $page $x $L(bar_y0) [expr {$x + $bw}] $L(bar_y1) \
             -tags bar_diag -label [translate "Diagnostics"] \
-            -command ::plugins::MaintenanceTracker::open_diagnostics \
+            -command [list ::plugins::MaintenanceTracker::_tap $page bar_diag ::plugins::MaintenanceTracker::open_diagnostics] \
+            -label_font $L(font_button) -style mt_btn
+        # Pager: Next's right edge on rx, Prev an sm gap to its left, arrow
+        # + word labels; refresh disables the unavailable end (never hides).
+        set next_x1 [expr {$rx - $bw}]
+        set prev_x1 [expr {$next_x1 - $L(sm) - $bw}]
+        dui add dbutton $page $prev_x1 $L(bar_y0) [expr {$prev_x1 + $bw}] $L(bar_y1) \
+            -tags prev_page -label [translate "[format %c 0x25C0] Prev"] \
+            -command [list ::plugins::MaintenanceTracker::_tap $page prev_page {::dui::pages::MaintenanceTracker_settings::scroll_cards -1}] \
+            -label_font $L(font_button) -style mt_btn
+        dui add dbutton $page $next_x1 $L(bar_y0) $rx $L(bar_y1) \
+            -tags next_page -label [translate "Next [format %c 0x25B6]"] \
+            -command [list ::plugins::MaintenanceTracker::_tap $page next_page {::dui::pages::MaintenanceTracker_settings::scroll_cards 1}] \
             -label_font $L(font_button) -style mt_btn
     }
 
@@ -4519,16 +4946,24 @@ namespace eval ::dui::pages::MaintenanceTracker_settings {
         set first [expr {$card_page * $card_page_size + 1}]
         set last [expr {$card_page * $card_page_size + [llength $ids]}]
 
-        # Toolbar: item range + database headline.
-        set status "[translate {Items}] $first-$last [translate {of}] $n   ·   [translate {worst first}]"
+        # Toolbar: item range + database headline. v0.31.0 (F21 counts):
+        # the shared card-list count "1-5 of 11 trackers" (en dash, was
+        # "Items 1-5 of 11"); "worst first" stays a static fragment; the
+        # separator dot comes from _dot_join (ASCII-only source).
+        set status [::plugins::MaintenanceTracker::_dot_join \
+            [::plugins::MaintenanceTracker::_range_count $first $last $n \
+                [translate {tracker}] [translate {trackers}]] \
+            [translate {worst first}]]
         upvar #0 ::plugins::MaintenanceTracker::diag diag
         if {[dict exists $s sdb_ok] && [dict get $s sdb_ok]} {
-            append status "   ·   [translate {Shots in database:}] $diag(total_counted)"
+            set db "[translate {Shots in database:}] $diag(total_counted)"
             if {$diag(total_excluded) ne "" && $diag(total_excluded) > 0} {
-                append status " ([translate {excluded as cleaning:}] $diag(total_excluded))"
+                append db " ([translate {excluded as cleaning:}] $diag(total_excluded))"
             }
+            set status [::plugins::MaintenanceTracker::_dot_join $status $db]
         } elseif {[dict exists $s ok] && [dict get $s ok]} {
-            append status "   ·   [translate {Shot database unavailable -- see Diagnostics}]"
+            set status [::plugins::MaintenanceTracker::_dot_join $status \
+                [translate {Shot database unavailable. See Diagnostics.}]]
         }
         ::plugins::MaintenanceTracker::_cfg $page toolbar_status -text $status
 
@@ -4678,7 +5113,7 @@ namespace eval ::dui::pages::MaintenanceTracker_confirm {
         set cx [expr {($lx + $rx) / 2}]
 
         dui add dtext $page $cx $L(header_solo_title_y) -tags page_title \
-            -text [translate "Record Maintenance"] \
+            -text [translate "Record maintenance"] \
             -font $L(font_title) -width $L(content_w) -fill $L(text_hi) \
             -anchor center -justify center
 
@@ -4698,11 +5133,11 @@ namespace eval ::dui::pages::MaintenanceTracker_confirm {
 
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags mt_cancel -label [translate "Cancel"] \
-            -command ::plugins::MaintenanceTracker::cancel_record \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_cancel ::plugins::MaintenanceTracker::cancel_record] \
             -label_font $L(font_button) -style mt_btn
         dui add dbutton $page [expr {$rx - $L(btn_w_std)}] $L(bar_y0) $rx $L(bar_y1) \
             -tags bar_confirm -label [translate "Confirm"] \
-            -command ::plugins::MaintenanceTracker::record_pending \
+            -command [list ::plugins::MaintenanceTracker::_tap $page bar_confirm ::plugins::MaintenanceTracker::record_pending] \
             -label_font $L(font_button) -style mt_btn
     }
 
@@ -4746,7 +5181,7 @@ namespace eval ::dui::pages::MaintenanceTracker_confirm_burr {
         set cx [expr {($lx + $rx) / 2}]
 
         dui add dtext $page $cx $L(header_solo_title_y) -tags page_title \
-            -text [translate "Record Burr Install"] \
+            -text [translate "Record burr install"] \
             -font $L(font_title) -width $L(content_w) -fill $L(text_hi) \
             -anchor center -justify center
 
@@ -4772,7 +5207,7 @@ namespace eval ::dui::pages::MaintenanceTracker_confirm_burr {
         foreach {tag delta} {minus100 -100 minus10 -10} {
             dui add dbutton $page $x $step_y1 [expr {$x + $step_w}] $step_y2 \
                 -tags $tag -label $delta \
-                -command [list ::plugins::MaintenanceTracker::adjust_burr_offset $delta] \
+                -command [list ::plugins::MaintenanceTracker::_tap $page $tag [list ::plugins::MaintenanceTracker::adjust_burr_offset $delta]] \
                 -label_font $L(font_button) -style mt_btn
             set x [expr {$x + $step_w + $L(md)}]
         }
@@ -4783,7 +5218,7 @@ namespace eval ::dui::pages::MaintenanceTracker_confirm_burr {
         foreach {tag delta} {plus10 10 plus100 100} {
             dui add dbutton $page $x $step_y1 [expr {$x + $step_w}] $step_y2 \
                 -tags $tag -label +$delta \
-                -command [list ::plugins::MaintenanceTracker::adjust_burr_offset $delta] \
+                -command [list ::plugins::MaintenanceTracker::_tap $page $tag [list ::plugins::MaintenanceTracker::adjust_burr_offset $delta]] \
                 -label_font $L(font_button) -style mt_btn
             set x [expr {$x + $step_w + $L(md)}]
         }
@@ -4796,11 +5231,11 @@ namespace eval ::dui::pages::MaintenanceTracker_confirm_burr {
 
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags mt_cancel -label [translate "Cancel"] \
-            -command ::plugins::MaintenanceTracker::cancel_record \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_cancel ::plugins::MaintenanceTracker::cancel_record] \
             -label_font $L(font_button) -style mt_btn
         dui add dbutton $page [expr {$rx - $L(btn_w_std)}] $L(bar_y0) $rx $L(bar_y1) \
             -tags bar_confirm -label [translate "Confirm"] \
-            -command ::plugins::MaintenanceTracker::record_pending \
+            -command [list ::plugins::MaintenanceTracker::_tap $page bar_confirm ::plugins::MaintenanceTracker::record_pending] \
             -label_font $L(font_button) -style mt_btn
     }
 
@@ -4825,7 +5260,7 @@ namespace eval ::dui::pages::MaintenanceTracker_confirm_bottle {
         set cx [expr {($lx + $rx) / 2}]
 
         dui add dtext $page $cx $L(header_solo_title_y) -tags page_title \
-            -text [translate "Record Water Bottle"] \
+            -text [translate "Record water bottle"] \
             -font $L(font_title) -width $L(content_w) -fill $L(text_hi) \
             -anchor center -justify center
 
@@ -4851,7 +5286,7 @@ namespace eval ::dui::pages::MaintenanceTracker_confirm_bottle {
         foreach {tag delta} {minus1000 -1000 minus100 -100} {
             dui add dbutton $page $x $step_y1 [expr {$x + $step_w}] $step_y2 \
                 -tags $tag -label $delta \
-                -command [list ::plugins::MaintenanceTracker::adjust_bottle_size $delta] \
+                -command [list ::plugins::MaintenanceTracker::_tap $page $tag [list ::plugins::MaintenanceTracker::adjust_bottle_size $delta]] \
                 -label_font $L(font_button) -style mt_btn
             set x [expr {$x + $step_w + $L(md)}]
         }
@@ -4862,7 +5297,7 @@ namespace eval ::dui::pages::MaintenanceTracker_confirm_bottle {
         foreach {tag delta} {plus100 100 plus1000 1000} {
             dui add dbutton $page $x $step_y1 [expr {$x + $step_w}] $step_y2 \
                 -tags $tag -label +$delta \
-                -command [list ::plugins::MaintenanceTracker::adjust_bottle_size $delta] \
+                -command [list ::plugins::MaintenanceTracker::_tap $page $tag [list ::plugins::MaintenanceTracker::adjust_bottle_size $delta]] \
                 -label_font $L(font_button) -style mt_btn
             set x [expr {$x + $step_w + $L(md)}]
         }
@@ -4875,11 +5310,11 @@ namespace eval ::dui::pages::MaintenanceTracker_confirm_bottle {
 
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags mt_cancel -label [translate "Cancel"] \
-            -command ::plugins::MaintenanceTracker::cancel_record \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_cancel ::plugins::MaintenanceTracker::cancel_record] \
             -label_font $L(font_button) -style mt_btn
         dui add dbutton $page [expr {$rx - $L(btn_w_std)}] $L(bar_y0) $rx $L(bar_y1) \
             -tags bar_confirm -label [translate "Confirm"] \
-            -command ::plugins::MaintenanceTracker::record_pending \
+            -command [list ::plugins::MaintenanceTracker::_tap $page bar_confirm ::plugins::MaintenanceTracker::record_pending] \
             -label_font $L(font_button) -style mt_btn
     }
 
@@ -4944,7 +5379,7 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         dui add dbutton $page [expr {$rx - $L(btn_w_std)}] [expr {int(round(22 * $L(scale)))}] \
             $rx [expr {int(round(22 * $L(scale))) + $L(btn_h)}] \
             -tags btn_edit -label [translate "Edit"] \
-            -command ::dui::pages::MaintenanceTracker_detail::edit_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page btn_edit ::dui::pages::MaintenanceTracker_detail::edit_click] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
 
         # v0.29.1: status card -- the list card's anatomy without plate
@@ -4965,7 +5400,7 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         dui add dtext $page $ix1 [expr {$sy0 + $L(card_state_dy)}] -tags det_state -text "" \
             -font $L(font_caption_b) -fill $L(text_mut) -anchor w -justify left
         dui add dtext $page $ix2 [expr {$sy0 + $L(card_state_dy)}] -tags det_auto \
-            -text [translate "AUTO"] -font $L(font_caption_b) -fill $L(icon_sel) \
+            -text [translate "AUTO"] -font $L(font_caption_b) -fill $L(col_info) \
             -anchor e -justify right -initial_state hidden
         set bar_w [expr {$ix2 - $ix1}]
         set seg_stride [expr {($bar_w + $L(bar_seg_gap)) / $L(bar_segs)}]
@@ -5078,13 +5513,13 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         }
         # v0.26.0 (Pass 32): the button is always "Start" (primary,
         # green): it opens the tracker's Steps page, where the link's own
-        # action (Load profile / Open Descale / Start Clean / Mark done)
+        # action (Load profile / Open Descale / Start Clean / Record)
         # sits under the instructions.
         set prof_y1 [expr {$L(det_low_y1) - $L(card_pad_x)}]
         set prof_y0 [expr {$prof_y1 - $L(btn_h)}]
         dui add dbutton $page $kix1 $prof_y0 [expr {$kix1 + $kiw}] $prof_y1 \
             -tags mt_start -label [translate "Start"] \
-            -command ::dui::pages::MaintenanceTracker_detail::start_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_start ::dui::pages::MaintenanceTracker_detail::start_click] \
             -label_font $L(font_button) -style mt_btn_primary -initial_state hidden
 
         # Confirm-mode message (empty in view mode), between the cards
@@ -5115,19 +5550,19 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         set hide_x1 [expr {$rec_x0 - $bar_gap}]
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags bar_left -label [translate "Back"] \
-            -command ::dui::pages::MaintenanceTracker_detail::left_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page bar_left ::dui::pages::MaintenanceTracker_detail::left_click] \
             -label_font $L(font_button) -style mt_btn
         dui add dbutton $page $undo_x0 $L(bar_y0) [expr {$undo_x0 + $L(btn_w_xwide)}] $L(bar_y1) \
-            -tags bar_undo -label [translate "Undo Last Record"] \
-            -command ::dui::pages::MaintenanceTracker_detail::right_click \
+            -tags bar_undo -label [translate "Undo last record"] \
+            -command [list ::plugins::MaintenanceTracker::_tap $page bar_undo ::dui::pages::MaintenanceTracker_detail::right_click] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
         dui add dbutton $page [expr {$hide_x1 - $L(btn_w_xwide)}] $L(bar_y0) $hide_x1 $L(bar_y1) \
-            -tags mt_hide -label [translate "Hide Tracker"] \
-            -command ::dui::pages::MaintenanceTracker_detail::hide_click \
+            -tags mt_hide -label [translate "Hide tracker"] \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_hide ::dui::pages::MaintenanceTracker_detail::hide_click] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
         dui add dbutton $page $rec_x0 $L(bar_y0) $rx $L(bar_y1) \
             -tags mt_record -label [translate "Record"] \
-            -command ::dui::pages::MaintenanceTracker_detail::record_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_record ::dui::pages::MaintenanceTracker_detail::record_click] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
     }
 
@@ -5182,17 +5617,16 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         catch { dui item config $page page_title \
             -text [::plugins::MaintenanceTracker::_item_label $id] }
         # v0.29.1 status card: the list card's numbers (_card_numbers),
-        # the summary sentence on line 1 (ml: without the "-- left" tail,
+        # the summary sentence on line 1 (ml: without the "left" tail,
         # the caption already says it), the state word in its colour.
+        # v0.31.1 (F23): the tail is left off by _item_detail itself (tail
+        # 0), not cut at the " -- " separator the producer no longer uses.
         set color [::plugins::MaintenanceTracker::_state_color $state]
         lassign [::plugins::MaintenanceTracker::_card_numbers $id $entry] cnt cap nfill
-        set line1 [::plugins::MaintenanceTracker::_item_detail $id $entry]
+        set line1 [::plugins::MaintenanceTracker::_item_detail $id $entry 0]
         if {$state in {unset unknown}} {
             # line 1 already says it; the caption would repeat it.
             set cap ""
-        } else {
-            set cut [string first " -- " $line1]
-            if {$cut > 0} { set line1 [string range $line1 0 [expr {$cut - 1}]] }
         }
         catch { dui item config $page detail_counter -text $line1 }
         catch { dui item config $page det_cnt -text $cnt \
@@ -5307,24 +5741,25 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         # and Edit/Hide apply to every tracker uniformly.
         if {$mode eq "confirm" && $n > 0} {
             if {$target == $n - 1} {
+                # v0.31.0 (F21): the shared day/time format (was ISO).
                 set newest [lindex $events end]
                 set when ""
-                catch { set when [clock format [dict get $newest ts] -format {%Y-%m-%d %H:%M}] }
+                catch { set when [::plugins::MaintenanceTracker::_fmt_when [dict get $newest ts]] }
                 if {$n >= 2} {
                     set prev ""
-                    catch { set prev [clock format [dict get [lindex $events end-1] ts] -format {%Y-%m-%d %H:%M}] }
+                    catch { set prev [::plugins::MaintenanceTracker::_fmt_when [dict get [lindex $events end-1] ts]] }
                     set falls "[translate {The counter returns to}] $prev."
                 } else {
                     set falls "[translate {The counter returns to: never recorded.}]"
                 }
                 set ctext "[translate {Undo the record from}] $when?  $falls"
-                set clabel [translate "Yes, Delete Last Record"]
+                set clabel [translate "Yes, delete last record"]
             } else {
                 # v0.29.0: an older record -- the counter keeps the newest.
                 set when ""
-                catch { set when [clock format [dict get [lindex $events $target] ts] -format {%Y-%m-%d %H:%M}] }
+                catch { set when [::plugins::MaintenanceTracker::_fmt_when [dict get [lindex $events $target] ts]] }
                 set ctext "[translate {Remove the record from}] $when?  [translate {The counter stays as it is.}]"
-                set clabel [translate "Yes, Remove This Record"]
+                set clabel [translate "Yes, remove this record"]
             }
             catch { dui item config $page confirm_msg -text $ctext -fill $L(col_red) }
             catch { dui item config $page bar_left -label [translate "Cancel"] }
@@ -5336,7 +5771,10 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             catch { dui item show $page bar_undo* -initial 1 }
             # v0.25.0: red only while armed (the bare-tag face recolor,
             # the same mechanism as the theme walk).
-            catch { dui item config $page bar_undo-btn -fill $L(col_red) -outline $L(col_red) }
+            # v0.29.3: the fixed danger face, and the label turns white
+            # with it (the light theme's dark button ink is 2.17:1 on it).
+            catch { dui item config $page bar_undo-btn -fill $L(btn_danger_fill) -outline $L(btn_danger_fill) }
+            catch { dui item config $page bar_undo-lbl -fill $L(btn_accent_label) }
             catch { dui item hide $page mt_hide* -initial 1 }
             catch { dui item hide $page btn_edit* -initial 1 }
             catch { dui item hide $page mt_record* -initial 1 }
@@ -5346,8 +5784,9 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             catch { dui item hide $page mt_start* -initial 1 }
         } else {
             catch { dui item config $page bar_left -label [translate "Back"] }
-            catch { dui item config $page bar_undo -label [translate "Undo Last Record"] }
+            catch { dui item config $page bar_undo -label [translate "Undo last record"] }
             catch { dui item config $page bar_undo-btn -fill $L(btn_fill) -outline $L(btn_fill) }
+            catch { dui item config $page bar_undo-lbl -fill $L(btn_label_fill) }
             catch { dui item show $page mt_record* -initial 1 }
             if {$n > 0} {
                 catch { dui item show $page bar_undo* -initial 1 }
@@ -5367,7 +5806,7 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
             # v0.26.0: the Clean arm lives on the Steps page now.
             if {$hide_capped} {
                 catch { dui item config $page confirm_msg \
-                    -text [translate "Hide is unavailable: six trackers are already hidden. Restore one from the New Tracker page first."] \
+                    -text [translate "Hide is unavailable: six trackers are already hidden. Restore one from the New tracker page first."] \
                     -fill $L(text_mut) }
             } elseif {$::plugins::MaintenanceTracker::prof_note ne ""} {
                 # v0.22.0: the link outcome (Load / Link / Unlink /
@@ -5386,7 +5825,7 @@ namespace eval ::dui::pages::MaintenanceTracker_detail {
         set link [::plugins::MaintenanceTracker::_item_link $id]
         if {[lindex $link 0] eq ""} {
             catch { dui item config $page prof_value \
-                -text [translate "none -- link one on the Edit page"] -fill $L(text_mut) }
+                -text [translate "None. Link one on the Edit page."] -fill $L(text_mut) }
         } else {
             catch { dui item config $page prof_value \
                 -text [::plugins::MaintenanceTracker::_link_text $link] -fill $L(text_hi) }
@@ -5574,7 +6013,7 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
         # v0.21.0: title width trimmed clear of the header's corners --
         # the auto toggle now lives in the top-right mode-button slot.
         dui add dtext $page $cx $L(header_solo_title_y) -tags page_title \
-            -text [translate "New Tracker"] \
+            -text [translate "New tracker"] \
             -font $L(font_title) \
             -width [expr {$L(content_w) - 2 * ($L(btn_w_xwide) + $L(lg))}] \
             -fill $L(text_hi) -anchor center -justify center
@@ -5592,7 +6031,7 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
             $rx [expr {$at_y1 + $L(btn_h)}] \
             -tags btn_auto \
             -label "[translate {Auto:}] [::plugins::MaintenanceTracker::_auto_src_short {}]" \
-            -command ::dui::pages::MaintenanceTracker_add::toggle_auto \
+            -command [list ::plugins::MaintenanceTracker::_tap $page btn_auto ::dui::pages::MaintenanceTracker_add::toggle_auto] \
             -label_font $L(font_button) -style mt_btn
 
         # v0.29.1: three cards. Card 1: name (left) | counting unit +
@@ -5635,7 +6074,7 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
         dui add dbutton $page $chg_x0 [expr {$c1y0 + int(round(14 * $L(scale)))}] \
             $ix2 [expr {$c1y0 + int(round(14 * $L(scale))) + $L(btn_h)}] \
             -tags unit_toggle -label [translate "Change"] \
-            -command ::dui::pages::MaintenanceTracker_add::toggle_unit \
+            -command [list ::plugins::MaintenanceTracker::_tap $page unit_toggle ::dui::pages::MaintenanceTracker_add::toggle_unit] \
             -label_font $L(font_button) -style mt_btn
         # The hint spans the card (two caption lines at most, even for
         # the long ml wording).
@@ -5671,7 +6110,7 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
         foreach i {0 1} lbl {-10 -1} {
             dui add dbutton $page $x $step_y1 [expr {$x + $step_w}] $step_y2 \
                 -tags step$i -label $lbl \
-                -command [list ::dui::pages::MaintenanceTracker_add::step_click $i] \
+                -command [list ::plugins::MaintenanceTracker::_tap $page step$i [list ::dui::pages::MaintenanceTracker_add::step_click $i]] \
                 -label_font $L(font_button) -style mt_btn
             set x [expr {$x + $step_w + $L(md)}]
         }
@@ -5682,7 +6121,7 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
         foreach i {2 3} lbl {+1 +10} {
             dui add dbutton $page $x $step_y1 [expr {$x + $step_w}] $step_y2 \
                 -tags step$i -label $lbl \
-                -command [list ::dui::pages::MaintenanceTracker_add::step_click $i] \
+                -command [list ::plugins::MaintenanceTracker::_tap $page step$i [list ::dui::pages::MaintenanceTracker_add::step_click $i]] \
                 -label_font $L(font_button) -style mt_btn
             set x [expr {$x + $step_w + $L(md)}]
         }
@@ -5726,29 +6165,33 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
             -fill $L(card_bg) -outline $L(card_outline) -width 2 -tags add_c3 -initial_state hidden
         set hid_title_y [expr {$c3y0 + $L(sec_head_h) / 2}]
         dui add dtext $page $ix1 $hid_title_y -tags hidden_title \
-            -text [translate "Hidden trackers -- tap one to restore it:"] \
+            -text [translate "Tap a hidden tracker to restore it:"] \
             -font $L(font_body) -width [expr {$ix2 - $ix1}] \
             -fill $L(text_hi) -anchor w -justify left -initial_state hidden
         set chip_gap [expr {int(round(12 * $L(scale)))}]
         set chip_w [expr {min(int(round(186 * $L(scale))), ($ix2 - $ix1 - 5 * $chip_gap) / 6)}]
+        # v0.31.0 (F8): a dbutton label never wraps, and at 20px a custom
+        # name over ~14 characters ran into the next chip -- refresh fits
+        # each name into the chip less an sm pad per side (physical px).
+        variable chip_label_px [expr {($chip_w - 2 * $L(sm)) * $L(v2p)}]
         set chip_y1 [expr {$c3y0 + $L(sec_head_h)}]
         set chip_y2 [expr {$chip_y1 + $L(btn_h)}]
         for {set k 0} {$k < 6} {incr k} {
             set cx1 [expr {$ix1 + $k * ($chip_w + $chip_gap)}]
             dui add dbutton $page $cx1 $chip_y1 [expr {$cx1 + $chip_w}] $chip_y2 \
                 -tags hid$k -label "-" \
-                -command [list ::dui::pages::MaintenanceTracker_add::hid_click $k] \
+                -command [list ::plugins::MaintenanceTracker::_tap $page hid$k [list ::dui::pages::MaintenanceTracker_add::hid_click $k]] \
                 -label_font $L(font_button) -style mt_btn -initial_state hidden
         }
 
         # Bottom bar: Cancel left, Add Tracker right.
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags mt_cancel -label [translate "Cancel"] \
-            -command ::plugins::MaintenanceTracker::cancel_add \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_cancel ::plugins::MaintenanceTracker::cancel_add] \
             -label_font $L(font_button) -style mt_btn
         dui add dbutton $page [expr {$rx - $L(btn_w_wide)}] $L(bar_y0) $rx $L(bar_y1) \
             -tags mt_save -label [translate "Save"] \
-            -command ::plugins::MaintenanceTracker::add_save \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_save ::plugins::MaintenanceTracker::add_save] \
             -label_font $L(font_button) -style mt_btn
     }
 
@@ -5757,10 +6200,10 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
         set unit $::plugins::MaintenanceTracker::add_unit
         if {$unit eq "shots"} {
             set unit_txt [translate "shots since last done"]
-            set hint [translate "Counts EVERY shot on the machine -- the shot database cannot tell which grinder pulled which shot. Use days if this gear does not see every shot."]
+            set hint [translate "Counts EVERY shot on the machine. The shot database cannot tell which grinder pulled which shot. Use days if this gear does not see every shot."]
         } elseif {$unit eq "ml"} {
             set unit_txt [translate "ml of water dispensed"]
-            set hint [translate "Counts ALL water the machine dispenses -- espresso, steam, hot water, flushes and cleaning cycles -- since the last record. The meter only runs while this app is running."]
+            set hint [translate "Counts ALL water the machine dispenses (espresso, steam, hot water, flushes and cleaning cycles) since the last record. The meter only runs while this app is running."]
         } else {
             set unit_txt [translate "days since last done"]
             set hint [translate "Goes amber, then red, as days pass since the last record."]
@@ -5800,10 +6243,13 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
             catch { dui item hide $page add_c3 -initial 1 }
             catch { dui item hide $page hidden_title -initial 1 }
         }
+        variable chip_label_px
         for {set k 0} {$k < 6} {incr k} {
             if {$k < [llength $hidden]} {
-                catch { dui item config $page hid$k \
-                    -label [::plugins::MaintenanceTracker::_item_label [lindex $hidden $k]] }
+                set lbl [::plugins::MaintenanceTracker::_fit_text \
+                    [::plugins::MaintenanceTracker::_item_label [lindex $hidden $k]] \
+                    $::plugins::MaintenanceTracker::L(font_button) $chip_label_px]
+                catch { dui item config $page hid$k -label $lbl }
                 catch { dui item show $page hid$k* -initial 1 }
             } else {
                 catch { dui item hide $page hid$k* -initial 1 }
@@ -5814,6 +6260,9 @@ namespace eval ::dui::pages::MaintenanceTracker_add {
     # Ids currently shown on the restore chips, in chip order (set by
     # refresh; a tap maps through this, never through live settings).
     variable hidden_shown {}
+    # v0.31.0: physical px a chip label may take (setup sets the real
+    # value: (364 - 2 x 20) virtual x 1340/2560 = 170 on the tablet).
+    variable chip_label_px 170
 
     proc hid_click {k} {
         variable hidden_shown
@@ -5883,7 +6332,7 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
         set cx [expr {($lx + $rx) / 2}]
 
         dui add dtext $page $cx $L(header_solo_title_y) -tags page_title \
-            -text [translate "Edit Tracker"] \
+            -text [translate "Edit tracker"] \
             -font $L(font_title) -width $L(content_w) -fill $L(text_hi) \
             -anchor center -justify center
 
@@ -5935,19 +6384,19 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
             -anchor nw -justify left
         dui add dbutton $page $lk_x0 $lk_y0 $lk_x1 $lk_y1 \
             -tags mt_elink -label [translate "Link profile"] \
-            -command ::dui::pages::MaintenanceTracker_edit::link_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_elink ::dui::pages::MaintenanceTracker_edit::link_click] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
         dui add dbutton $page $lkds_x0 $lk_y0 $lkds_x1 $lk_y1 \
             -tags mt_elinkds -label [translate "Link Descale"] \
-            -command [list ::dui::pages::MaintenanceTracker_edit::link_kind_click descale] \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_elinkds [list ::dui::pages::MaintenanceTracker_edit::link_kind_click descale]] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
         dui add dbutton $page $lkcl_x0 $lk_y0 $ix2 $lk_y1 \
             -tags mt_elinkcl -label [translate "Link Clean"] \
-            -command [list ::dui::pages::MaintenanceTracker_edit::link_kind_click clean] \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_elinkcl [list ::dui::pages::MaintenanceTracker_edit::link_kind_click clean]] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
         dui add dbutton $page $lkcl_x0 $lk_y0 $ix2 $lk_y1 \
             -tags mt_eunlink -label [translate "Unlink"] \
-            -command ::dui::pages::MaintenanceTracker_edit::unlink_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_eunlink ::dui::pages::MaintenanceTracker_edit::unlink_click] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
 
         # Card 2. Threshold steppers (burr/Add pattern): label left,
@@ -5971,7 +6420,7 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
         foreach i {0 1} lbl {-10 -1} {
             dui add dbutton $page $x $step_y1 [expr {$x + $step_w}] $step_y2 \
                 -tags step$i -label $lbl \
-                -command [list ::dui::pages::MaintenanceTracker_edit::step_click $i] \
+                -command [list ::plugins::MaintenanceTracker::_tap $page step$i [list ::dui::pages::MaintenanceTracker_edit::step_click $i]] \
                 -label_font $L(font_button) -style mt_btn
             set x [expr {$x + $step_w + $L(md)}]
         }
@@ -5982,7 +6431,7 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
         foreach i {2 3} lbl {+1 +10} {
             dui add dbutton $page $x $step_y1 [expr {$x + $step_w}] $step_y2 \
                 -tags step$i -label $lbl \
-                -command [list ::dui::pages::MaintenanceTracker_edit::step_click $i] \
+                -command [list ::plugins::MaintenanceTracker::_tap $page step$i [list ::dui::pages::MaintenanceTracker_edit::step_click $i]] \
                 -label_font $L(font_button) -style mt_btn
             set x [expr {$x + $step_w + $L(md)}]
         }
@@ -6007,7 +6456,7 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
             -fill $L(text_hi) -anchor w -justify left
         dui add dbutton $page $chg_x0 $at_y1 $ix2 [expr {$at_y1 + $L(btn_h)}] \
             -tags auto_toggle -label [translate "Change"] \
-            -command ::dui::pages::MaintenanceTracker_edit::toggle_auto \
+            -command [list ::plugins::MaintenanceTracker::_tap $page auto_toggle ::dui::pages::MaintenanceTracker_edit::toggle_auto] \
             -label_font $L(font_button) -style mt_btn
         dui add dtext $page $ix1 [expr {$at_y1 + $L(btn_h) + $L(sm)}] -tags edit_note \
             -text [translate "The tracker's history and its counting unit (days, shots or ml) stay as they are."] \
@@ -6038,17 +6487,17 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
         # page's one positive action, hidden while delete is armed).
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags mt_cancel -label [translate "Cancel"] \
-            -command ::plugins::MaintenanceTracker::cancel_edit \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_cancel ::plugins::MaintenanceTracker::cancel_edit] \
             -label_font $L(font_button) -style mt_btn
         set cx2 [expr {($lx + $rx) / 2}]
         dui add dbutton $page [expr {$cx2 - $L(btn_w_xwide) / 2}] $L(bar_y0) \
             [expr {$cx2 + $L(btn_w_xwide) / 2}] $L(bar_y1) \
-            -tags bar_delete -label [translate "Delete Tracker"] \
-            -command ::dui::pages::MaintenanceTracker_edit::delete_click \
+            -tags bar_delete -label [translate "Delete tracker"] \
+            -command [list ::plugins::MaintenanceTracker::_tap $page bar_delete ::dui::pages::MaintenanceTracker_edit::delete_click] \
             -label_font $L(font_button) -style mt_btn_danger -initial_state hidden
         dui add dbutton $page [expr {$rx - $L(btn_w_std)}] $L(bar_y0) $rx $L(bar_y1) \
             -tags mt_save -label [translate "Save"] \
-            -command ::plugins::MaintenanceTracker::edit_save \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_save ::plugins::MaintenanceTracker::edit_save] \
             -label_font $L(font_button) -style mt_btn
     }
 
@@ -6108,16 +6557,24 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
         set id $::plugins::MaintenanceTracker::edit_item
         set is_custom [::plugins::MaintenanceTracker::_is_custom_id $id]
         if {$::plugins::MaintenanceTracker::edit_delete_armed && $is_custom} {
-            set label [::plugins::MaintenanceTracker::_item_label $id]
-            catch { dui item config $page edit_error_text \
-                -text "[translate {Delete the tracker}] \"$label\" [translate {and its recorded history?}]" }
-            catch { dui item config $page bar_delete -label [translate "Yes, Delete Tracker"] }
+            # v0.31.0 (F8): one line at 22px. A 40-character name made the
+            # sentence ~1220 of the 1244 px and wide letters wrapped it to
+            # two lines, inside md of card 3 and the bar: the name alone is
+            # cut to what the rest of the sentence leaves.
+            upvar #0 ::plugins::MaintenanceTracker::L L
+            set msg [::plugins::MaintenanceTracker::_fit_between \
+                "[translate {Delete the tracker}] \"" \
+                [::plugins::MaintenanceTracker::_item_label $id] \
+                "\" [translate {and its recorded history?}]" \
+                $L(font_primary) [expr {$L(content_w) * $L(v2p) - 4}]]
+            catch { dui item config $page edit_error_text -text $msg }
+            catch { dui item config $page bar_delete -label [translate "Yes, delete tracker"] }
             catch { dui item show $page bar_delete* -initial 1 }
             catch { dui item hide $page mt_save* -initial 1 }
         } else {
             catch { dui item config $page edit_error_text \
                 -text $::plugins::MaintenanceTracker::edit_error }
-            catch { dui item config $page bar_delete -label [translate "Delete Tracker"] }
+            catch { dui item config $page bar_delete -label [translate "Delete tracker"] }
             if {$is_custom} {
                 catch { dui item show $page bar_delete* -initial 1 }
             } else {
@@ -6210,9 +6667,10 @@ namespace eval ::dui::pages::MaintenanceTracker_edit {
 # ===========================================================================
 #  Steps page -- Pass 32 (v0.26.0). The tracker's instructions, numbered,
 #  and ONE coloured action under them: the link's own (Load profile /
-#  Open Descale / Start Clean, two-tap) or Mark done. Mark done (and a
-#  linked tracker's secondary Mark done) is the list's confirm flow,
-#  returning to Detail. Nothing here writes anything new.
+#  Open Descale / Start Clean, two-tap) or Record. Record (and a linked
+#  tracker's secondary Record) is the list's confirm flow, returning to
+#  Detail. v0.31.1: both read "Record" like the list card and Detail
+#  (were "Mark done", F23 rule 7). Nothing here writes anything new.
 # ===========================================================================
 
 namespace eval ::dui::pages::MaintenanceTracker_steps {
@@ -6233,7 +6691,7 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
         dui add dbutton $page [expr {$rx - $L(btn_w_std)}] [expr {int(round(22 * $L(scale)))}] \
             $rx [expr {int(round(22 * $L(scale))) + $L(btn_h)}] \
             -tags mt_sedit -label [translate "Edit steps"] \
-            -command ::dui::pages::MaintenanceTracker_steps::edit_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_sedit ::dui::pages::MaintenanceTracker_steps::edit_click] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
         set sub_y [expr {int(round(96 * $L(scale)))}]
         dui add dtext $page $cx $sub_y -tags steps_sub -text "" \
@@ -6302,22 +6760,24 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
             -font $L(font_primary) -width [expr {$ix2 - $ix1 - $ghc_w - $L(md)}] \
             -fill $L(text_hi) -anchor w -justify left -initial_state hidden
 
-        # Bottom bar: [Back] ... [Mark done] [<action>]. The action is the
-        # page's one primary (green, xwide, right); Mark done (normal)
-        # shows only when the action is something else.
+        # Bottom bar: [Back] ... [Record] [<action>]. The action is the
+        # page's one primary (green, xwide, right); Record (normal) shows
+        # only when the action is something else. The creation labels are
+        # real (a dbutton made with -label "" never gets a label item);
+        # refresh relabels mt_sgo through its BARE tag.
         set go_x0 [expr {$rx - $L(btn_w_xwide)}]
         set done_x1 [expr {$go_x0 - $L(lg)}]
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags mt_sback -label [translate "Back"] \
-            -command ::dui::pages::MaintenanceTracker_steps::back_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_sback ::dui::pages::MaintenanceTracker_steps::back_click] \
             -label_font $L(font_button) -style mt_btn
         dui add dbutton $page [expr {$done_x1 - $L(btn_w_wide)}] $L(bar_y0) $done_x1 $L(bar_y1) \
-            -tags mt_sdone -label [translate "Mark done"] \
-            -command ::dui::pages::MaintenanceTracker_steps::done_click \
+            -tags mt_sdone -label [translate "Record"] \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_sdone ::dui::pages::MaintenanceTracker_steps::done_click] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
         dui add dbutton $page $go_x0 $L(bar_y0) $rx $L(bar_y1) \
-            -tags mt_sgo -label [translate "Mark done"] \
-            -command ::dui::pages::MaintenanceTracker_steps::go_click \
+            -tags mt_sgo -label [translate "Record"] \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_sgo ::dui::pages::MaintenanceTracker_steps::go_click] \
             -label_font $L(font_button) -style mt_btn_primary -initial_state hidden
     }
 
@@ -6340,12 +6800,17 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
             return
         }
         catch { dui item show $page mt_sedit* -initial 1 }
+        # v0.31.0 (F8): one line. At 40px a name over ~33 characters
+        # wrapped to two lines (0..96) and ran into steps_sub at 96; the
+        # full name stays on Detail.
+        set tw [expr {($L(content_w) - 2 * ($L(btn_w_std) + $L(lg))) * $L(v2p) - 4}]
         catch { dui item config $page page_title \
-            -text [::plugins::MaintenanceTracker::_item_label $id] }
+            -text [::plugins::MaintenanceTracker::_fit_text \
+                [::plugins::MaintenanceTracker::_item_label $id] $L(font_title) $tw] }
         set link [::plugins::MaintenanceTracker::_item_link $id]
         set kind [lindex $link 0]
         if {$kind eq ""} {
-            set sub [translate "Not linked to a machine action -- tap Mark done when you have finished."]
+            set sub [translate "Not linked to a machine action. Tap Record when you have finished."]
         } else {
             set sub "[translate {Linked to:}] [::plugins::MaintenanceTracker::_link_text $link]"
         }
@@ -6356,7 +6821,9 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
         set run [expr {$kind eq "profile" && [::plugins::MaintenanceTracker::_run_pending_for $id]}]
         if {$run} {
             set rr [::plugins::MaintenanceTracker::_run_pending]
-            set back_at [clock format [expr {[dict get $rr ts] + $::plugins::MaintenanceTracker::run_timeout_s}] -format %H:%M]
+            # v0.31.0 (F21): the shared 12/24 h time (was always %H:%M).
+            set back_at [::plugins::MaintenanceTracker::_fmt_time \
+                [expr {[dict get $rr ts] + $::plugins::MaintenanceTracker::run_timeout_s}]]
             if {$::plugins::MaintenanceTracker::run_started} {
                 set hint "[translate {Running. Your profile}] [dict get $rr prev_title] [translate {comes back when it finishes.}]"
             } else {
@@ -6390,8 +6857,13 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
         catch { dui item config $page mt_sgo -label [::plugins::MaintenanceTracker::_steps_action_label $id] }
         # v0.27.0: "Switch back now" is a way out, not the go-ahead: normal
         # face while a run is pending, green otherwise (bare-tag recolor).
-        set face [expr {$run ? $L(btn_fill) : $L(col_ok)}]
+        # v0.29.3: green = the fixed primary face, and the label follows
+        # the face -- the theme's button ink on the normal face (white
+        # there was 1.70:1 in the light theme), white on the green.
+        set face [expr {$run ? $L(btn_fill) : $L(btn_primary_fill)}]
+        set ink [expr {$run ? $L(btn_label_fill) : $L(btn_accent_label)}]
         catch { dui item config $page mt_sgo-btn -fill $face -outline $face }
+        catch { dui item config $page mt_sgo-lbl -fill $ink }
         catch { dui item show $page mt_sgo* -initial 1 }
         if {$kind eq "" || $run} {
             catch { dui item hide $page mt_sdone* -initial 1 }
@@ -6426,14 +6898,9 @@ namespace eval ::dui::pages::MaintenanceTracker_steps {
         for {set k 0} {$k <= $n_max} {incr k} {
             catch { dui item [expr {$k == $n ? "show" : "hide"}] $page steps_card$k -initial 1 }
         }
-        if {$n == 0} {
-            set cnt ""
-        } elseif {$n == 1} {
-            set cnt [translate "1 step"]
-        } else {
-            set cnt "$n [translate {steps}]"
-        }
-        catch { dui item config $page steps_count -text $cnt }
+        # v0.31.0: the shared step count ("" for none).
+        catch { dui item config $page steps_count \
+            -text [::plugins::MaintenanceTracker::_step_count $n] }
     }
 
     # v0.29.1: the message callout -- ok (green tint, the run hint), red
@@ -6596,15 +7063,15 @@ namespace eval ::dui::pages::MaintenanceTracker_stepedit {
                 -initial_state hidden
             dui add dbutton $page $up_x0 $y $up_x1 [expr {$y + $bh}] \
                 -tags mt_seup$i -label [translate "Up"] \
-                -command [list ::dui::pages::MaintenanceTracker_stepedit::move_click $i -1] \
+                -command [list ::plugins::MaintenanceTracker::_tap $page mt_seup$i [list ::dui::pages::MaintenanceTracker_stepedit::move_click $i -1]] \
                 -label_font $L(font_button) -style mt_btn -initial_state hidden
             dui add dbutton $page $dn_x0 $y $dn_x1 [expr {$y + $bh}] \
                 -tags mt_sedn$i -label [translate "Down"] \
-                -command [list ::dui::pages::MaintenanceTracker_stepedit::move_click $i 1] \
+                -command [list ::plugins::MaintenanceTracker::_tap $page mt_sedn$i [list ::dui::pages::MaintenanceTracker_stepedit::move_click $i 1]] \
                 -label_font $L(font_button) -style mt_btn -initial_state hidden
             dui add dbutton $page $rm_x0 $y $ix2 [expr {$y + $bh}] \
                 -tags mt_serm$i -label [translate "Remove"] \
-                -command [list ::dui::pages::MaintenanceTracker_stepedit::remove_click $i] \
+                -command [list ::plugins::MaintenanceTracker::_tap $page mt_serm$i [list ::dui::pages::MaintenanceTracker_stepedit::remove_click $i]] \
                 -label_font $L(font_button) -style mt_btn -initial_state hidden
         }
 
@@ -6631,11 +7098,11 @@ namespace eval ::dui::pages::MaintenanceTracker_stepedit {
             -initial_state hidden
         dui add dbutton $page $ix1 $fbtn_y [expr {$ix1 + $L(btn_w_std)}] [expr {$fbtn_y + $L(btn_h)}] \
             -tags mt_sefcancel -label [translate "Cancel"] \
-            -command ::dui::pages::MaintenanceTracker_stepedit::form_cancel_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_sefcancel ::dui::pages::MaintenanceTracker_stepedit::form_cancel_click] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
         dui add dbutton $page [expr {$ix2 - $L(btn_w_wide)}] $fbtn_y $ix2 [expr {$fbtn_y + $L(btn_h)}] \
             -tags mt_sefsave -label [translate "Save step"] \
-            -command ::dui::pages::MaintenanceTracker_stepedit::form_save_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_sefsave ::dui::pages::MaintenanceTracker_stepedit::form_save_click] \
             -label_font $L(font_button) -style mt_btn_primary -initial_state hidden
 
         # Bottom bar (list mode): [Cancel] [Reset to default] [Add step]
@@ -6646,19 +7113,19 @@ namespace eval ::dui::pages::MaintenanceTracker_stepedit {
         set ad_x1 [expr {$sv_x0 - $bar_gap}]
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags mt_secancel -label [translate "Cancel"] \
-            -command ::dui::pages::MaintenanceTracker_stepedit::cancel_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_secancel ::dui::pages::MaintenanceTracker_stepedit::cancel_click] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
         dui add dbutton $page $rs_x0 $L(bar_y0) [expr {$rs_x0 + $L(btn_w_xwide)}] $L(bar_y1) \
             -tags mt_sereset -label [translate "Reset to default"] \
-            -command ::dui::pages::MaintenanceTracker_stepedit::reset_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_sereset ::dui::pages::MaintenanceTracker_stepedit::reset_click] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
         dui add dbutton $page [expr {$ad_x1 - $L(btn_w_xwide)}] $L(bar_y0) $ad_x1 $L(bar_y1) \
             -tags mt_seadd -label [translate "Add step"] \
-            -command ::dui::pages::MaintenanceTracker_stepedit::add_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_seadd ::dui::pages::MaintenanceTracker_stepedit::add_click] \
             -label_font $L(font_button) -style mt_btn -initial_state hidden
         dui add dbutton $page $sv_x0 $L(bar_y0) $rx $L(bar_y1) \
             -tags mt_sesave -label [translate "Save"] \
-            -command ::dui::pages::MaintenanceTracker_stepedit::save_click \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_sesave ::dui::pages::MaintenanceTracker_stepedit::save_click] \
             -label_font $L(font_button) -style mt_btn_primary -initial_state hidden
     }
 
@@ -6726,7 +7193,12 @@ namespace eval ::dui::pages::MaintenanceTracker_stepedit {
         if {$::plugins::MaintenanceTracker::se_mode eq "form"} {
             _set_list_vis $page 0
             set fi $::plugins::MaintenanceTracker::se_form_idx
-            set cap [expr {$fi < 0 ? [translate "New step"] : "[translate {Edit step}] [expr {$fi + 1}]"}]
+            # v0.31.0: picked with if, never expr ?: (owner rule).
+            if {$fi < 0} {
+                set cap [translate "New step"]
+            } else {
+                set cap "[translate {Edit step}] [expr {$fi + 1}]"
+            }
             catch { dui item config $page se_fcap -text $cap }
             _set_form_vis $page 1
             return
@@ -6734,8 +7206,10 @@ namespace eval ::dui::pages::MaintenanceTracker_stepedit {
         _set_form_vis $page 0
         set draft $::plugins::MaintenanceTracker::se_draft
         set nd [llength $draft]
+        # v0.31.0: the Steps card's count helper (was an expr ?: that
+        # read "0 steps" here and nothing on the Steps page).
         catch { dui item config $page se_count \
-            -text [expr {$nd == 1 ? [translate "1 step"] : "$nd [translate {steps}]"}] }
+            -text [::plugins::MaintenanceTracker::_step_count $nd] }
         for {set i 0} {$i < $nd} {incr i} {
             catch { dui item config $page se_b${i}_n -text [expr {$i + 1}] }
             catch { dui item config $page se_t$i \
@@ -6811,12 +7285,16 @@ namespace eval ::dui::pages::MaintenanceTracker_diagnostics {
         set rx $L(right_x)
         set cx [expr {($lx + $rx) / 2}]
 
+        # v0.31.1 (design review F23): the title names the page only; the
+        # plugin's name leads the subtitle (was "Maintenance Tracker --
+        # Diagnostics" as the title).
         dui add dtext $page $cx $L(header_title_y) -tags page_title \
-            -text [translate "Maintenance Tracker -- Diagnostics"] \
+            -text [translate "Diagnostics"] \
             -font $L(font_title) -width $L(content_w) -fill $L(text_hi) \
             -anchor center -justify center
         dui add dtext $page $cx $L(header_subtitle_y) -tags subtitle \
-            -text [translate "Detected database, table, columns and filters. Everything on this page is read-only."] \
+            -text [::plugins::MaintenanceTracker::_dot_join [translate "Maintenance Tracker"] \
+                [translate "Detected database, table, columns and filters. Everything on this page is read-only."]] \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) \
             -anchor center -justify center
 
@@ -6836,7 +7314,7 @@ namespace eval ::dui::pages::MaintenanceTracker_diagnostics {
         # Bottom bar: Back, left slot.
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags mt_back -label [translate "Back"] \
-            -command ::plugins::MaintenanceTracker::diagnostics_back \
+            -command [list ::plugins::MaintenanceTracker::_tap $page mt_back ::plugins::MaintenanceTracker::diagnostics_back] \
             -label_font $L(font_button) -style mt_btn
     }
 
@@ -6872,8 +7350,9 @@ namespace eval ::dui::pages::MaintenanceTracker_diagnostics {
         set refreshed ""
         catch { set refreshed [clock format $diag(refreshed) -format "%Y-%m-%d %H:%M:%S"] }
 
+        # v0.31.0: the state WORD (due soon), not the internal key (amber).
         set overall "unavailable"
-        catch { if {[dict get $s ok]} { set overall [dict get $s state] } }
+        catch { if {[dict get $s ok]} { set overall [::plugins::MaintenanceTracker::_state_word [dict get $s state]] } }
 
         # Blank facts render as "n/a", never as an empty cell.
         set na [translate "n/a"]

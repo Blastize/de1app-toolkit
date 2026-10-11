@@ -22,11 +22,15 @@
 # key from Pass 5/6 is dropped from memory on load if found on disk (see
 # plugin.tcl); presets can never be edited or overwritten by the user.
 #
-# Two scale sources (ShotHistoryEditor v0.3.2 lesson):
+# One scale source (ShotHistoryEditor v0.3.2 lesson; F8, v1.18.0):
 #   - COORDINATES are virtual (the core's ::dui::_base_screen_width x
-#     _base_screen_height, 2560x1600); the framework rescales them.
-#   - FONTS are physical pixels (negative Tk sizes) from the detected
-#     screen, because Tk font objects bypass the coordinate rescale.
+#     _base_screen_height, 2560x1600); the framework rescales them by
+#     dui's screen_size_height (800 on the 1340x800 tablet).
+#   - FONTS are physical pixels (negative Tk sizes, because Tk font
+#     objects bypass the coordinate rescale), scaled by the SAME
+#     screen_size_height / 800. Never by `winfo screenheight`, which is
+#     736 on the tablet (the Android bar is taken off) and drew every
+#     face at 0.92 until v1.18.0.
 # `dui add canvas_item` rescales -width too, so a 1px line is -width 2.
 #
 # Cup renderer geometry: a vessel is a profile of {frac_height half_width}
@@ -459,7 +463,12 @@ namespace eval ::plugins::DrinkMenu {
         }
         if {!$coffee} { return [list 0 [translate "Needs an espresso layer"]] }
         if {$total > $cap} {
-            return [list 0 "[translate "Exceeds vessel by"] [expr {$total - $cap}] ml"]
+            # F21 (v1.18.0): in the current ml/oz unit, like every amount.
+            # One ml over rounds to "0.0 oz" (a pint draft stepped in oz,
+            # then moved to the cup), so the least overflow shown is 0.1.
+            set over [format_amount [expr {$total - $cap}]]
+            if {[string match "0.0 *" $over]} { set over "0.1 [string range $over 4 end]" }
+            return [list 0 "[translate "Exceeds vessel by"] $over"]
         }
         return [list 1 ""]
     }
@@ -638,6 +647,11 @@ namespace eval ::plugins::DrinkMenu {
     variable edit_pending ""
     variable edit_loading 0
     variable edit_note ""
+    # F21 (v1.18.0): the last edit_note that is a confirmation, not a
+    # warning ("Profile linked: X", "Profile link removed"). The editor's
+    # status line wears c_ink_2 while it shows exactly this text, warn
+    # otherwise; any other note text fails the equality, so no reset.
+    variable edit_note_info ""
     # The page the editor was opened FROM, and the only page it returns
     # to (Pass 13). "DrinkMenu_detail" for Copy & edit / Edit, which are
     # always reached from a detail page; "DrinkMenu_main" for the menu's
@@ -984,6 +998,21 @@ namespace eval ::plugins::DrinkMenu {
         return [expr {($n + $page_size - 1) / $page_size}]
     }
 
+    # F21 (v1.18.0), the shared count pattern for a paged grid: the
+    # subtitle carries the count alone ("46 espresso drinks", singular via
+    # if) and the bottom bar the page ("Page 1 of 4", "" for one page).
+    # Text is picked with if, never expr ?:. The words go through
+    # translate like every other label here.
+    proc _plural {n one {many ""}} {
+        if {$many eq ""} { set many "${one}s" }
+        if {$n == 1} { return "$n $one" }
+        return "$n $many"
+    }
+    proc _page_count {idx total} {
+        if {$total <= 1} { return "" }
+        return "[translate "Page"] [expr {$idx + 1}] [translate "of"] $total"
+    }
+
     # Ratio line (v0.3.1: coffee first): all `coffee`-role layers first,
     # in layer order, same ingredient merged; then every other
     # non-`minor` layer in layer order, adjacent equal ingredients
@@ -1205,7 +1234,9 @@ namespace eval ::plugins::DrinkMenu {
             }
         }]
         catch { msg -NOTICE "DrinkMenu: to machine: [join $done {; }]" }
-        _machine_note [join $done ", "]
+        # F23 (v1.18.1): two outcomes are two facts, so a middle dot
+        # ("Profile set . Water 120 ml"), not a comma.
+        _machine_note [join $done " [::plugins::DrinkMenu::_u 0xB7] "]
     }
 
     # Label column layout (pure). mids: canvas y of every layer's
@@ -1416,7 +1447,9 @@ namespace eval ::plugins::DrinkMenu {
     # Status line for the preview: "" when valid, else the message.
     proc edit_status {drink} {
         lassign [validate_drink $drink] ok msg
-        return [expr {$ok ? "" : $msg}]
+        # Text is picked with if, never expr ?: (F21 owner rule).
+        if {$ok} { return "" }
+        return $msg
     }
 
     # New custom id from the clock, suffixed on collision.
@@ -1511,6 +1544,11 @@ namespace eval ::plugins::DrinkMenu {
         }
         return $glyph
     }
+
+    # F23 (v1.18.1): copy glyphs from their code points, so the source
+    # stays ASCII: _u 0x2026 is the ellipsis, _u 0xB7 the middle dot that
+    # sits between two facts on one line (MaintenanceTracker's helper).
+    proc _u {code} { return [::format %c $code] }
 
     # Palette. Pass 20 (v0.11.0), owner decision: these pages wear the
     # design mock's warm brown look under EVERY skin theme, so this proc
@@ -1687,6 +1725,22 @@ namespace eval ::plugins::DrinkMenu {
         set L(btn_danger_fill)  [_blend $L(btn_fill) "#c0392b" 0.45]
         set L(btn_danger_edge)  $L(btn_danger_fill)
         set L(btn_danger_press) [_blend $L(btn_danger_fill) "#ffffff" 0.12]
+        # F21 (v1.18.0): the shared STATUS roles -- the dark set every
+        # owner plugin and Lumen use, defined here once. Text colours only:
+        # each clears 4.5:1 on every surface a text item sits on in these
+        # always-dark pages (page gradient's lightest stop, card body, the
+        # card's lightest row, the badge well; the net's CONTRAST sweep),
+        # always beside a word (WCAG 1.4.1), never on a button label. The
+        # Delete face above and the header's two selected tones (Pass 45)
+        # stay as they are.
+        set L(c_ok)     "#2FD3A4"
+        set L(c_warn)   "#E8B34C"
+        set L(c_danger) "#ff8a80"
+        set L(c_info)   "#8ab4ff"
+        # The editor's status line and the detail's over-capacity
+        # subtitle. Until v1.18.0 a pale gold blend set in _init_layout,
+        # 1.13:1 from the accent gold: it read as an accent, not a warning.
+        set L(warn)     $L(c_warn)
         # Pass 45: the segmented toggles (ml/oz, 1/2 shots, ml/g) are
         # display preferences, not filters or actions, so their selected
         # half wears a SECONDARY tone -- the mock's ink_2 with gold-ink
@@ -1820,7 +1874,14 @@ namespace eval ::plugins::DrinkMenu {
         set line1 ""
         set i 0
         for {} {$i < $n} {incr i} {
-            set cand [expr {$line1 eq "" ? [lindex $parts $i] : "$line1, [lindex $parts $i]"}]
+            # F21 (v1.18.0): picked with if. These are user-typed custom
+            # ingredient names, and expr ?: canonicalises a numeric-looking
+            # one ("1.50" -> "1.5", "0715" -> "461").
+            if {$line1 eq ""} {
+                set cand [lindex $parts $i]
+            } else {
+                set cand "$line1, [lindex $parts $i]"
+            }
             if {$line1 ne "" && [_text_w $font $cand] > $maxw} { break }
             set line1 $cand
         }
@@ -1871,21 +1932,35 @@ namespace eval ::plugins::DrinkMenu {
         if {$sh <= 1} { set sh 1600 }
         set scale [expr {double($sh) / 800.0}]
 
-        # Real physical screen, used ONLY for font pixel sizes and text
-        # measurement.
+        # The physical screen as Tk reports it: the background PNG folder
+        # (L(phys_w/h), below) and the physical px of a virtual width
+        # (v2px/px2v, for text measurement). Never a font size (F8).
         set psw 1340
         set psh 800
         catch { set psw [winfo screenwidth .] }
         catch { set psh [winfo screenheight .] }
         if {$psw <= 1} { set psw 1340 }
         if {$psh <= 1} { set psh 800 }
-        set font_scale [expr {double($psh) / 800.0}]
+        # F8 (v1.18.0): fonts scale from the height the COORDINATES are
+        # rescaled by -- dui's screen_size_height (dui.tcl:188-191 maps the
+        # tablet's 1340x736 to 1340x800, 346-347 stores it, 557-560 divide
+        # every virtual y by it). `winfo screenheight` says 736 there, so
+        # the old psh/800 drew every face at 0.92 (body 17 for 19). The
+        # guard tests the precondition instead of catching; anything that
+        # is not a number falls back to 800, never to winfo.
+        set ch 800
+        if {[llength [info commands ::dui::cget]]} {
+            set v [::dui::cget screen_size_height]
+            if {[string is double -strict $v] && $v > 1} { set ch $v }
+        }
+        set font_scale [expr {double($ch) / 800.0}]
 
         set L(screen_w) $sw
         set L(screen_h) $sh
         # The PHYSICAL screen, kept as its own pair of tokens: it names
         # the per-resolution background PNG folder (Pass 20), exactly as
-        # Lumen names skins/Lumen/<W>x<H>/. Never used for layout.
+        # Lumen names skins/Lumen/<W>x<H>/. Never used for layout or for
+        # a font size.
         set L(phys_w) $psw
         set L(phys_h) $psh
         set L(scale) $scale
@@ -1962,8 +2037,9 @@ namespace eval ::plugins::DrinkMenu {
         # Title + subtitle group, also centred on the band. Both are anchor
         # w, so a line's own centre is its y; the group runs from the title's
         # top to the subtitle's bottom. Text heights are ref px x scale: the
-        # y mapping is virtual -> physical at sh/psh, so a 40 physical px
-        # face is exactly 40 x scale virtual units tall.
+        # y mapping is virtual -> physical at sh / dui's screen_size_height
+        # (1600 / 800 = scale), the same height font_scale reads (F8), so a
+        # 40 physical px face is exactly 40 x scale virtual units tall.
         set L(hdr_title_h) [expr {int(round(40 * $scale))}]
         set L(hdr_sub_h) [expr {int(round(16 * $scale))}]
         set L(hdr_sub_dy) [expr {int(round(44 * $scale))}]
@@ -2154,9 +2230,13 @@ namespace eval ::plugins::DrinkMenu {
         set L(bar_hidden_x2) [expr {$L(bar_hidden_x1) + $L(btn_w_wide)}]
         set L(bar_next_x1) [expr {$L(right_x) - $L(btn_w_std)}]
         set L(bar_prev_x1) [expr {$L(bar_next_x1) - $L(sm) - $L(btn_w_std)}]
-        # Pass 48: the "1 / 4" page position, right-aligned lg before
-        # Prev's slot, so it sits with the paging buttons.
-        set L(bar_page_x) [expr {$L(bar_prev_x1) - $L(lg)}]
+        # Pass 48 put the page position right-aligned lg before Prev's
+        # slot. F21 (v1.18.0) words it "Page 1 of 4", so it is CENTRED in
+        # the free stretch between Hidden (N)'s face and Prev's slot: the
+        # widest real case, "Page 10 of 12" (caption 16 px, ~111 px), has
+        # 236 virtual = 123 px there, ~6 px clear of each face, where the
+        # old right-aligned x would have run it into Hidden's face.
+        set L(bar_page_x) [expr {($L(bar_hidden_x2) + $L(bar_prev_x1)) / 2}]
         # "< Prev" / "Next >": the chevron is a SECOND label in the icon
         # font (a canvas text item carries one font, so an icon glyph can
         # never sit inside a text label), placed as a fraction of the
@@ -2183,7 +2263,11 @@ namespace eval ::plugins::DrinkMenu {
         # icon beside its label -- and Hide narrower (160 ref; "Unhide"
         # is its longest word), so the To-machine stretch gives up only
         # 20 ref and keeps room for its label.
-        set L(det_hide_w)  [expr {int(round(160 * $scale))}]
+        # F8 (v1.18.0): at the design 20 px button face "To machine" is
+        # ~130 px and the stretch was 138 px (4 px a side), so Hide gives
+        # 20 ref more (140 ref = 146 px; "Unhide" ~79 px keeps ~33 px a
+        # side) and the stretch grows to 304 virtual = 159 px (~14 a side).
+        set L(det_hide_w)  [expr {int(round(140 * $scale))}]
         set L(det_fav_w)   [expr {int(round(260 * $scale))}]
         set L(det_hide_x1) [expr {$L(det_edit_x1) - $L(lg) - $L(det_hide_w)}]
         set L(det_fav_x1)  [expr {$L(det_hide_x1) - $L(lg) - $L(det_fav_w)}]
@@ -2472,7 +2556,9 @@ namespace eval ::plugins::DrinkMenu {
         # 140 (was 100 * scale = 200): the widest amount this plugin can
         # print is "240 ml" / "8.1 oz" at font_body_b, ~132 virtual; the
         # 60 units returned go to the name, which pays for the arrows.
-        set L(ed_amt_w) [expr {int(round(70 * $scale))}]
+        # F8 (v1.18.0): 150. At the design 19 px body_b the widest amount
+        # since the pint, "16.9 oz", is ~77 px = 147 virtual.
+        set L(ed_amt_w) [expr {int(round(75 * $scale))}]
         set L(ed_name_maxw) [expr {$L(ed_amt_x) - $L(ed_amt_w) - $L(md) - $L(ed_row_name_x)}]
         # Pass 37/40: the layers mode's bottom row is THREE buttons now --
         # "+ Add layer", "Method (N)", "Profile: ..." -- equal thirds;
@@ -2663,10 +2749,16 @@ namespace eval ::plugins::DrinkMenu {
         foreach {key name fallback} {pen pen "e" minus minus "-" plus plus "+" xmark xmark "x" chev_l chevron-left "<" chev_r chevron-right ">" chev_u chevron-up "^" chev_d chevron-down "v"} {
             set g ""
             if {$L(have_icons)} { set g [_glyph_for $name] }
-            set L(glyph_$key) [expr {$g ne "" ? $g : $fallback}]
-            set L(glyph_font_$key) [expr {$g ne "" ? $L(font_icon) : $L(font_button)}]
+            # Text is picked with if, never expr ?: (F21 owner rule).
+            if {$g ne ""} {
+                set L(glyph_$key) $g
+                set L(glyph_font_$key) $L(font_icon)
+            } else {
+                set L(glyph_$key) $fallback
+                set L(glyph_font_$key) $L(font_button)
+            }
         }
-        set L(warn) [_blend $L(c_crema) $L(c_ink) 0.35]
+        # L(warn) is a palette token since v1.18.0 (_apply_palette, c_warn).
 
         # ---- Header control row (Pass 23 item 6; needs the fonts) ----
         #
@@ -4511,6 +4603,25 @@ namespace eval ::plugins::DrinkMenu {
         foreach id $ids { catch { $can itemconfigure $id -fill $fill -outline $outline } }
         set fill_cache($page,$tag) $face
     }
+    # F21 (v1.18.0): the same for a TEXT item whose colour follows data
+    # (the detail subtitle turns warn while the drink is over capacity). A
+    # text item has no -outline, so _set_fill's itemconfigure would fail
+    # whole; this writes -fill alone, through the same cache (dropped by
+    # invalidate_visibility, so the show's _retheme + refresh repaint it).
+    proc _set_text_fill {page tag fill} {
+        variable debug_timing
+        variable fill_cache
+        set face "$fill|text"
+        if {[info exists fill_cache($page,$tag)] && $fill_cache($page,$tag) eq $face} { return }
+        if {$debug_timing} { t_count item_config }
+        set ids [_ids $page $tag]
+        if {$ids eq ""} { return }
+        set can ""
+        catch { set can [dui canvas] }
+        if {$can eq ""} { return }
+        foreach id $ids { catch { $can itemconfigure $id -fill $fill } }
+        set fill_cache($page,$tag) $face
+    }
     proc _show_tags {page tags on} {
         _set_vis $page $tags $on
     }
@@ -5936,7 +6047,9 @@ namespace eval ::plugins::DrinkMenu {
         set edit_name_hint 1
         set edit_name [translate "Drink name"]
         set edit_loading 0
-        catch { $w configure -foreground $L(c_ink_3) }
+        # F21 (v1.18.0): the hint is TEXT, so it wears ink_3_text (>= 4.5:1
+        # on the entry's card_fill), not the mark colour c_ink_3 (3.81:1).
+        catch { $w configure -foreground $L(ink_3_text) }
     }
 
     proc _name_hint_drop {} {
@@ -6184,12 +6297,14 @@ namespace eval ::plugins::DrinkMenu {
         variable edit_drink
         variable edit_dirty
         variable edit_note
+        variable edit_note_info
         _hide_keyboard
         if {[drink_profile $edit_drink] ne {}} {
             dict unset edit_drink profile_fn
             dict unset edit_drink profile_title
             set edit_dirty 1
             set edit_note [translate "Profile link removed"]
+            set edit_note_info $edit_note
         } else {
             set fn ""
             catch { set fn [string trim $::settings(profile_filename)] }
@@ -6205,6 +6320,7 @@ namespace eval ::plugins::DrinkMenu {
                 dict set edit_drink profile_title [string range $title 0 79]
                 set edit_dirty 1
                 set edit_note "[translate "Profile linked"]: $title"
+                set edit_note_info $edit_note
             }
         }
         _refresh_editor
@@ -6668,7 +6784,65 @@ namespace eval ::plugins::DrinkMenu {
         set edit_dirty 0
         set edit_pending ""
         set edit_mode layers
+        # v1.17.1 (F22): the saved / deleted drink shows at once on return.
+        _prepaint $target
         _return_to_page $target
+    }
+
+    # v1.17.1 (F22): one full repaint of a page (palette, retheme, refresh).
+    # Safe while the page is not on screen: _set_vis then writes only the
+    # st:hidden tags, which dui's page show applies. A repaint that got
+    # through stamps the page, so its show can skip a second pass
+    # (_apply_palette clears every write cache, so a second pass redrew the
+    # whole page -- review).
+    variable painted_at
+    array set painted_at {}
+    proc _paint {page} {
+        variable painted_at
+        unset -nocomplain painted_at($page)
+        _apply_palette
+        _retheme $page
+        ::dui::pages::${page}::refresh
+        set painted_at($page) [clock milliseconds]
+    }
+
+    # v1.17.1 (F22): a show takes its page's stamp -- always, even when it
+    # returns early -- and skips its own repaint only while the stamp is
+    # fresh. The stamp expires after 2 s, so a show much later (a return the
+    # prepaint did not cover, a load that threw before show) still repaints:
+    # a stale stamp can cost at most one extra repaint, never old content.
+    proc _painted_take {page} {
+        variable painted_at
+        set fresh [expr {[info exists painted_at($page)]
+                         && [clock milliseconds] - $painted_at($page) < 2000}]
+        unset -nocomplain painted_at($page)
+        return $fresh
+    }
+
+    # v1.17.1 (F22): a close_dialog return shows the target page as it was
+    # last painted -- dui page show skips the page's load (dui.tcl ~6724) --
+    # so the target is repainted BEFORE the unwind.
+    proc _prepaint {target} {
+        if {[info procs ::dui::pages::${target}::refresh] eq ""} { return }
+        if {[catch { _paint $target } err]} {
+            catch { msg -ERROR "DrinkMenu: repaint of $target before returning failed: $err" }
+        }
+    }
+
+    # v1.17.1 (F22): a page's load hook. dui page load runs it synchronously
+    # BEFORE the page appears (dui.tcl ~6448); show runs after idle, when the
+    # last visit is already on screen. Skips until the page is set up, logs
+    # any error, and ALWAYS returns 1 (0 cancels the open, any other string
+    # redirects it). Known trade-off (review): the first open of a vessel in
+    # a session builds its cup sprites here, so that tap waits ~0.3 s on the
+    # tablet before the page switches (it used to switch at once and show
+    # the previous drink for the same time).
+    proc _page_load {page} {
+        if {![dui page is_setup $page]} { return 1 }
+        if {[catch { _paint $page } err]} {
+            catch { msg -ERROR "DrinkMenu: $page load repaint failed: $err" }
+        }
+        return 1
     }
 
     proc page_prev {} {
@@ -6753,6 +6927,8 @@ namespace eval ::plugins::DrinkMenu {
     }
 
     proc detail_back {} {
+        # v1.17.1 (F22): a favourite / hidden toggle shows at once on return.
+        _prepaint DrinkMenu_main
         _return_to_page DrinkMenu_main
     }
 
@@ -6971,11 +7147,12 @@ namespace eval ::dui::pages::DrinkMenu_main {
         }
 
         # ---- Presets-failed caption (hidden unless presets_ok is 0) ----
+        # F21 (v1.18.0): an error, so the danger role (was muted ink_2).
         dui add dtext $page $lx $L(grid_y1) -tags presets_failed \
             -text [translate "Presets failed to load"] \
-            -font $L(font_body) -fill $L(c_ink_2) -anchor nw -justify left \
+            -font $L(font_body) -fill $L(c_danger) -anchor nw -justify left \
             -initial_state hidden
-        ::plugins::DrinkMenu::_theme_item $page presets_failed fill c_ink_2
+        ::plugins::DrinkMenu::_theme_item $page presets_failed fill c_danger
         # ---- Empty-tab caption (favorites / custom / hidden views) ----
         dui add dtext $page $lx $L(empty_caption_y) -tags empty_caption \
             -text [translate "No drinks"] \
@@ -7147,10 +7324,12 @@ namespace eval ::dui::pages::DrinkMenu_main {
             -label1 $L(glyph_chev_r) -label1_font $L(glyph_font_chev_r) \
             -label1_pos $L(bar_next_sym_pos) -label1_fill $L(btn_label) \
             -initial_state hidden
-        # Pass 48: the page position beside the paging buttons (the
-        # subtitle keeps it too); hidden on a one-page tab.
+        # Pass 48: the page position by the paging buttons; F21 (v1.18.0):
+        # "Page 1 of 4" (_page_count), centred between Hidden (N) and Prev,
+        # and the only place the page shows (the subtitle has the count).
+        # Hidden on a one-page tab; non-empty creation text.
         dui add dtext $page $L(bar_page_x) [expr {($L(bar_y0) + $L(bar_y1)) / 2}] -tags bar_page \
-            -text "1 / 1" -font $L(font_caption) -fill $L(c_ink_2) -anchor e -justify right \
+            -text [translate "Page"] -font $L(font_caption) -fill $L(c_ink_2) -anchor center -justify center \
             -initial_state hidden
         ::plugins::DrinkMenu::_theme_item $page bar_page fill c_ink_2
 
@@ -7193,13 +7372,14 @@ namespace eval ::dui::pages::DrinkMenu_main {
         if {$ui_page < 1} { set ui_page 1 }
 
         # Header. The hidden view names itself; pills show no active
-        # state there.
+        # state there. F21 (v1.18.0): the count alone -- the page is the
+        # bottom bar's "Page p of P" (bar_page), shown once per screen.
         if {$ui_tab eq "hidden"} {
             ::plugins::DrinkMenu::_set_text $page subtitle \
-                "$n [expr {$n == 1 ? [translate "hidden drink"] : [translate "hidden drinks"]}], [translate "page"] $ui_page [translate "of"] $pages"
+                [::plugins::DrinkMenu::_plural $n [translate "hidden drink"] [translate "hidden drinks"]]
         } else {
             ::plugins::DrinkMenu::_set_text $page subtitle \
-                "$n [expr {$n == 1 ? [translate "espresso drink"] : [translate "espresso drinks"]}], [translate "page"] $ui_page [translate "of"] $pages"
+                [::plugins::DrinkMenu::_plural $n [translate "espresso drink"] [translate "espresso drinks"]]
         }
         ::plugins::DrinkMenu::_paint_controls $page
 
@@ -7301,13 +7481,19 @@ namespace eval ::dui::pages::DrinkMenu_main {
         # Paging buttons: hidden at the ends (no greyed style exists).
         ::plugins::DrinkMenu::_show_tags $page bar_prev* [expr {$ui_page > 1}]
         ::plugins::DrinkMenu::_show_tags $page bar_next* [expr {$ui_page < $pages}]
-        ::plugins::DrinkMenu::_set_text $page bar_page "$ui_page / $pages"
+        ::plugins::DrinkMenu::_set_text $page bar_page \
+            [::plugins::DrinkMenu::_page_count [expr {$ui_page - 1}] $pages]
         ::plugins::DrinkMenu::_show_tags $page bar_page [expr {$pages > 1}]
         if {$_dbg} {
             ::plugins::DrinkMenu::t_add paging [expr {[clock microseconds] - $_t}]
             ::plugins::DrinkMenu::t_log refresh_grid [expr {[clock microseconds] - $_t_all}]
             ::plugins::DrinkMenu::t_dump {visible_drinks header show_slot update_cup cup_calc fit_text set_text badges paging}
         }
+    }
+
+    # v1.17.1 (F22): the grid is painted before the page appears.
+    proc load {page_to_hide page_to_show args} {
+        return [::plugins::DrinkMenu::_page_load [namespace tail [namespace current]]]
     }
 
     proc show {page_to_hide page_to_show} {
@@ -7317,9 +7503,14 @@ namespace eval ::dui::pages::DrinkMenu_main {
         if {$_dbg} { set _t0 [clock microseconds] }
         ::plugins::DrinkMenu::glass_log
         ::plugins::DrinkMenu::_capture_return_page $page_to_hide
+        # v1.17.1 (F22): a show queued for a page already left repaints
+        # nothing; one painted by its load / prepaint just now is not
+        # repainted (the stamp is taken either way).
+        set fresh [::plugins::DrinkMenu::_painted_take $page]
+        if {![::plugins::DrinkMenu::_page_is_current $page]} { return }
         # Palette follows the skin's current tokens on every show, then
         # the grid rebinds (update_cup re-applies palette-derived colors).
-        if {[catch {
+        if {!$fresh && [catch {
             ::plugins::DrinkMenu::_apply_palette
             ::plugins::DrinkMenu::_retheme $page
             refresh
@@ -7628,11 +7819,18 @@ namespace eval ::dui::pages::DrinkMenu_detail {
         _set_text $page det_title \
             [_fit_text [translate [dict get $d name]] $L(font_title) [expr {int($L(det_title_maxw) * $L(v2px))}]]
         set sub "[translate [dict get $vessels $vessel name]], [format_amount $cap $ui_unit]"
-        if {[dict get $d overflow]} { append sub " ([translate "over capacity"])" }
+        # F21 (v1.18.0): over capacity tints the whole subtitle with the
+        # warn role (the words say why; colour is never alone).
+        set sub_fill $L(c_ink_2)
+        if {[dict get $d overflow]} {
+            append sub " ([translate "over capacity"])"
+            set sub_fill $L(c_warn)
+        }
         if {[::plugins::DrinkMenu::is_custom $detail_id]} {
             append sub " ([translate "custom"])"
         }
         _set_text $page det_subtitle $sub
+        ::plugins::DrinkMenu::_set_text_fill $page det_subtitle $sub_fill
         ::plugins::DrinkMenu::_paint_controls $page
 
         # Hero cup + labels + leaders. Pass 18: the cup box is per vessel
@@ -7704,7 +7902,11 @@ namespace eval ::dui::pages::DrinkMenu_detail {
 
         # Totals + ratio.
         _set_text $page tot_fig [::plugins::DrinkMenu::amount_number $total $ui_unit]
-        _set_text $page tot_cap [expr {$ui_unit eq "oz" ? [translate "oz total"] : [translate "ml total"]}]
+        if {$ui_unit eq "oz"} {
+            _set_text $page tot_cap [translate "oz total"]
+        } else {
+            _set_text $page tot_cap [translate "ml total"]
+        }
         lassign [::plugins::DrinkMenu::drink_ratio $d] ratio names
         set rmaxw [expr {int($L(det_ratio_maxw) * $L(v2px))}]
         _set_text $page tot_ratio [_fit_text $ratio $L(font_primary) $rmaxw]
@@ -7721,7 +7923,11 @@ namespace eval ::dui::pages::DrinkMenu_detail {
             || [::plugins::DrinkMenu::water_target [::plugins::DrinkMenu::drink_hot_water $d]] > 0}]
         _show_tags $page det_mach* $tie
         if {$tie} {
-            catch { dui item config $page det_mach -label [translate "To machine"] }
+            # F8 (v1.18.0): fitted like the outcome notes (face - 20 px),
+            # so a longer translation shortens instead of spilling.
+            catch { dui item config $page det_mach -label \
+                [_fit_text [translate "To machine"] $L(font_button) \
+                    [expr {int($L(det_mach_w) * $L(v2px)) - 20}]] }
         }
 
         # Ingredient chips. The card is a fixed two-row card since
@@ -7789,10 +7995,16 @@ namespace eval ::dui::pages::DrinkMenu_detail {
         # Pass 48: a custom drink's empty method is an invitation.
         set no_steps [expr {[llength $steps] == 0}]
         set can_add [expr {$no_steps && [::plugins::DrinkMenu::is_custom $detail_id]}]
-        _set_text $page met_none \
-            [expr {$can_add ? [translate "Add a method"] : [translate "No method saved."]}]
+        if {$can_add} {
+            set met_txt [translate "Add a method"]
+            set met_fill $L(crema_text)
+        } else {
+            set met_txt [translate "No method saved."]
+            set met_fill $L(c_ink_2)
+        }
+        _set_text $page met_none $met_txt
         foreach mid [::plugins::DrinkMenu::_ids $page met_none] {
-            catch { $can itemconfigure $mid -fill [expr {$can_add ? $L(crema_text) : $L(c_ink_2)}] }
+            catch { $can itemconfigure $mid -fill $met_fill }
         }
         _show_tags $page met_none $no_steps
         _show_tags $page met_add_tap* $can_add
@@ -7802,14 +8014,18 @@ namespace eval ::dui::pages::DrinkMenu_detail {
         ::plugins::DrinkMenu::_set_image $page bar_fav_icon \
             [::plugins::DrinkMenu::star_photo [::plugins::DrinkMenu::is_favorite $detail_id] \
                 $::plugins::DrinkMenu::fav_star_scale]
-        catch {
-            dui item config $page bar_hide -label \
-                [expr {[::plugins::DrinkMenu::is_hidden $detail_id] ? [translate "Unhide"] : [translate "Hide"]}]
+        if {[::plugins::DrinkMenu::is_hidden $detail_id]} {
+            set hide_lbl [translate "Unhide"]
+        } else {
+            set hide_lbl [translate "Hide"]
         }
-        catch {
-            dui item config $page bar_edit -label \
-                [expr {[::plugins::DrinkMenu::is_custom $detail_id] ? [translate "Edit"] : [translate "Copy & edit"]}]
+        catch { dui item config $page bar_hide -label $hide_lbl }
+        if {[::plugins::DrinkMenu::is_custom $detail_id]} {
+            set edit_lbl [translate "Edit"]
+        } else {
+            set edit_lbl [translate "Copy & edit"]
         }
+        catch { dui item config $page bar_edit -label $edit_lbl }
 
         # Prev/Next drink in the current tab order.
         lassign [::plugins::DrinkMenu::detail_neighbors $detail_id [::plugins::DrinkMenu::visible_drinks $ui_tab]] prev next
@@ -7817,8 +8033,17 @@ namespace eval ::dui::pages::DrinkMenu_detail {
         _show_tags $page bar_next* [expr {$next ne ""}]
     }
 
+    # v1.17.1 (F22): the tapped drink is painted before the page appears
+    # (it showed the previous drink first).
+    proc load {page_to_hide page_to_show args} {
+        return [::plugins::DrinkMenu::_page_load [namespace tail [namespace current]]]
+    }
+
     proc show {page_to_hide page_to_show} {
         set page [namespace tail [namespace current]]
+        set fresh [::plugins::DrinkMenu::_painted_take $page]
+        if {![::plugins::DrinkMenu::_page_is_current $page]} { return }
+        if {$fresh} { return }
         if {[catch {
             ::plugins::DrinkMenu::_apply_palette
             ::plugins::DrinkMenu::_retheme $page
@@ -8040,9 +8265,13 @@ namespace eval ::dui::pages::DrinkMenu_edit {
                 set r2 [expr {$L(ed_dot) / 2.0}]
                 # Pass 46: a sprite dot in the ingredient's colour.
                 ${NS}::draw_dot $page ed_pal${j}_dot $dx [expr {$pmid - $r2}] [dict get $idef color]
+                # F8 (v1.18.0): body, then caption, then an ellipsis (the
+                # layer labels' fit_label_name), so at the design 19 px
+                # body only the three longest names are shortened, not 7.
+                lassign [${NS}::fit_label_name [translate [dict get $idef name]] $maxw] pal_txt pal_font
                 dui add dtext $page [expr {$dx + $L(ed_dot) + $L(det_chip_gap_in)}] $pmid -tags ed_pal${j}_name \
-                    -text [${NS}::_fit_text [translate [dict get $idef name]] $L(font_body) $maxw] \
-                    -font $L(font_body) -fill $L(c_ink) -anchor w -justify left -initial_state hidden
+                    -text $pal_txt \
+                    -font $pal_font -fill $L(c_ink) -anchor w -justify left -initial_state hidden
                 ${NS}::_theme_item $page ed_pal${j}_name fill c_ink
                 # No -pressfill (the press rule in _apply_palette): this
                 # rect is invisible, and a stuck flash would sit on the
@@ -8066,8 +8295,9 @@ namespace eval ::dui::pages::DrinkMenu_edit {
             set pmid [expr {$py1 + $rh / 2.0}]
             ${NS}::shape_make $page ed_palnew_bg $px1 $py1 $px2 $py2 \
                 [expr {$rh / 2}] chip_bg chip_brd -kind chip -initial hidden
+            # F23 (v1.18.1): the real ellipsis glyph, not three dots.
             dui add dtext $page [expr {($px1 + $px2) / 2}] $pmid -tags ed_palnew_name \
-                -text "+ [translate "Custom..."]" \
+                -text "+ [translate "Custom"][${NS}::_u 0x2026]" \
                 -font $L(font_body_b) -fill $L(crema_text) -anchor center -justify center \
                 -initial_state hidden
             ${NS}::_theme_item $page ed_palnew_name fill crema_text
@@ -8315,8 +8545,10 @@ namespace eval ::dui::pages::DrinkMenu_edit {
                     -text [${NS}::_fit_text [translate [dict get $vdef name]] $L(font_caption) [expr {int(($L(ed_ves_w) - 2 * $L(card_pad_x)) * $L(v2px))}]] \
                     -font $L(font_caption) -fill $L(c_ink) -anchor s -justify center -initial_state hidden
                 ${NS}::_theme_item $page ed_ves${k}_name fill c_ink
+                # F21 (v1.18.0): the capacity follows the ml/oz toggle like
+                # every other amount (the refresh rewrites it in this mode).
                 dui add dtext $page $vcx [expr {$vy2 - $L(ed_ves_cap_dy)}] -tags ed_ves${k}_cap \
-                    -text "[dict get $vdef capacity] ml" \
+                    -text [${NS}::format_amount [dict get $vdef capacity]] \
                     -font $L(font_caption) -fill $L(c_ink_2) -anchor s -justify center -initial_state hidden
                 ${NS}::_theme_item $page ed_ves${k}_cap fill c_ink_2
                 # No -pressfill (the press rule in _apply_palette): this
@@ -8478,6 +8710,7 @@ namespace eval ::dui::pages::DrinkMenu_edit {
         upvar #0 ::plugins::DrinkMenu::vessels vessels
         upvar #0 ::plugins::DrinkMenu::edit_drink d
         upvar #0 ::plugins::DrinkMenu::edit_note note
+        upvar #0 ::plugins::DrinkMenu::edit_note_info note_info
         upvar #0 ::plugins::DrinkMenu::ui_unit ui_unit
         set NS ::plugins::DrinkMenu
         if {$d eq ""} { return }
@@ -8491,8 +8724,13 @@ namespace eval ::dui::pages::DrinkMenu_edit {
         }
         ${NS}::_set_text $page ed_total "[${NS}::format_amount [${NS}::drink_total $d] $ui_unit] [translate "total"]"
         set status [${NS}::edit_status $d]
-        if {$status eq "" && $note ne ""} { set status $note }
+        set status_fill $L(warn)
+        if {$status eq "" && $note ne ""} {
+            set status $note
+            if {$note eq $note_info} { set status_fill $L(c_ink_2) }
+        }
         ${NS}::_set_text $page ed_status $status
+        ${NS}::_set_text_fill $page ed_status $status_fill
         ${NS}::_show_tags $page ed_status [expr {$status ne ""}]
         # Pass 36: the tappable garnish line, pen after the fitted text.
         set gn {}
@@ -8535,6 +8773,17 @@ namespace eval ::dui::pages::DrinkMenu_edit {
         foreach m {layers palette vessel custing garnish method stepform group confirm} {
             ${NS}::_show_tags $page [_group_tags $m] [expr {$m eq $mode}]
         }
+        if {$mode eq "vessel"} {
+            # F21 (v1.18.0): each tile's capacity in the current unit
+            # ("200 ml" / "6.8 oz"), cached per tag by _set_text.
+            set k 0
+            foreach {vid vdef} $vessels {
+                if {$k >= $L(ed_ves_pool)} { break }
+                ${NS}::_set_text $page ed_ves${k}_cap \
+                    [${NS}::format_amount [dict get $vdef capacity] $ui_unit]
+                incr k
+            }
+        }
         if {$mode eq "custing"} {
             # Correct the just-shown dynamic items to their state: the
             # capsule's active half (uncached repaint) and the one
@@ -8549,11 +8798,15 @@ namespace eval ::dui::pages::DrinkMenu_edit {
             # Pass 34: the same form edits an existing def; only the
             # words change. Bare dbutton tag for the relabel (the
             # wildcard form silently fails on-device).
-            set editing [expr {$cust_edit_id ne ""}]
-            ${NS}::_set_text $page ed_cap_cust \
-                [expr {$editing ? [translate "Edit ingredient"] : [translate "Custom ingredient"]}]
-            catch { dui item config $page ed_cust_add -label \
-                [expr {$editing ? [translate "Save"] : [translate "Add layer"]}] }
+            if {$cust_edit_id ne ""} {
+                set cust_cap [translate "Edit ingredient"]
+                set cust_add [translate "Save"]
+            } else {
+                set cust_cap [translate "Custom ingredient"]
+                set cust_add [translate "Add layer"]
+            }
+            ${NS}::_set_text $page ed_cap_cust $cust_cap
+            catch { dui item config $page ed_cust_add -label $cust_add }
         }
 
         set layers {}
@@ -8630,9 +8883,12 @@ namespace eval ::dui::pages::DrinkMenu_edit {
             catch { dui item config $page ed_group_btn -label \
                 "[translate "Group"]: [translate [${NS}::group_label $grp]]" }
             # Pass 40: the profile button says whether the draft is linked.
-            catch { dui item config $page ed_profile_btn -label \
-                [expr {[${NS}::drink_profile $d] ne {} ? \
-                    [translate "Profile: linked"] : [translate "Profile: none"]}] }
+            if {[${NS}::drink_profile $d] ne {}} {
+                set prof_lbl [translate "Profile: linked"]
+            } else {
+                set prof_lbl [translate "Profile: none"]
+            }
+            catch { dui item config $page ed_profile_btn -label $prof_lbl }
         }
 
         if {$mode eq "group"} {
@@ -8678,16 +8934,22 @@ namespace eval ::dui::pages::DrinkMenu_edit {
 
         if {$mode eq "stepform"} {
             upvar #0 ::plugins::DrinkMenu::step_edit_idx step_edit_idx
-            ${NS}::_set_text $page ed_cap_sf [expr {$step_edit_idx == -1 ? \
-                [translate "New step"] : "[translate "Edit step"] [expr {$step_edit_idx + 1}]"}]
+            if {$step_edit_idx == -1} {
+                set sf_cap [translate "New step"]
+            } else {
+                set sf_cap "[translate "Edit step"] [expr {$step_edit_idx + 1}]"
+            }
+            ${NS}::_set_text $page ed_cap_sf $sf_cap
         }
 
         if {$mode eq "confirm"} {
             set name ""
             catch { set name [string trim [dict get $d name]] }
+            # F23 (v1.18.1): each confirm button wears its bar button's
+            # label (one label per action; "Save as copy" was "Save copy").
             switch -- $pending {
                 save   { set q "[translate "Save changes to"] $name?"; set yes [translate "Save"]; set no [translate "Cancel"] }
-                copy   { set q "[translate "Save a copy as"] [${NS}::_copy_name]?"; set yes [translate "Save copy"]; set no [translate "Cancel"] }
+                copy   { set q "[translate "Save a copy as"] [${NS}::_copy_name]?"; set yes [translate "Save as copy"]; set no [translate "Cancel"] }
                 delete { set q "[translate "Delete"] $name? [translate "Hidden drinks can be restored; deleted ones cannot."]"; set yes [translate "Delete"]; set no [translate "Cancel"] }
                 cancel { set q [translate "Discard changes?"]; set yes [translate "Discard"]; set no [translate "Keep editing"] }
                 default { set q [translate "Confirm?"]; set yes [translate "OK"]; set no [translate "Cancel"] }
@@ -8721,8 +8983,17 @@ namespace eval ::dui::pages::DrinkMenu_edit {
         ${NS}::_show_tags $page ed_done* [${NS}::_name_focused]
     }
 
+    # v1.17.1 (F22): the draft is painted before the page appears (it
+    # showed the previous draft first).
+    proc load {page_to_hide page_to_show args} {
+        return [::plugins::DrinkMenu::_page_load [namespace tail [namespace current]]]
+    }
+
     proc show {page_to_hide page_to_show} {
         set page [namespace tail [namespace current]]
+        set fresh [::plugins::DrinkMenu::_painted_take $page]
+        if {![::plugins::DrinkMenu::_page_is_current $page]} { return }
+        if {$fresh} { return }
         if {[catch {
             ::plugins::DrinkMenu::_apply_palette
             ::plugins::DrinkMenu::_retheme $page

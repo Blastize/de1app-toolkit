@@ -557,7 +557,7 @@ namespace eval ::plugins::DrinkMenu {
     variable author      "Blastize"
     variable contact     "n/a"
     # Bare number, no "v" prefix (the core's startup log prepends one).
-    variable version     "1.17.0"
+    variable version     "1.18.1"
     variable name        "Drink Menu"
     variable description "Visual espresso drink menu: every drink drawn as a cup with colored ingredient layers, tab-filtered grid with ml/oz display, a detail page with labeled layers, ratio, 1/2 shots and numbered method steps, favorites, hide, and an editor for custom drinks reached from a drink or from the menu's + New drink button (presets are read-only; editing one creates a custom copy). Writes only its own settings file; no data access outside the plugin folder."
 

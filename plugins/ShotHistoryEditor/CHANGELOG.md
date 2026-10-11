@@ -4,6 +4,287 @@ Note: entries follow the CLAUDE.md doc cap (about 15 lines each; entries that ad
 changed a write capability keep their full write-path description). The long pre-trim
 entries survive in the Desktop archive snapshot of each version.
 
+## v0.19.0 - The next shot follows a bag Save: WRITE CAPABILITY 8 (2026-10-02)
+
+Base: v0.18.1. Protocol lane, a NEW WRITE CAPABILITY. Owner 2026-10-02: "Yes, update it",
+"Preview first" (v0.18.x, tested on the tablet: batch a72e logged NEXT-PREVIEW status=update),
+then "go with v0.19.0".
+
+What it writes -- nothing directly: SHE asks DYE to update its own next-shot plan, with the call
+BeanScanner (its one write path) and Lumen's bag arrows already use on the tablet. DYE then sets
+next_<field> and ::settings(<field>) for the fields it is given, saves the app settings and its
+own (settings.tdb), marks the plan modified and rebuilds its next-shot description; it leaves
+grind, dose, profile and the plan's source shot alone; a selected DYE favourite may be
+deselected (as with a scan or an arrow tap). SHE never writes ::settings or DYE's settings.
+
+The write path (_bag_next_apply, called by bag_confirm_submit):
+1. Only after a bag Save that wrote at least one file; BEFORE _notify_downstream, so Grind
+   Advisor computes for the new bag and Lumen lights its dot.
+2. _bag_next_preview decides, read-only: DYE loaded and its plan names EXACTLY the saved bag
+   (trimmed roaster + name) AND its roast date is empty or one the bag's files carry (another
+   date = another physical bag of the same coffee, e.g. a newer bag just scanned: never
+   touched) -> update. Roaster / name changes always apply; notes, roast date and level apply
+   only where the plan still holds one of the bag's own values -- a value the plan has of its
+   own is KEPT (named on Review, the BEGIN line and the result). DYE not loaded but ::settings
+   names the bag -> manual (never written: "NEXT SKIPPED status=manual", manual steps).
+3. Refused (NEXT SKIPPED with the reason, no call) when DYE's get_next / source_next_from are
+   missing, the DE1 is busy, SDB is syncing, or get_next fails.
+4. `array set nx [get_next]`, `nx(clock) 0` (never repoints the plan's source shot), the changed
+   fields set in nx; write-ahead "BAGSAVE NEXT BEGIN batch=<b> fields=... old: ... new: ..." in
+   edit_log.txt -- if that append fails, no call.
+5. `source_next_from {} nx <fields>` inside catch (an error is logged -ERROR, never swallowed);
+   a return other than 1 is a failure.
+6. Post-check: every applied field's next_<field> must read the new value; then "BAGSAVE NEXT OK
+   batch=<b> now: ..." or "NEXT FAILED batch=<b> reason=... now: ...". The bag Save stands either
+   way; on failure the result page lists what the plan still holds and how to reload it.
+Undo: the BEGIN line holds the old plan values; DYE's Next shot page (or Lumen's arrows) sets them.
+Pages: Review/Confirm "Loaded for your next shot: Save updates it too (<fields>); it keeps its
+own <fields>" when DYE can take it, else the reload steps; Review step 5 and Confirm say the
+next-shot plan changes too; Result "Your next shot now has the new details" with the fields old
+-> new (kept ones named), or the old-details block with the reason and the steps; the
+unseen-result line keeps a reminder only when the plan was not updated. NEXT-PREVIEW is gone.
+A 17-agent review's confirmed findings are fixed (the roast-date gate and kept values above, the
+"only history/*.shot" texts, seven test gaps).
+Safety status: write capability 8 added (above, through DYE only). SDB and history_v2 never
+written; no new file write; greps pin exactly one source_next_from and one get_next, save_settings
+1 (theme), no `set ::settings(` and no write to DYE's settings array. Tests: pass_0.19.0_offline.tcl
+(168 checks; DYE stand-ins behave like DYE and record every call; a write tracer proves SHE never
+writes ::settings or DYE's settings itself; SKIPPED x6, FAILED x3, manual, kept, other-bag x3);
+20 injected bugs, each caught.
+
+## v0.18.1 - Polish: Shots | Bags switch and Select in the toolbar row (2026-10-02)
+
+Base: v0.18.0. Polish lane, owner mockup: the Shots / Bags tabs (header, top-left) become one
+rounded Shots | Bags switch at left_x in the toolbar row (the active side filled like a button,
+bold; the other plain); Select moves from the header into the same row, shorter (42 ref px),
+in the card Edit buttons' column; the status sits centred between them (Shots and Bags pages),
+and the Shots status ends ", newest first" like the Bags one. Two palette tokens (seg_bg,
+seg_outline; text 7.9:1 on them). Safety status: no behaviour change; no write behaviour added
+(the capabilities are those of v0.18.0).
+
+## v0.18.0 - Next-shot preview (stage 1 of capability 8, 2026-10-02)
+
+Base: v0.17.0 (first real Save and rename verified on the tablet). Protocol lane. Found on the
+tablet: after renaming the bag loaded for the next shot, Lumen kept the old name with no dot lit
+and Grind Advisor found "no eligible shots", because the next shot's bag lives in DYE's next_*
+plan and ::settings, which a bag Save never touched; the next shot would have re-split the bag
+(or brought back old notes / roast level). Owner 2026-10-02: update the plan (capability 8) but
+preview it first. This version: `_bag_next_source` (DYE's plan while DYE is loaded, else
+::settings) and `_bag_next_preview` (read-only) decide whether the saved bag is the next shot's
+(exact trimmed roaster + name) and which fields would change; Review/Confirm warn for ANY changed
+field with reload steps that fit the case (name/date changed: tap a Lumen bag arrow until this
+bag's dot is lit; notes/level: arrow away and back; no DYE: re-enter the details in the skin);
+the Result page lists the fields old -> new (also kept in the one-line Bags status when the
+result page could not be shown); edit_log.txt gets one "BAGSAVE NEXT-PREVIEW" line per batch
+that wrote files. IN USE is now exact-key and source-aware (a disabled DYE's plan no longer
+counts). An 18-agent review's confirmed findings are fixed (hint cases, unseen result, tests).
+Safety status: no new write capability -- nothing outside history/ and the plugin's own logs is
+written; no DYE call, no ::settings write, `save_settings` only for the theme (greps pin all
+three; recording stand-ins prove no call). Tests: pass_0.18.0_offline.tcl (156 checks; 0.17.0's
+harness + section NEXT); 7 injected bugs each caught.
+
+## v0.17.0 - Bag Save: WRITE CAPABILITY 7 (pass B, 2026-10-02)
+
+Base: v0.16.1 (verify.sh PASS). Protocol lane, a NEW WRITE CAPABILITY; owner 2026-10-01: "go with
+pass B"; renaming onto another bag's roaster + name is allowed with a warning (merge); Save needs
+the file count typed. Designed, then reviewed by an 8-agent adversarial design review and an
+8-agent code review (every confirmed finding fixed) before it reached the tablet.
+
+What it writes -- only `history/<f>.shot`, only the files of one bag (every visible shot with that
+exact trimmed roaster + bag name, cleaning runs included), only the settings the owner changed among
+bean_brand, bean_type, bean_notes, roast_date, roast_level.
+
+The write path (perform_bag_save, _bag_write_file, _bag_restore):
+1. Review builds a snapshot (_bag_plan_build): per file, read-only, `_bag_prepare` = the bytes,
+   a lossless UTF-8 check, the settings block located the way Tcl reads a list (`info complete`
+   chunks, multi-line notes included), the file's own roaster + name must still be the bag's
+   ("no longer in this bag on disk" otherwise), and the would-be result verified. Statuses: change,
+   unchanged (already up to date), skipped (with the reason). Save off when nothing changes, both
+   roaster and name are empty, a value holds a brace, a backslash, a CR (or a newline outside
+   Notes) -- those would break the plugin's own line-based readers -- or a roaster/name change
+   matches another bag in all but letter case (type it exactly to join that bag).
+2. Confirm (opened only by Review's Save; a direct load is not armed): the number typed must equal
+   the files to change, and the snapshot must match the edits on screen. Refused while the DE1 is
+   busy (not Idle/Sleep/GoingToSleep, DevBridge's rule) or an SDB sync runs (Grind Advisor's
+   _sdb_busy); a self-expiring running mark (10 min) blocks a second submit.
+3. Save re-checks every file; if the set to change differs from the confirmed one, NOTHING is written.
+4. `file mkdir` backups/<ts>_<batch>_bag/; edit_log.txt gets "BAGSAVE BEGIN" (bag, fields, count,
+   folder) BEFORE any write (if that append fails, nothing is written).
+5. Every file is backed up (`file copy`) and the copy compared byte for byte BEFORE the first
+   write; one bad copy = nothing written ("BAGSAVE STOPPED").
+6. Per file: the new bytes = the original's bytes with only the changed entries' lines replaced by
+   "<indent>[list key] [list value]" (the app's own form; a no-op rewrite is byte-identical on all
+   1118 workspace files and 194 tablet files); verified as a dict (same top-level keys and values,
+   same settings keys in order, only the changed values differ); skipped if the file changed on
+   disk since its backup; written binary to <f>.shot.new IN THE BACKUP FOLDER, read back;
+   `file rename -force` into history/; read back; on a bad read-back `file copy -force` the backup
+   over it and check that too ("restored", or "RESTORE FAILED: the intact copy is <path>");
+   `file mtime` stamp (SDB resync, as v0.6.0).
+7. After each file: its "BAGSAVE OK" line (old values) and one 8-part edit_manifest record per
+   changed field (`|e1|<epoch>`, old/new escaped: backslash, |, LF, CR). A failed append stops.
+8. Stop at the first failure; later files are "not attempted". A roaster/name/date change that
+   leaves files behind says the bag is now split. "BAGSAVE END" with the counts. One
+   _notify_downstream, then the result page.
+Readers: _edit_manifest_records reads both forms. An e1 overlay shows the save until SDB re-reads
+the file (SDB's file_modification_date at or past the record's epoch retires it and every record
+before it), so a later edit in DYE, a revert included, shows as it is; while SDB is stale the e1
+records fold in order (A to B to C shows C). Rolling back to v0.16.1 ignores e1 records.
+Pages: Review (Save N files...; warns when skipped files will stay in the old bag), NEW Confirm
+(typed count, Hide keyboard, every warning on its own line: merge, bag in use incl. DYE's next
+shot, Grind Advisor's per-roast-date bags, non-ISO date, files left behind), NEW Result (Done).
+Flow buttons ignore taps within 700 ms of a page change (a clock stepped back never blocks
+them). Pages are painted before they open and before every Back (F22 rule).
+Safety status: write capability 7 added (above). SDB never written; history_v2 never written; no
+`file delete` added (still exactly 2, purge-only); greps: file rename 5, file copy 3, file mkdir 4.
+Tests: pass_0.17.0_offline.tcl (123 checks: the real write path on copies of real files under
+%TEMP%, faults at every backup / temp / rename / read-back / restore / log / manifest step, drift,
+blockers, busy, re-entry, escapes, overlay expiry, direct loads; optional corpus = 970 single-field
+rewrites of the tablet's 194 files); 16 injected write-path and flow bugs, each caught.
+
+## v0.16.1 - Polish: the roast date fits its chip (2026-10-01)
+
+Base: v0.16.0 (verify.sh PASS run 1). Polish lane, tablet-found on the first Bags screenshot:
+real roast dates showed as "Roasted 2026-..." on the tiles. An ISO date now reads "Roasted 20
+Sep" (another year: "Roasted Sep 2025"); any other format is shown as typed. Parsed by regexp
+and scan (no caught errors). pass_0.16.0_offline.tcl gains the ROAST_CHIP section (v0.16.0
+fails it). Safety status: no write capability added or changed.
+
+## v0.16.0 - Bags view; cleaning runs marked (pass A, 2026-10-01)
+
+Base: v0.15.2. Protocol lane (three new pages, navigation, an SDB read); owner 2026-10-01: "go
+with pass A, include cleaning runs".
+- Shots / Bags tabs top-left on the card page. Bags: six tiles a page (3 x 2), newest bag first; a
+  bag = every visible shot with the same roaster + bag name (read-only SDB, the card list's
+  removed / trash / edit-overlay filters). Tile: roaster, name, roast level (dot) and roast date
+  chips or "+ ..." when missing, two lines of notes, shots, date span, cleaning runs; the app's
+  current bag is outlined with IN USE. Done exits the plugin; standard pager.
+- Edit bag (preview): roaster, bag name, notes, roast date in the top half + Hide keyboard; six
+  roast-level choices; each field says Changed, or that its files differ. Review bag changes:
+  field / now (over every file) / after, merge and date-format warnings, the files.
+- Cleaning runs (beverage_type cleaning, or a clean/descale/backflush profile): teal card,
+  CLEANING pill, "Cleaning run | not counted as a shot"; counted apart on tiles, but part of
+  their bag's files (owner: include them).
+- Safety status: no write capability added or changed. Review's Save is disabled and has no
+  write path (bag_save_preview_only only logs). Write-call counts unchanged; SDB read-only.
+
+## v0.15.2 - Advanced grouped, Tidy on the Trash page (F18, 2026-10-01)
+
+Base: v0.15.1. Protocol lane (moves the button of an existing write capability), design review F18.
+- Advanced is two section cards (`_sec_card`, GrindAdvisor's tokens): Recover (Trash / Restore,
+  Reconcile hidden shots) and Inspect (Source Inspector, Diagnostics, Help / Guide). Same
+  buttons, tags and commands; the six-button column is gone.
+- Tidy moved from Advanced to the Trash page's bar, after Empty trash...: "Tidy N empty folders"
+  (`_refresh_tidy_btn`, run by refresh_trash_page), greyed out at 0 via enable_or_disable. Its
+  result line shows under the Trash status until the page is shown again; the Advanced note no
+  longer carries it. The two preview lines that said "Advanced > Tidy" now point to the Trash page.
+- Multi-lens review (safety, real dui, flow, tests/UX; each finding verified by a skeptic): no
+  major. `_empty_trash_dirs` now skips any folder it cannot list (`file readable`, a
+  precondition): glob threw there, and the Trash page now counts on every refresh. The count
+  runs last in refresh_trash_page; Tidy's grey state is set with -initial 1 (no flash).
+- Offline: pass_0.15.2_offline.tcl 20 PASS against a per-run throwaway trash, guarded to stay
+  inside it (v0.15.1 fails 12); earlier tests and tools PASS.
+- Safety status: no write capability added or changed. Tidy's write path is unchanged
+  (`tidy_trash_folders` -> `_remove_empty_trash_dirs`: EMPTY folders directly under the plugin
+  trash only, the two `;# purge-only` `file delete` lines, one TIDY line in delete_log.txt); its
+  button moved and it refreshes the Trash page. The readable guard only NARROWS what Tidy and
+  Empty trash may remove (an unlistable folder stays). Write-call counts unchanged.
+
+## v0.15.1 - One way out, one header (F13, 2026-10-01)
+
+Base: v0.15.0. Protocol lane (navigation controls), design review F13.
+- `_add_back page command`: Back at left_x (tag back). The eight pages that had Done AND Back
+  (Trash, Source Inspector, Shot Detail, Edit Preview, Diagnostics, Help, Reconcile, Empty-trash
+  preview) keep only Back with its old target; their dead `page_done` procs are gone; the next
+  bar button takes the freed slot. Advanced uses it too. Flow pages keep Cancel / Done.
+- `_subpage_header page title subtitle ?role?`: all 16 sub-pages get the main page's 40 px title
+  plus a one-line subtitle (confirm titles stay danger red); `header_solo_title_y` removed.
+- `_page_bg`, both helpers and `_add_pager` register their page (`bg_pages`, `header_roles`,
+  `back_pages`, `pager_tags`) and `_retheme_all` walks the registries instead of hand lists, so
+  a page built with them is fully repainted (review: background and pager were missed).
+- `_set_pager_state` goes through dui's enable_or_disable (a late show hook could re-state the
+  pager of a page already left). tools/check_trash_pager.tcl reads that call.
+- Review (no major): the red Empty trash on its preview page moved to the right group beside
+  Prev (with Done gone it had taken Back's old slot); Source Inspector's subtitle names SDB.
+- Offline: pass_0.15.1_offline.tcl 19 PASS (v0.15.0 fails 10); 0.15.0 / 0.14.0 tests, tools PASS.
+- Safety status: no write capability added or changed; every exit keeps its target.
+
+## v0.15.0 - Selection shows on the card; "Delete N" (F12, 2026-10-01)
+
+Base: v0.14.0. Protocol lane (the delete flow's entry), design review F12.
+- Select mode: the whole card toggles -- a shape-less, label-less tap rect per card over the
+  text area (MaintenanceTracker's card-open zone, created after the lines, xl short of the
+  button, no press fill; does nothing outside Select mode); the card button still toggles too.
+- A selected card is tinted (`card_sel_bg` #e3ebff / #26304a) with a value-blue outline
+  (`card_sel_outline`); texts keep >= 5.87:1 light, 4.99:1 dark.
+- The bottom-left slot (same dbutton, same dispatcher) reads "Delete N" on the danger face
+  (`btn_danger_fill` #b3261e, white label 6.54:1), disabled at 0 via dui's enable_or_disable;
+  "Done" in the normal style outside Select mode.
+- A tap or Clear Selection repaints only the card(s) and the bar (`_paint_card_sel`,
+  `_refresh_select_bar`); the database is read on paging and mode switches only (every tap used
+  to re-count the whole shot table). `_retheme_all` re-applies the selection look last.
+- Independent review (no major): the card page's new `hide` hook ends Select mode as the page
+  is left (configs only), so a return from the delete review no longer flashes the red bar and
+  tinted cards; tap rects are `she_row<i>_tap` (canvas-global press-flash tag); "Delete" is
+  translated as a word, the count appended.
+- Offline: pass_0.15.0_offline.tcl 30 PASS (v0.14.0 fails 12); the 0.14.0 test and tools PASS.
+- Safety status: no write capability added or changed; the delete flow (review, typed count,
+  soft delete) is unchanged. Write-call counts unchanged.
+
+## v0.14.0 - Trash cards name the shot (F6, 2026-10-01)
+
+Base: v0.13.2. Protocol lane (reads trashed files), design review F6; owner 2026-10-01: "go
+with batch c next".
+- Trash / Restore is the house card list -- the main page's geometry and tokens, five per page
+  (was six one-line rows "date | n shot(s), n file(s) | batch id" under a column header, now
+  gone). Line 1: the newest shot's own time and bean (+N more); line 2: grind, dose, yield;
+  line 3: deleted time, shot and file counts, batch id (the logs' key). Restore per card.
+- `_trash_batches` adds `shot_files` (name + trashed path); `_trash_card_lines` reads the bean
+  and numbers with the existing read-only `_parse_settings_file` from the newest READABLE shot,
+  only for a path inside the plugin trash (`_inside_trash_dir`); a missing or unreadable file
+  says so. Card parts are created `-initial_state hidden` (no flash of empty slots on load).
+- Independent review: `_parse_settings_file` now skips an incomplete line (`info complete`)
+  before lindex -- a real .shot's read_only_backup line left errorInfo dirty ("BLE error info"
+  noise) five times a refresh; same parse results on all 59 history files.
+- Tests: check_trash_pager now 5 per page; check_header_gap drops Trash (cards checked by
+  pass_0.14.0_offline.tcl: 22 PASS incl. a real history .shot, v0.13.2 fails 5; showing and
+  paging open files only "r").
+- Safety status: no write capability added or changed; Restore is still per batch (same
+  restore_batch). Write-call counts unchanged.
+
+## v0.13.2 - Polish: contrast (2026-09-30)
+
+Base: v0.13.1. Polish lane (design audit F1/F2, contrast batch shared with GrindAdvisor,
+MaintenanceTracker, BeanScanner); colour tokens and label wiring only. WCAG 2.1 at the tablet's
+rendered sizes (button 18 bold, body 17, caption 16: 4.5:1; title/section/primary: 3:1).
+- Button labels: `L(btn_label_fill)` joins `_apply_palette`, light #2b2b2b (1.70 -> 8.32:1 on
+  the periwinkle), dark #ffffff (7.48). `_retheme_all` recolours every button's `-lbl`, then the
+  five danger labels get `L(danger)` back, and re-sets the she_btn aspects so a page set up
+  after a toggle draws in the current theme. Disabled labels stay #999999 (quieter).
+- text_mut: dark #9aa0ad (card line 3 3.93 -> 4.66), light #595959 (page 3.98 -> 4.86).
+- danger: dark #ffb8b2 (button label 3.28 -> 4.54), light #962219 (error caption 3.77 -> 5.73,
+  button label 3.19 -> 4.86). value_blue light #2753bb (Edit Preview 2.43 -> 4.79, entry 6.65).
+- Offline: 4 tools + harness PASS, 211 procs compile; restart and live toggle give identical
+  colours on all 286 items.
+- Safety: unchanged. Write capabilities exactly as v0.13.1 (soft delete, restore, metadata
+  save, unhide, empty trash + tidy); no new write path, SDB still never written.
+
+## v0.13.1 - Polish: toggle top-right, one pager standard (2026-09-30)
+
+Base: v0.13.0. Polish lane, owner request 2026-09-30; no behaviour change.
+- Card list header: the light/dark toggle moves from top-left to the top-RIGHT box that
+  MaintenanceTracker, GrindAdvisor and BeanScanner use (2348,22-2468,142 virtual); Select sits
+  an sm gap to its left on the same row. Subtitle shortened so it clears Select.
+- One pager on all seven paged pages (card list, Trash, Shot Detail, Diagnostics, Help,
+  Reconcile, Empty-trash preview): bottom-right of the bottom bar (owner: easier to reach),
+  "◀ Prev" / "Next ▶" (Prev 1648-2048, Next 2068-2468 virtual), both always visible, the
+  unavailable end DISABLED instead of hidden (`_add_pager`, `_set_pager_state` =
+  MaintenanceTracker's -state pattern). Advanced, Empty trash..., Empty trash and Edit Metadata
+  Preview move into the left group behind Done/Back.
+- tools/check_trash_pager.tcl asserts disabled/enabled (was hidden/shown). Offline: all four
+  tools PASS, 209 procs compile.
+- Safety: unchanged. Write capabilities exactly as v0.13.0 (soft delete, restore, metadata
+  save, unhide, empty trash + tidy); no new write path, SDB still never written.
+
 ## v0.13.0 - Tidy empty trash folders (2026-09-18)
 
 Base: v0.12.0. Restore never removed an emptied batch folder (14 on the tablet). CLAUDE.md's

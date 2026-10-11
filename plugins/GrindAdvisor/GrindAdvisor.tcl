@@ -92,6 +92,7 @@ namespace eval ::plugins::GrindAdvisor {
             history_show_shot_time   1
             history_show_reason      1
             history_show_bag_shot    1
+            history_show_bag_name    1
             dose_yield_mode          auto
             dose_min                 12.0
             dose_max                 22.0
@@ -104,6 +105,190 @@ namespace eval ::plugins::GrindAdvisor {
         }
         # v3.12.0: the page theme must be one of exactly two values.
         if {$settings(theme) ni {light dark}} { set settings(theme) light }
+        # v3.17.0 (F5): the nine numeric settings are kept canonical and in
+        # range ("28,5" -> 28.5, "abc" -> the default, 99999 ms -> 30000),
+        # so the steppers, the engine's _to_float readers, `after` and the
+        # popup fonts all see the same number. The ranges are wide enough
+        # that no sensible old value moves; one that does is logged.
+        variable num_spec
+        foreach key [array names num_spec] {
+            set new [_num_text $key]
+            set old $settings($key)
+            if {[scan $old %f oldnum] != 1 || abs($oldnum - $new) > 1e-9} {
+                catch { msg "GrindAdvisor: setting $key '$old' read as $new (v3.17.0 steppers)" }
+            }
+            set settings($key) $new
+        }
+    }
+
+    # ------------------------------------------------------------------
+    #  v3.17.0 (F5) numeric settings: every one is a stepper now, so the
+    #  value can only ever be a number inside its range. Per key:
+    #    step  min  max  decimals  default
+    #  The lower of each pair stays below the upper (_num_bounds).
+    # ------------------------------------------------------------------
+    # Ranges are deliberately wide (review: a 65 s target, a 32 g dose bound
+    # or a 0.5 grinder bound must survive the upgrade unchanged); the
+    # grinder bounds keep one decimal for fine-scale grinders.
+    variable num_spec
+    array set num_spec {
+        target_time      {0.5    5   120   1  28.0}
+        grinder_min      {1    -99   999   1  0}
+        grinder_max      {1    -99   999   1  50}
+        popup_delay_ms   {250    0 30000   0  1500}
+        popup_font_scale {0.05 0.8   1.5   2  1.0}
+        dose_min         {0.5    1    50   1  12.0}
+        dose_max         {0.5    1    50   1  22.0}
+        ratio_min        {0.1  0.5    10   1  1.0}
+        ratio_max        {0.1  0.5    10   1  4.0}
+    }
+    variable num_pairs {grinder_min grinder_max dose_min dose_max ratio_min ratio_max}
+
+    proc _num_round {v dec} {
+        set m [expr {10 ** $dec}]
+        return [expr {round($v * $m) / double($m)}]
+    }
+
+    # The setting as a number, in range. On a key with decimals a comma
+    # separator reads as a point ("28,5" is 28.5; the old typed entries
+    # silently used 28) -- not on a whole-number key, where "1,500" means
+    # thousands. Anything else that is not a plain decimal -- "", "abc",
+    # "NaN", "1e5" -- falls back to the default. `scan`, not double(): Tcl
+    # 8.6 reads a leading zero ("08") as an invalid octal and throws.
+    proc _num_value {key} {
+        variable settings
+        variable num_spec
+        lassign $num_spec($key) step lo hi dec def
+        set raw $def
+        if {[info exists settings($key)]} { set raw [string trim $settings($key)] }
+        if {$dec > 0 && [regexp {^[-+]?[0-9]+,[0-9]+$} $raw]} { set raw [string map {, .} $raw] }
+        if {![regexp {^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)$} $raw]} { set raw $def }
+        scan $raw %f num
+        return [_num_round [_clamp $num $lo $hi] $dec]
+    }
+
+    proc _num_text {key} {
+        variable num_spec
+        return [format %.[lindex $num_spec($key) 3]f [_num_value $key]]
+    }
+
+    proc _num_partner {key} {
+        variable num_pairs
+        set i [lsearch -exact $num_pairs $key]
+        if {$i < 0} { return "" }
+        return [lindex $num_pairs [expr {$i % 2 ? $i - 1 : $i + 1}]]
+    }
+
+    # Effective range: the key's own, narrowed so a pair keeps one step
+    # between its ends while it is in order -- equal counts as in order
+    # (review: an equal pair left free let one tap invert dose or ratio
+    # bounds, which the engine does not swap back). An inverted pair
+    # (possible from old typed values; the engine swaps grinder bounds
+    # itself) gets the plain range, and _step never moves against the tap,
+    # so one tap can never jump across the scale.
+    proc _num_bounds {key} {
+        variable num_spec
+        variable num_pairs
+        lassign $num_spec($key) step lo hi dec def
+        set i [lsearch -exact $num_pairs $key]
+        if {$i >= 0} {
+            set partner [_num_partner $key]
+            set v [_num_value $key]
+            set pv [_num_value $partner]
+            if {$i % 2 == 0 && $v <= $pv} {
+                set hi [_num_round [expr {min($hi, $pv - $step)}] $dec]
+            } elseif {$i % 2 == 1 && $pv <= $v} {
+                set lo [_num_round [expr {max($lo, $pv + $step)}] $dec]
+            }
+        }
+        return [list $lo $hi]
+    }
+
+    # Quick taps speed up, copied from Lumen's ::lumen::act::_accel_step
+    # (skin.tcl, 350 ms window since Lumen 0.28.1) so both steppers the
+    # owner uses feel the same: 1x the step, 5x once three taps land under
+    # 350 ms apart in the same direction, 10x after six. A pause or a
+    # direction change drops straight back to 1x. `info exists` instead of
+    # Lumen's catch: a swallowed error dirties errorInfo (MT v0.21.3).
+    variable accel
+    array set accel {}
+    proc _accel_mult {key dir} {
+        variable accel
+        set now [clock milliseconds]
+        set last 0 ; set streak 0 ; set lastdir 0
+        if {[info exists accel($key)]} { lassign $accel($key) last streak lastdir }
+        if {$dir == $lastdir && ($now - $last) < 350} {
+            incr streak
+        } else {
+            set streak 0
+        }
+        set accel($key) [list $now $streak $dir]
+        if {$streak >= 6} { return 10 }
+        if {$streak >= 3} { return 5 }
+        return 1
+    }
+
+    # A -/+ tap. Saved with the rest on the page's Done, as the typed
+    # entries were.
+    proc _step {page key dir} {
+        variable settings
+        variable num_spec
+        lassign $num_spec($key) step lo hi dec def
+        lassign [_num_bounds $key] lo hi
+        set v [_num_value $key]
+        set nv [expr {$v + $dir * $step * [_accel_mult $key $dir]}]
+        set nv [_num_round [_clamp $nv $lo $hi] $dec]
+        if {($dir > 0 && $nv < $v) || ($dir < 0 && $nv > $v)} { set nv $v }
+        set settings($key) [format %.${dec}f $nv]
+        _stepper_refresh $page $key
+        set partner [_num_partner $key]
+        if {$partner ne ""} { _stepper_refresh $page $partner }
+    }
+
+    # Value text, and each end disabled at its limit (the pager rule:
+    # always visible, greyed when it can do nothing). Through dui's own
+    # enable_or_disable, which leaves hidden items alone (dui.tcl ~7943):
+    # show hooks run after idle, so a GA page left in the same event-loop
+    # turn must not set `-state normal` -- that would un-hide its buttons
+    # over the page now on screen (review; the MT v0.23.1 trap). The
+    # literal ga_<key>_dec* tag reaches shape, label and tap rect.
+    # v3.17.4 (F22, review): -initial 1 also writes the st: tag, so a load
+    # (items hidden) still paints the greyed end on the first frame. The
+    # stepper buttons are never hidden, so the shared st: slot is safe.
+    proc _stepper_refresh {page key} {
+        lassign [_num_bounds $key] lo hi
+        set v [_num_value $key]
+        catch { dui item config $page ga_${key}_value -text [_num_text $key] }
+        catch { dui item enable_or_disable [expr {$v > $lo}] $page ga_${key}_dec* -initial 1 }
+        catch { dui item enable_or_disable [expr {$v < $hi}] $page ga_${key}_inc* -initial 1 }
+    }
+
+    # [-] value [+], right-aligned so the + button ends at x2, on a btn_h
+    # row starting at y. Returns the stepper's left edge. Tags ga_<key>_*
+    # (unique: dui refuses a repeated first tag, and dui's press flash is
+    # canvas-global by tag name).
+    proc _add_stepper {page key x2 y} {
+        variable L
+        set y2 [expr {$y + $L(btn_h)}]
+        set x0 [expr {$x2 - $L(step_w)}]
+        set vx0 [expr {$x0 + $L(step_btn_w) + $L(sm)}]
+        set vx1 [expr {$vx0 + $L(step_val_w)}]
+        dui add dbutton $page $x0 $y [expr {$x0 + $L(step_btn_w)}] $y2 \
+            -tags ga_${key}_dec -label [format %c 0x2212] \
+            -command [list ::plugins::GrindAdvisor::_tap $page ga_${key}_dec [list ::plugins::GrindAdvisor::_step $page $key -1]] \
+            -label_font $L(font_button) -style ga_btn
+        # The plate is outlined in the card's own hairline: entry_bg alone is
+        # invisible on the light theme's white card (review).
+        rounded_rect $page $vx0 $y $vx1 $y2 $L(btn_radius) \
+            -fill $L(entry_bg) -outline $L(sec_outline) -width 2 -tags ga_${key}_box
+        dui add dtext $page [expr {($vx0 + $vx1) / 2}] [expr {($y + $y2) / 2}] \
+            -tags ga_${key}_value -text [_num_text $key] -font $L(font_primary) \
+            -fill $L(value_blue) -anchor center -justify center
+        dui add dbutton $page [expr {$x2 - $L(step_btn_w)}] $y $x2 $y2 \
+            -tags ga_${key}_inc -label "+" \
+            -command [list ::plugins::GrindAdvisor::_tap $page ga_${key}_inc [list ::plugins::GrindAdvisor::_step $page $key 1]] \
+            -label_font $L(font_button) -style ga_btn
+        return $x0
     }
 
     proc _setting {key default} {
@@ -124,9 +309,13 @@ namespace eval ::plugins::GrindAdvisor {
     #    Never feed physical winfo sizes into coordinates (double-scaling,
     #    half-size UI -- ShotHistoryEditor v0.3.2 lesson).
     #  * Fonts are real Tk font objects sized in PHYSICAL pixels (negative
-    #    Tk size = pixels) from the real detected screen, because -font /
-    #    -label_font values bypass dui's coordinate rescale entirely
-    #    (ShotHistoryEditor v0.3.2/v0.3.3 lesson). One shared helper; every
+    #    Tk size = pixels), because -font / -label_font values bypass dui's
+    #    coordinate rescale entirely (ShotHistoryEditor v0.3.2/v0.3.3
+    #    lesson). v3.23.0 (F8): their scale comes from the SAME source as the
+    #    coordinates -- `dui cget screen_size_height`, the canvas height the
+    #    core rescales to (800 on the 1340x800 tablet) -- never from
+    #    `winfo screenheight`, which is 736 there (the Android bar is cut
+    #    off) and drew every page font at 92%. One shared helper; every
     #    button label uses L(font_button); no per-button font sizes.
     #
     #  All page-body coordinates below live in this one block; no page
@@ -142,40 +331,83 @@ namespace eval ::plugins::GrindAdvisor {
     #  paint comes from these tokens, per settings(theme) (light | dark,
     #  default light). The after-shot popup and the History / Bag Stats
     #  overlays keep their own independent popup_theme (_colors).
+    #
+    #  v3.16.7 contrast pass (WCAG 2.1 at the tablet's rendered sizes;
+    #  the same values as ShotHistoryEditor, MaintenanceTracker and
+    #  BeanScanner): btn_label_fill lives here now, per theme -- dark ink
+    #  on the light periwinkle (the old white was 1.7:1), white on the
+    #  dark slate. text_mut is #595959 light (was #666666, 4.0:1 on the
+    #  page) and #9aa0ad dark (was #8d92a0, 3.9:1 on cards); the light
+    #  value_blue is #2753bb (was #4e85f4, 3.4:1 in the entries).
     # ------------------------------------------------------------------
+
+    # v3.23.0 (design review F21): the four status roles shared by every
+    # owner plugin and Lumen -- the ONE place their colours are written;
+    # _apply_palette (pages, per theme) and _colors (overlays, per family)
+    # both read them. Text colours, >= 4.5:1 on every surface they reach at
+    # the rendered size (dark: page, card, entry, overlay panel and scrim,
+    # glass panel and Lumen's baked glass, worst danger 4.67 on the entry;
+    # light: worst ok 4.75 on the grey page). Never on a button label.
+    #   ok      a good result (the high-confidence dot)
+    #   warn    a warning in words (out of reach, channeling)
+    #   danger  a failure (Recalculate from History failed)
+    #   info    a value or a neutral plot (setting values, the gauge, Curve)
+    proc _status_roles {dark} {
+        if {$dark} {
+            return [dict create ok "#2FD3A4" warn "#E8B34C" danger "#ff8a80" info "#8ab4ff"]
+        }
+        return [dict create ok "#086750" warn "#7a4b00" danger "#962219" info "#2753bb"]
+    }
 
     proc _apply_palette {} {
         variable L
         variable settings
         set dark 0
-        catch { if {$settings(theme) eq "dark"} { set dark 1 } }
+        if {[info exists settings(theme)] && $settings(theme) eq "dark"} { set dark 1 }
+        # v3.23.0 (F21): L(ok) L(warn) L(danger) L(info). value_blue (setting
+        # values, the on-glyph) IS info; the gauge fill is info too (light
+        # was #4d84f3: 2.85:1 against the empty segment, now 5.53:1; dark
+        # #8fb8ff -> #8ab4ff, 4.24:1).
+        dict for {role c} [_status_roles $dark] { set L($role) $c }
+        set L(value_blue) $L(info)
+        set L(conf_fill)  $L(info)
         if {$dark} {
             set L(page_bg)      "#23252e"
             set L(sec_fill)     "#32353f"
             set L(sec_outline)  "#464b58"
             set L(text_hi)      "#e8e9ee"
             set L(text_body)    "#c2c5cf"
-            set L(text_mut)     "#8d92a0"
-            set L(value_blue)   "#8ab4ff"
+            set L(text_mut)     "#9aa0ad"   ;# v3.16.7
             set L(entry_bg)     "#3a3e4a"
-            set L(conf_fill)    "#8fb8ff"
             set L(conf_empty)   "#454a57"
             set L(btn_fill)     "#4a5473"
             set L(btn_disabled_fill) "#3a3e4a"
+            set L(btn_label_fill) "#ffffff" ;# v3.16.7
+            set L(btn_press_fill) "#5f6a8c" ;# v3.22.0 (F9): white 5.35:1, 1.40:1 vs rest
         } else {
             set L(page_bg)      "#d5d6e3"   ;# stock settings-page grey
             set L(sec_fill)     "#FFFFFF"
             set L(sec_outline)  "#dcdcdc"
             set L(text_hi)      "#2b2b2b"
             set L(text_body)    "#444444"
-            set L(text_mut)     "#666666"
-            set L(value_blue)   "#4e85f4"
+            set L(text_mut)     "#595959"   ;# v3.16.7
             set L(entry_bg)     "#fbfaff"
-            set L(conf_fill)    "#4d84f3"
             set L(conf_empty)   "#e3e6ee"
             set L(btn_fill)     "#c0c5e3"   ;# stock dbutton periwinkle
             set L(btn_disabled_fill) "#dddddd"
+            set L(btn_label_fill) "#2b2b2b" ;# v3.16.7
+            set L(btn_press_fill) "#a6acd1" ;# v3.22.0 (F9): #2b2b2b 6.37:1, 1.31:1 vs rest
         }
+        # v3.22.0 (F10): the one primary action per page -- MaintenanceTracker's
+        # green with a white label in both themes (5.30:1), pressed darker
+        # (7.97:1). GA has no destructive action, so no danger button face
+        # (the danger TEXT colour is L(danger), F21).
+        set L(btn_primary_fill)  "#0a7a5f"
+        set L(btn_primary_label) "#ffffff"
+        set L(btn_primary_press) "#075c48"
+        # v3.22.0 (F9): how long a pressed button keeps its press tone after
+        # its command returns (DrinkMenu's 120 ms).
+        set L(press_ms) 120
     }
 
     proc _glyph_for {name} {
@@ -186,22 +418,70 @@ namespace eval ::plugins::GrindAdvisor {
         return $glyph
     }
 
+    # v3.24.0 (design review F23): the punctuation GA draws, named once and
+    # built from code points so the source stays ASCII (owner rule). An
+    # unknown name gives "" (a typo shows nothing, never a wrong glyph).
+    proc _char {name} {
+        switch -- $name {
+            ellipsis { return [format %c 0x2026] }
+            middot   { return [format %c 0xB7] }
+            endash   { return [format %c 0x2013] }
+            arrow    { return [format %c 0x2192] }
+            warning  { return [format %c 0x26A0] }
+        }
+        return ""
+    }
+
+    # The separator between facts on one line, GA's spacing ("a  .  b").
+    proc _sep {} {
+        return "  [_char middot]  "
+    }
+
     # Moon in light mode (tap for dark), sun-bright in dark; text fallback.
     proc _theme_button_face {} {
         variable L
         variable settings
         set dark 0
-        catch { if {$settings(theme) eq "dark"} { set dark 1 } }
+        if {[info exists settings(theme)] && $settings(theme) eq "dark"} { set dark 1 }
+        # v3.23.0: text picked with if, never `expr ?:`.
+        set icon moon
+        set word [translate "Dark"]
+        if {$dark} {
+            set icon sun-bright
+            set word [translate "Light"]
+        }
         if {[info exists L(have_icons)] && $L(have_icons)} {
-            set g [_glyph_for [expr {$dark ? "sun-bright" : "moon"}]]
+            set g [_glyph_for $icon]
             if {$g ne ""} { return $g }
         }
-        return [expr {$dark ? [translate "Light"] : [translate "Dark"]}]
+        return $word
+    }
+
+    # v3.17.1 (F19): the History Display Options row glyph -- Font Awesome
+    # square-check / square from the icon font the theme toggle uses, or
+    # On / Off where either glyph is missing (then drawn in the body font).
+    proc _toggle_icons {} {
+        variable L
+        return [expr {[info exists L(have_icons)] && $L(have_icons)
+                      && [_glyph_for square] ne "" && [_glyph_for square-check] ne ""}]
+    }
+
+    proc _toggle_face {on} {
+        if {[_toggle_icons]} {
+            if {$on} { return [_glyph_for square-check] }
+            return [_glyph_for square]
+        }
+        if {$on} { return [translate "On"] }
+        return [translate "Off"]
     }
 
     proc toggle_theme {} {
         variable settings
-        set settings(theme) [expr {$settings(theme) eq "dark" ? "light" : "dark"}]
+        if {$settings(theme) eq "dark"} {
+            set settings(theme) light
+        } else {
+            set settings(theme) dark
+        }
         save_settings
         _apply_palette
         _retheme_all
@@ -213,8 +493,9 @@ namespace eval ::plugins::GrindAdvisor {
     # Repaint every palette-colored item by bare tag across the 7 dui
     # pages (the popup/overlay dialogs re-read their own _colors on every
     # draw and need nothing here). Buttons restyle through their -btn
-    # shape tags; labels stay white. The dcheckboxes on History Display
-    # Options get their box symbol AND label recolored.
+    # shape tags and (v3.16.7) their -lbl label tags: the label ink
+    # follows the theme now (was white in both). History Display Options'
+    # toggle glyphs are painted by that page's render (v3.17.1).
     proc _retheme_all {} {
         variable L
         foreach p {GrindAdvisor_settings GrindAdvisor_history_options
@@ -240,6 +521,9 @@ namespace eval ::plugins::GrindAdvisor {
             GrindAdvisor_diagnostics sec_diag
             GrindAdvisor_calculation_details sec_calcd
             GrindAdvisor_dose_yield sec_dy
+            GrindAdvisor_history_options sec_hgrind
+            GrindAdvisor_history_options sec_hdose
+            GrindAdvisor_history_options sec_hshot
         } {
             catch { dui item config $p ${sec}_bg -fill $L(sec_fill) -outline $L(sec_outline) }
             catch { dui item config $p ${sec}_title -fill $L(text_hi) }
@@ -254,6 +538,7 @@ namespace eval ::plugins::GrindAdvisor {
             GrindAdvisor_settings popup_label text_body
             GrindAdvisor_settings conf_label text_body
             GrindAdvisor_settings conf_text text_body
+            GrindAdvisor_settings conf_step text_body
             GrindAdvisor_settings rounding_value value_blue
             GrindAdvisor_settings popup_theme_value value_blue
             GrindAdvisor_settings enable_popup_value value_blue
@@ -270,32 +555,41 @@ namespace eval ::plugins::GrindAdvisor {
             GrindAdvisor_dose_yield ratio_min_label text_body
             GrindAdvisor_dose_yield ratio_max_label text_body
             GrindAdvisor_dose_yield dy_help text_mut
+            GrindAdvisor_history_options history_show_set_grind_label text_body
+            GrindAdvisor_history_options history_show_recommended_grind_label text_body
+            GrindAdvisor_history_options history_show_reason_label text_body
+            GrindAdvisor_history_options history_show_set_dose_label text_body
+            GrindAdvisor_history_options history_show_set_ratio_label text_body
+            GrindAdvisor_history_options history_show_set_yield_label text_body
+            GrindAdvisor_history_options history_show_actual_yield_label text_body
+            GrindAdvisor_history_options history_show_datetime_label text_body
+            GrindAdvisor_history_options history_show_shot_time_label text_body
+            GrindAdvisor_history_options history_show_bag_shot_label text_body
+            GrindAdvisor_history_options history_show_bag_name_label text_body
         } {
             catch { dui item config $p $tag -fill $L($role) }
         }
-        # Entries (Tk widgets).
-        foreach {p tag} {
-            GrindAdvisor_settings target_time
-            GrindAdvisor_settings grinder_min
-            GrindAdvisor_settings grinder_max
-            GrindAdvisor_advanced popup_delay_ms
-            GrindAdvisor_advanced popup_font_scale
-            GrindAdvisor_dose_yield dose_min
-            GrindAdvisor_dose_yield dose_max
-            GrindAdvisor_dose_yield ratio_min
-            GrindAdvisor_dose_yield ratio_max
+        # v3.17.0 (F5): steppers -- the value plate and value, and both
+        # buttons (shape, disabled shape, label) the way every button below
+        # is repainted. They replace the nine Tk entries.
+        foreach {p keys} {
+            GrindAdvisor_settings {target_time grinder_min grinder_max}
+            GrindAdvisor_advanced {popup_delay_ms popup_font_scale}
+            GrindAdvisor_dose_yield {dose_min dose_max ratio_min ratio_max}
         } {
-            catch { dui item config $p $tag -bg $L(entry_bg) -foreground $L(value_blue) }
+            foreach k $keys {
+                catch { dui item config $p ga_${k}_box -fill $L(entry_bg) -outline $L(sec_outline) }
+                catch { dui item config $p ga_${k}_value -fill $L(value_blue) }
+                foreach t [list ga_${k}_dec ga_${k}_inc] {
+                    catch { _paint_btn $p $t }
+                }
+            }
         }
-        # History Display Options checkboxes: box symbol + label.
-        foreach k {history_show_datetime history_show_set_grind
-                   history_show_recommended_grind history_show_set_dose
-                   history_show_set_ratio history_show_set_yield
-                   history_show_actual_yield history_show_shot_time
-                   history_show_reason history_show_bag_shot} {
-            catch { dui item config GrindAdvisor_history_options $k -fill $L(text_hi) }
-            catch { dui item config GrindAdvisor_history_options ${k}-lbl -fill $L(text_body) }
-        }
+        # v3.17.1 (F19): History Display Options toggle glyphs -- their
+        # colour follows each row's state, so the page's own render paints
+        # them (value blue on, muted off). The invisible row buttons have no
+        # fill and are deliberately not in the button walk below.
+        catch { ::dui::pages::GrindAdvisor_history_options::render GrindAdvisor_history_options }
         # Confidence gauge segments get their real fills from
         # refresh_confidence (palette-aware); park them on the empty color
         # so nothing keeps a stale tint if refresh cannot run.
@@ -303,26 +597,97 @@ namespace eval ::plugins::GrindAdvisor {
             catch { dui item config GrindAdvisor_settings conf_seg$i \
                 -fill $L(conf_empty) -outline $L(conf_empty) }
         }
-        # Buttons: shape fills; labels stay white in both themes.
+        # Buttons: shape fills, and (v3.16.7) the label ink per theme via
+        # the bare <tag>-lbl text item -- btn_theme's label is its
+        # sun/moon icon, recolored the same way. -disabledfill stays the
+        # ga_btn aspect's #999999.
         foreach {p tags} {
             GrindAdvisor_settings {show_latest_recommendation recent_shot_history
                                    bag_stats_action rounding_btn theme_btn popup_btn
-                                   page_done advanced btn_theme}
+                                   page_done advanced ga_help btn_theme}
             GrindAdvisor_history_options {page_done}
             GrindAdvisor_advanced {recalc_from_history dose_yield_source
                                    history_display_options diagnostics
-                                   calculation_details help_guide bag_stats page_done}
+                                   calculation_details bag_stats page_done}
             GrindAdvisor_help {page_done pg_prev pg_next}
             GrindAdvisor_diagnostics {page_done pg_prev pg_next}
             GrindAdvisor_calculation_details {page_done pg_prev pg_next}
             GrindAdvisor_dose_yield {mode_btn page_done}
         } {
+            # v3.22.0 (F10): by role (show_latest_recommendation is primary),
+            # through the same painter the press restore uses.
             foreach t $tags {
-                catch { dui item config $p ${t}-btn \
-                    -fill $L(btn_fill) -outline $L(btn_fill) \
-                    -disabledfill $L(btn_disabled_fill) -disabledoutline $L(btn_disabled_fill) }
+                catch { _paint_btn $p $t }
             }
         }
+    }
+
+    # ------------------------------------------------------------------
+    #  v3.22.0 (design review F9 / F10): press feedback and button roles.
+    #
+    #  dui runs a dbutton's -command at touch-down, synchronously, and Tk
+    #  repaints only after it returns, so a slow command (an SDB read, a
+    #  page load) looked like a missed tap. Every labelled GA button is
+    #  created with -command [list ::plugins::GrindAdvisor::_tap $page
+    #  $tag <cmd>]: _tap tints THIS page's face (<tag>-btn, page-scoped
+    #  through dui item config) to the role's press tone, paints it now
+    #  (update idletasks, never a full update), arms the restore BEFORE
+    #  running the command (an error cannot strand the tint), then runs it.
+    #  The restore repaints through _paint_btn from the palette and role
+    #  AT RESTORE TIME, so a tap that switches the theme restores in the
+    #  new one. The core's -pressfill is never used: it restores the
+    #  creation fill and recolours same-named buttons in other plugins.
+    #  The History Display Options rows are invisible tap rects (no face):
+    #  never wrapped; their glyph flip is the feedback.
+    #
+    #  Roles (F10): neutral (ga_btn) everywhere, one primary per page at
+    #  most -- only "Show next grind" on the main page (ga_btn_primary).
+    #  GA deletes nothing, so there is no danger button role.
+    # ------------------------------------------------------------------
+    variable btn_roles
+    array set btn_roles {GrindAdvisor_settings,show_latest_recommendation primary}
+    variable press_after
+    array set press_after {}
+
+    proc _btn_role {page tag} {
+        variable btn_roles
+        if {[info exists btn_roles($page,$tag)]} { return $btn_roles($page,$tag) }
+        return neutral
+    }
+
+    # The one writer of a button's colours after creation: the theme
+    # repaint and the press restore.
+    proc _paint_btn {page tag} {
+        variable L
+        if {[_btn_role $page $tag] eq "primary"} {
+            set f $L(btn_primary_fill)
+            set ink $L(btn_primary_label)
+        } else {
+            set f $L(btn_fill)
+            set ink $L(btn_label_fill)
+        }
+        dui item config $page ${tag}-btn -fill $f -outline $f \
+            -disabledfill $L(btn_disabled_fill) -disabledoutline $L(btn_disabled_fill)
+        dui item config $page ${tag}-lbl -fill $ink
+    }
+
+    proc _tap {page tag cmd} {
+        variable L
+        variable press_after
+        set key $page,$tag
+        if {[info exists press_after($key)]} { after cancel $press_after($key) }
+        set p $L(btn_press_fill)
+        if {[_btn_role $page $tag] eq "primary"} { set p $L(btn_primary_press) }
+        dui item config $page ${tag}-btn -fill $p -outline $p
+        update idletasks
+        set press_after($key) [after $L(press_ms) [list ::plugins::GrindAdvisor::_tap_restore $page $tag]]
+        uplevel #0 $cmd
+    }
+
+    proc _tap_restore {page tag} {
+        variable press_after
+        unset -nocomplain press_after($page,$tag)
+        _paint_btn $page $tag
     }
 
     proc _init_layout {} {
@@ -335,14 +700,17 @@ namespace eval ::plugins::GrindAdvisor {
         set sh 1600
         set scale [expr {double($sh) / 800.0}]
 
-        # Real physical screen, used ONLY for font pixel sizes.
-        set psw 1340
-        set psh 800
-        catch { set psw [winfo screenwidth .] }
-        catch { set psh [winfo screenheight .] }
-        if {$psw <= 1} { set psw 1340 }
-        if {$psh <= 1} { set psh 800 }
-        set font_scale [expr {double($psh) / 800.0}]
+        # v3.23.0 (F8): font pixel sizes follow the canvas height the core
+        # rescales coordinates to (dui cget screen_size_height: 800 on the
+        # tablet, dui.tcl maps its 1340x736 screen to 800) -- one scale source
+        # for fonts and coordinates. Never `winfo screenheight` (736 there:
+        # every page font drew at 92%). No dui (offline) or no number: 800.
+        set ch 800
+        if {[llength [info commands ::dui::cget]]} {
+            set v [::dui::cget screen_size_height]
+            if {[string is double -strict $v] && $v > 1} { set ch $v }
+        }
+        set font_scale [expr {double($ch) / 800.0}]
 
         set L(screen_w) $sw
         set L(screen_h) $sh
@@ -361,9 +729,6 @@ namespace eval ::plugins::GrindAdvisor {
         set L(center_x) [expr {($L(left_x) + $L(right_x)) / 2}]
         set L(label_col_w) [expr {int(round(420 * $scale))}]
         set L(value_x) [expr {$L(left_x) + $L(label_col_w) + $L(lg)}]
-        # Second column for two-column grids (Advanced entries, checkbox grid).
-        set L(col2_x) [expr {$L(left_x) + $L(content_w)/2 + $L(lg)}]
-        set L(col2_value_x) [expr {$L(col2_x) + $L(label_col_w) + $L(lg)}]
 
         set L(card_w) $L(content_w)
         set L(card_h) [expr {int(round(96 * $scale))}]
@@ -385,8 +750,19 @@ namespace eval ::plugins::GrindAdvisor {
         set L(sec_label_w) [expr {int(round(200 * $scale))}]
         set L(sec_value_dx) [expr {$L(sec_pad) + $L(sec_label_w) + $L(lg)}]
         set L(sec_btn_w) [expr {int(round(140 * $scale))}]
-        set L(entry_row_h) [expr {int(round(48 * $scale))}]
-        set L(entry_row_pitch) [expr {$L(entry_row_h) + $L(md)}]
+        # v3.17.0 (F5): numeric settings are [-] value [+] steppers
+        # (MaintenanceTracker's threshold stepper with one step size; the
+        # half-width cards have no room for a second). 60 px buttons (67 px
+        # wide on the tablet), a value plate that fits "10000" at primary
+        # size, sm gaps. Rows use row_pitch (btn_h + md) like every other
+        # button row; the 48 px entry rows are gone.
+        set L(step_btn_w) [expr {int(round(64 * $scale))}]
+        set L(step_val_w) [expr {int(round(120 * $scale))}]
+        set L(step_w) [expr {2 * $L(step_btn_w) + $L(step_val_w) + 2 * $L(sm)}]
+        # v3.17.1 (F19): History Display Options -- three equal cards in one
+        # row, and the glyph column each toggle row keeps clear of its label.
+        set L(hopt_card_w) [expr {($L(content_w) - 2 * $L(sec_gutter)) / 3}]
+        set L(tog_w) [expr {int(round(40 * $scale))}]
         # v3.12.0: all colors live in _apply_palette (light / dark per
         # settings(theme)) so the sun/moon toggle can swap them at
         # runtime. The popup keeps its own independent popup_theme.
@@ -404,6 +780,9 @@ namespace eval ::plugins::GrindAdvisor {
         set L(conf_poor_max) 39
         set L(conf_fair_max) 64
         set L(conf_good_max) 84
+        # v3.24.0 (F24): one caption line (16 px) for the next step under
+        # the Confidence row; the Recommendation card grows by this much.
+        set L(conf_step_h) [expr {int(round(20 * $scale))}]
 
         set L(btn_w_std) [expr {int(round(200 * $scale))}]
         set L(btn_w_wide) [expr {int(round(240 * $scale))}]
@@ -417,8 +796,9 @@ namespace eval ::plugins::GrindAdvisor {
         # theme is current at load time (Lumen's DYE integration switches
         # the current theme to DYE_Lumen mid-load; this plugin escaped the
         # resulting invisible-button bug only by loading before the switch).
-        # page_bg / btn_fill / btn_disabled_fill come from _apply_palette.
-        set L(btn_label_fill) white
+        # page_bg / btn_fill / btn_disabled_fill come from _apply_palette,
+        # and so does btn_label_fill since v3.16.7 (per theme; this block
+        # used to force white in both themes).
         set L(sec_radius) $L(card_radius)
 
         set L(header_title_y) [expr {int(round(28 * $scale))}]
@@ -446,7 +826,8 @@ namespace eval ::plugins::GrindAdvisor {
             foreach {name ref bold} {title 40 1 section 24 1 primary 22 1 body 19 0 caption 16 0 button 20 1} {
                 set px [expr {int(max(16, round($ref * $font_scale)))}]
                 set fname "GA_$name"
-                set weight [expr {$bold ? "bold" : "normal"}]
+                set weight normal
+                if {$bold} { set weight bold }
                 if {[lsearch -exact [font names] $fname] >= 0} {
                     font configure $fname -size [expr {-$px}] -weight $weight
                 } else {
@@ -484,12 +865,24 @@ namespace eval ::plugins::GrindAdvisor {
         # skin.tcl:1831 running first) would leave these -theme default
         # pages unable to find the style -- buttons then render with no
         # shape at all, as happened to ShotHistoryEditor v0.5.3.
+        #
+        # v3.16.7: the label fill is the palette's btn_label_fill, so a
+        # restart in either theme creates readable labels; the live toggle
+        # recolors them in _retheme_all.
         catch {
             dui aspect set -theme default -type dbutton -style ga_btn [list \
                 shape round radius $L(btn_radius) \
                 fill $L(btn_fill) disabledfill $L(btn_disabled_fill)]
             dui aspect set -theme default -type dbutton_label -style ga_btn [list \
                 fill $L(btn_label_fill) disabledfill "#999999"]
+            # v3.22.0 (F10): the primary role. No pressfill on any GA style:
+            # the core flash restores the creation fill and recolours
+            # same-named buttons in other plugins; _tap does it instead.
+            dui aspect set -theme default -type dbutton -style ga_btn_primary [list \
+                shape round radius $L(btn_radius) \
+                fill $L(btn_primary_fill) disabledfill $L(btn_disabled_fill)]
+            dui aspect set -theme default -type dbutton_label -style ga_btn_primary [list \
+                fill $L(btn_primary_label) disabledfill "#999999"]
         }
     }
 
@@ -544,8 +937,11 @@ namespace eval ::plugins::GrindAdvisor {
     proc preload_settings_page {} {
         package require de1_dui 1.0
         catch { plugins load_settings GrindAdvisor }
+        # v3.24.0 (design review F26, CLAUDE.md "No save_settings in
+        # preload"): the defaults live in memory only; the first real change
+        # (a toggle, a page's Done / Back) saves the whole array, every
+        # default with it. load_settings' result is never read (always 0).
         apply_defaults
-        catch { plugins save_settings GrindAdvisor }
         _init_layout
         dui page add GrindAdvisor_settings -namespace true -theme default -type fpdialog
         dui page add GrindAdvisor_history_options -namespace true -theme default -type fpdialog
@@ -554,10 +950,11 @@ namespace eval ::plugins::GrindAdvisor {
         dui page add GrindAdvisor_diagnostics -namespace true -theme default -type fpdialog
         dui page add GrindAdvisor_calculation_details -namespace true -theme default -type fpdialog
         dui page add GrindAdvisor_dose_yield -namespace true -theme default -type fpdialog
-        # v3.12.0: nearly everything is created from palette tokens, but
-        # the History Display Options checkboxes take their colors from
-        # framework defaults -- one retheme pass makes a dark restart
-        # come up fully dark.
+        # v3.12.0: a retheme pass for a dark restart. v3.16.7: it reaches
+        # nothing -- plugins load before `dui setup_ui` creates the page
+        # items (gui.tcl) -- so every item takes its palette colour at
+        # creation (v3.17.1: the History Display Options glyphs too); this
+        # call stays, harmless.
         variable settings
         if {[info exists settings(theme)] && $settings(theme) eq "dark"} {
             catch { _retheme_all }
@@ -738,6 +1135,15 @@ namespace eval ::plugins::GrindAdvisor {
                 if {$last_shown_id eq "" && [dict exists $raw id]} {
                     set last_shown_id [dict get $raw id]
                 }
+                # v3.19.1: a rec saved before 3.19.0 has no `plain`; word it
+                # once here, so a skin tile (Lumen reads plain.short) shows
+                # the plain words before the next shot rewrites the file.
+                if {[dict exists $raw ok] && [dict get $raw ok] eq "1" \
+                        && ![dict exists $raw plain] && [dict exists $raw grind] \
+                        && [dict exists $raw next] && [dict exists $raw actual] \
+                        && [dict exists $raw target]} {
+                    dict set last_recommendation plain [_plain_words $raw]
+                }
             }
         } err]} {
             catch { close $f }
@@ -865,7 +1271,9 @@ namespace eval ::plugins::GrindAdvisor {
     proc _schedule_run {context} {
         variable _pending_after
         if {$_pending_after ne ""} { catch { after cancel $_pending_after } }
-        set delay [_setting popup_delay_ms 1500]
+        # v3.17.0 (F5): through _num_value -- a blank or typed "1.5s" delay
+        # used to make `after` throw here, and the popup silently stopped.
+        set delay [expr {int([_num_value popup_delay_ms])}]
         set _pending_after [after $delay [list ::plugins::GrindAdvisor::run $context]]
     }
 
@@ -1074,11 +1482,64 @@ namespace eval ::plugins::GrindAdvisor {
         _navigate_done $_settings_return_page
     }
 
-    # Sub-pages (Advanced, Help, History Display Options, Diagnostics,
-    # Calculation Details) always return to the main settings page -- a real
-    # page this plugin itself registers, not a guess.
+    # Advanced goes Back to the main settings page -- a real page this
+    # plugin itself registers, one level up, not a guess.
     proc _exit_subpage {} {
         _navigate_done GrindAdvisor_settings
+    }
+
+    # v3.17.2 (F13): every Tools page (Dose / Yield Source, History Display
+    # Options, Diagnostics, Calculation Details, Help) goes Back ONE level,
+    # to Advanced, the page that opened it. Its Done used to jump to the main
+    # page, two levels up in a single `dui page load`; the core removes only
+    # one stacked level per load (page_stack truncation, dui.tcl ~6470), so
+    # the stack kept Advanced and the tool page, and a later close_dialog
+    # fell back into Advanced instead of leaving. A plain, logged load of the
+    # known parent, as the core's own pages return.
+    proc _back_to_advanced {} {
+        if {[catch { dui page load GrindAdvisor_advanced } err]} {
+            catch { msg -ERROR "GrindAdvisor: Back to Advanced failed: $err" }
+            if {[catch { dui page close_dialog } err2]} {
+                catch { msg -ERROR "GrindAdvisor: close_dialog fallback failed: $err2" }
+            }
+        }
+    }
+
+    # v3.17.4 (F22): show hooks run after idle, so one queued for a page the
+    # user has already left must not repaint it. Copied verbatim from
+    # MaintenanceTracker (_page_is_current, MaintenanceTracker.tcl ~2105).
+    proc _page_is_current {page} {
+        set cur ""
+        catch { set cur [dui page current] }
+        return [expr {$cur eq $page}]
+    }
+
+    # v3.17.4 (F22): a page's load hook. dui page load runs it synchronously
+    # BEFORE the page appears (dui.tcl ~6448); show runs after idle, when the
+    # last visit's content is already on screen. So the refresh goes here.
+    # Rules (dui.tcl ~6449-6458, 6618): skip until the page is set up (a
+    # late-enabled plugin loads before its setup); never let an error escape
+    # (open_settings_dialog's cascade would fall back to `dui page show`,
+    # which skips load, and hide the error); ALWAYS return 1 -- a refresh
+    # body ending in a caught catch returns 0, and 0 cancels the open. The
+    # page's items are hidden during load: no -state here (enable_or_disable
+    # skips hidden items; show re-applies state).
+    proc _page_load {what page script} {
+        if {![dui page is_setup $page]} { return 1 }
+        if {[catch { uplevel 1 $script } err]} {
+            catch { msg -ERROR "GrindAdvisor: $what load refresh failed: $err" }
+        }
+        return 1
+    }
+
+    # v3.17.4 (F22): an SDB-backed page's text, parked before the page
+    # appears (owner 2026-10-01: placeholder, then fill); its show reads SDB
+    # and replaces it a moment later.
+    proc _reading_placeholder {page tag} {
+        catch { dui item config $page $tag -text "[translate {Reading the shot database}][_char ellipsis]" }
+        catch { dui item config $page pg_ind -text "" }
+        # Nothing to page through yet: both ends greyed on the first frame.
+        _pager_initial $page 0 1
     }
 
     # ==================================================================
@@ -1326,7 +1787,50 @@ namespace eval ::plugins::GrindAdvisor {
         if {$db eq "" || $table eq ""} { return [dict create ok 0] }
         set rows [_fetch_recent $db $table $fields $GA_FETCH_LIMIT]
         set rows [_filter_valid_rows $rows $fields]
-        return [_calibration_confidence $rows]
+        set conf [_calibration_confidence $rows]
+        # v3.24.0 (F24): the row's next step, from the same rows (display
+        # only, like the score). A failure loses only the step.
+        set step ""
+        if {[catch { set step [_conf_step $conf $rows $fields] } err]} {
+            catch { msg -ERROR "GrindAdvisor: confidence next step failed: $err" }
+            set step ""
+        }
+        dict set conf step $step
+        return $conf
+    }
+
+    # v3.24.0 (design review F24): ONE short next step under the main
+    # page's Confidence row while the word is below High, built only from
+    # facts GA already computes for the latest shot's bag; "" when there is
+    # no grounded step. In order:
+    #   out of reach  the bag's regression puts the target beyond the
+    #                 grinder (_reach, the popup's dead end): more shots will
+    #                 not help, so say what will -- the History card's words.
+    #   few shots     fewer than GA_FIT_MIN_SHOTS eligible shots (the
+    #                 forecast's n, outliers left out), the minimum Bag Stats
+    #                 fits an ideal grind from ("needs 4+ shots"): say how
+    #                 many more.
+    # Nothing when the latest shot has no bag (no "this bag" to name), or
+    # when a different bag is loaded now (the step would name the wrong one).
+    proc _conf_step {conf rows fields} {
+        variable GA_FIT_MIN_SHOTS
+        if {[llength $rows] == 0} { return "" }
+        if {[_dget $conf band] in {Good Excellent}} { return "" }
+        set current [_shot_from_row [lindex $rows 0]]
+        if {![dict exists $current bag_key]} { return "" }
+        set ck [current_bag_key]
+        if {$ck ne "" && $ck ne [dict get $current bag_key]} { return "" }
+        set rec [_forecast_rec $rows $fields 0]
+        if {[dict size $rec] == 0} { return "" }
+        if {[_reach_out $rec]} {
+            return "[_num1 [dict get $rec target]] s is out of reach by grind: change dose or yield."
+        }
+        set n [_dget $rec n]
+        if {[string is integer -strict $n] && $n >= 1 && $n < $GA_FIT_MIN_SHOTS} {
+            set more [_plural [expr {$GA_FIT_MIN_SHOTS - $n}] {more shot} {more shots}]
+            return "Pull $more on this bag for a steadier fit."
+        }
+        return ""
     }
 
     # ==================================================================
@@ -1549,6 +2053,9 @@ namespace eval ::plugins::GrindAdvisor {
         } else {
             dict set rec id "rid:[_dget $cur __rid]"
         }
+        # v3.19.0: the plain words, last, from the finished rec -- here so
+        # the saved rec and every per-bag rec Lumen's tile reads carry them.
+        dict set rec plain [_plain_words $rec]
         return $rec
     }
 
@@ -1647,18 +2154,22 @@ namespace eval ::plugins::GrindAdvisor {
     # appended when it is part of the key, otherwise two segments of the same
     # bean render as identical-looking duplicates in Bag Stats.
     proc _bag_label {row} {
-        set bv [expr {[dict exists $row bag_values] ? [dict get $row bag_values] : {}}]
+        set bv {}
+        if {[dict exists $row bag_values]} { set bv [dict get $row bag_values] }
         set parts {}
         foreach f {bean roaster} {
             set v [string trim [_dget $bv $f]]
             if {$v ne ""} { lappend parts $v }
         }
-        set label [join $parts " · "]
+        # v3.23.0: the middle dot from a code point (ASCII source).
+        # v3.24.0 (F23): one separator between all three facts -- bean,
+        # roaster, profile; the profile was set off with an em dash.
+        set label [join $parts " [_char middot] "]
         if {[_segment_by_profile]} {
             set p [string trim [_dget $row profile]]
             if {$p ne ""} {
                 if {$label eq ""} { return $p }
-                append label " — $p"
+                append label " [_char middot] $p"
             }
         }
         return $label
@@ -1757,7 +2268,8 @@ namespace eval ::plugins::GrindAdvisor {
 
     # What the skin shows when a bag has no shots to calibrate from.
     proc new_bag_note {} {
-        return "New bag - pull a shot to calibrate"
+        # v3.24.0 (F23): ": " between the label and what to do (was " - ").
+        return "New bag: pull a shot to calibrate"
     }
 
     # ==================================================================
@@ -1835,6 +2347,10 @@ namespace eval ::plugins::GrindAdvisor {
         foreach bag [dict get $data bags] {
             if {[dict get $bag key] eq $ck} { return {} }
             if {![dict get $bag trusted]} { continue }
+            # v3.18.0: a bag whose fit puts the target outside the grinder
+            # range has no real ideal (only the clamped end); never seed a
+            # new bag from it -- assessed or not (v3.18.2).
+            if {[_dget $bag reach_out] eq "1" || [_dget $bag reach_unassessed] eq "1"} { continue }
             if {[_normalize_key_parts [list [dict get $bag profile]]] ne $cur_profile} { continue }
             lappend cands $bag
         }
@@ -1879,16 +2395,17 @@ namespace eval ::plugins::GrindAdvisor {
         set grind [_clamp_grind [_round_grind [_median $ideals]]]
         set nb [llength $picked]
 
-        set bag_word [expr {$nb == 1 ? "bag" : "bags"}]
+        # v3.23.0 (F21): the one pluraliser (was an `expr ?:` text pick).
+        set nbags [_plural $nb bag]
         switch -- $rung {
             same_coffee  { set rung_txt "same coffee" }
-            same_roaster { set rung_txt "same roaster ($nb $bag_word)" }
-            default      { set rung_txt "this profile ($nb $bag_word)" }
+            same_roaster { set rung_txt "same roaster ($nbags)" }
+            default      { set rung_txt "this profile ($nbags)" }
         }
 
         return [dict create grind $grind rung $rung bags $nb \
             rung_txt $rung_txt \
-            label "Start ~[_fmt_num $grind] (est. from $nb $bag_word)" \
+            label "Start ~[_grind_fmt $grind] (est. from $nbags)" \
             reason "Starting estimate: $rung_txt" \
             sources $sources]
     }
@@ -1988,14 +2505,60 @@ namespace eval ::plugins::GrindAdvisor {
     # calls. Grind Advisor still issues no SQL but SELECT.
     #
     # Returns a human-readable summary of what it did.
+    # v3.16.8 (F4): is an SDB sync running right now? populate yields with
+    # `update` every ten files, so a tap handled during a run (a second
+    # Recalculate, or ShotHistoryEditor's refresh after an edit) would
+    # otherwise start a SECOND populate on top of the first, which then
+    # resumed from its stale list of what the database held.
+    # SDB's own flag, updating_db, is set by populate / create / upgrade for
+    # their whole run -- but no error path clears it, so after a failed sync
+    # it stays 1 for the session (SDB's Resync then refuses for good; before
+    # this pass our Recalculate was what cleared it). So the flag counts only
+    # while one of those three is really on the call stack: they run
+    # synchronously, and anything that runs during them runs inside their
+    # `update`, where `info frame` still shows the outer proc (checked on Tcl
+    # 8.6.18 for a timer event; Tk bindings are dispatched the same way). A
+    # stale flag is logged and ignored, and the next populate resets it.
+    proc _sdb_busy {} {
+        if {![info exists ::plugins::SDB::updating_db] \
+         || $::plugins::SDB::updating_db != 1} { return 0 }
+        for {set i [info frame]} {$i >= 1} {incr i -1} {
+            set f [info frame $i]
+            if {[dict exists $f proc] && [dict get $f proc] in {
+                    ::plugins::SDB::populate ::plugins::SDB::create
+                    ::plugins::SDB::upgrade}} { return 1 }
+        }
+        catch { msg "GrindAdvisor: SDB updating_db is 1 but no SDB sync is running (an earlier run failed); not treated as busy" }
+        return 0
+    }
+
+    # v3.23.0 (F21): 1 when the last refresh_from_history hit a failure (the
+    # SDB resync threw), so Advanced paints its note in the danger role. The
+    # returned text is unchanged (ShotHistoryEditor prints it).
+    variable refresh_failed 0
+
     proc refresh_from_history {} {
+        variable refresh_failed
+        set refresh_failed 0
         set steps {}
+
+        # v3.16.8 (F4): never start a sync while one is running (see
+        # _sdb_busy). Nothing is recomputed either: SDB is mid-sync. Only
+        # ShotHistoryEditor can arrive here busy (recalculate checks first),
+        # and it prints this after "Grind Advisor: " on its result page, so
+        # the text names the button that picks the change up afterwards.
+        if {[_sdb_busy]} {
+            set out [translate "SDB was busy syncing, not refreshed: run Advanced > Recalculate from history once it finishes"]
+            catch { msg "GrindAdvisor: refresh_from_history: $out" }
+            return $out
+        }
 
         # 1. Let SDB pick up the edited shot files.
         if {[info procs ::plugins::SDB::populate] ne ""} {
             if {[catch { ::plugins::SDB::populate "" "" 1 } err]} {
                 catch { msg "GrindAdvisor: SDB resync failed: $err" }
-                lappend steps [translate "SDB resync FAILED"]
+                lappend steps [translate "SDB resync failed"]
+                set refresh_failed 1
             } else {
                 lappend steps [translate "SDB resynced"]
             }
@@ -2162,7 +2725,7 @@ namespace eval ::plugins::GrindAdvisor {
     variable GA_M_MIN 0.5
     variable GA_DECAY 0.85
 
-    # v3.10.0 — two guards on the regression, both owner-requested after the
+    # v3.10.0 -- two guards on the regression, both owner-requested after the
     # Sure Shot bag produced a recommendation of 4.0 from shots that had only
     # ever been pulled between 7.5 and 8.2.
     #
@@ -2188,6 +2751,10 @@ namespace eval ::plugins::GrindAdvisor {
     variable GA_DOSE_SENS 1.8
     variable GA_OUTLIER 2.0
     variable GA_MIN_SHOTS 3
+    # v3.24.0 (F24): the fewest eligible shots Bag Stats fits an ideal grind
+    # from (its trust gate, "needs 4+ shots"); the main page's next step
+    # counts toward the same number. Was a literal 4 in _bag_data.
+    variable GA_FIT_MIN_SHOTS 4
 
     # How many rows the recommendation path pulls from SDB (v3.7.0: was a
     # hardcoded 40 at both call sites).
@@ -2446,6 +3013,272 @@ namespace eval ::plugins::GrindAdvisor {
             limited $limited]
     }
 
+    # v3.18.0 -- say when grind cannot reach the target (owner 2026-10-01:
+    # "yes, add that as a GrindAdvisor pass"). Lykke Bam Bam on Gentle and
+    # sweet, 38 g, target 28 s: four shots from 10.0 down to 5.7 ran 11.1 to
+    # 15.5 s, the bag's own regression (n 4, R2 0.77, -0.99 s/grind) puts
+    # 28 s at grind -7.7, yet the popup only ever said "finer by 0.5". The
+    # profile caps flow on a weak puck, so the shot ends near the same time
+    # whatever the grind; the honest answer is "not by grind".
+    #
+    # Rule: on the regression rung only (n >= GA_MIN_SHOTS, R2 >= GA_R2_MIN,
+    # |m| >= GA_M_MIN, so a fit worth believing), the unclamped ideal grind
+    # (target - b) / m lies outside the grinder range. Never on first_shot,
+    # two_shot or either fallback: a flow-capped pair looks flat (Bam Bam's
+    # first pair fitted 0.2 s/step although finer grinds still gained time).
+    # The pass also proposed "more than GA_REACH_STEPS finer than the finest
+    # grind tried"; the read-only backtest over all 93 regression positions
+    # since 2026-06-28 (tools/backtest_reach.py on the 2026-10-02 copy of
+    # shots.db) flags Bam Bam's two positions with the range rule ALONE and
+    # nothing else, while any steps threshold below 6.5 also flags early
+    # n=3 fits of bags that later converged (Chelchele 6.43, Origin
+    # Colombia 4.41). So there is no steps constant.
+    #
+    # v3.18.1 (review): two more gates, neither changes the Bam Bam result.
+    #   GA_REACH_TOL       out only when the fit at the range end still
+    #                      misses the target by more than this many seconds,
+    #                      the same 2 s window Bag Stats calls "on target".
+    #                      Without it an ideal of -0.2 (0.6 s short at grind
+    #                      0) said "change dose or yield" while `next` was 0.0.
+    #   GA_REACH_MIN_GRINDS  at least this many DIFFERENT grinds in the fit:
+    #                      3 shots at 2 grinds are pair evidence, the case the
+    #                      rule already refuses on two_shot.
+    # Bam Bam misses by 7.6 s (n 4, 4 grinds) and 10.3 s (n 3, 3 grinds).
+    #
+    # The recommendation itself is unchanged: `next` still comes from the
+    # ladder. `reach` only names the dead end:
+    #   out         1 when the target needs a grind outside the range
+    #   assessed    1 when the gates above allowed a verdict at all
+    #   g_target    the unclamped ideal grind (normalized time, like m and b)
+    #   limit       the range end it falls beyond ("" when inside)
+    #   t_at_limit  the fit's time at that end (an extrapolation)
+    variable GA_REACH_TOL 2.0
+    variable GA_REACH_MIN_GRINDS 3
+    # v3.20.0: what "on target" means wherever a shot is called that -- Bag
+    # Stats' shots-to-target and the History card's verdict (review: History
+    # said "on target" within 1 s, Bag Stats within 2 s, for the same shot).
+    variable GA_ON_TARGET_TOL 2.0
+
+    # Shared by the rec and Bag Stats: {} when the ideal grind lies inside
+    # lo..hi, else {limit miss} -- the range end it falls beyond and how many
+    # seconds the line still misses the target by there. miss is
+    # |m * (limit - ideal)|, which equals |target - t_at_limit|.
+    proc _reach_miss {m ideal lo hi} {
+        if {$ideal < $lo} {
+            set lim $lo
+        } elseif {$ideal > $hi} {
+            set lim $hi
+        } else {
+            return {}
+        }
+        return [list $lim [expr {abs($m * ($lim - $ideal))}]]
+    }
+
+    proc _reach {fc shots gmin gmax} {
+        variable GA_REACH_TOL
+        variable GA_REACH_MIN_GRINDS
+        set out [dict create out 0 assessed 0 g_target "" limit "" t_at_limit ""]
+        if {[dict get $fc method] ne "regression" || ![dict exists $fc ideal_raw]} {
+            return $out
+        }
+        set m [dict get $fc m]
+        set b [dict get $fc b]
+        set gt [dict get $fc ideal_raw]
+        if {$m eq "" || $b eq "" || $gt eq ""} { return $out }
+        dict set out g_target $gt
+        set distinct {}
+        foreach s $shots {
+            set g [dict get $s grind]
+            if {[lsearch -exact $distinct $g] < 0} { lappend distinct $g }
+        }
+        if {[llength $distinct] < $GA_REACH_MIN_GRINDS} { return $out }
+        dict set out assessed 1
+        set miss [_reach_miss $m $gt $gmin $gmax]
+        if {[llength $miss] == 2} {
+            lassign $miss limit secs
+            dict set out limit $limit
+            dict set out t_at_limit [expr {$m * $limit + $b}]
+            if {$secs > $GA_REACH_TOL} { dict set out out 1 }
+        }
+        return $out
+    }
+
+    # 1 when a rec (or a saved one from before v3.18.0, which has no
+    # `reach`) says the target is out of reach by grind.
+    proc _reach_out {rec} {
+        if {![dict exists $rec reach out]} { return 0 }
+        if {[dict get $rec reach out] eq "1"} { return 1 }
+        return 0
+    }
+
+    # The one plain sentence for every surface that names the dead end.
+    proc _reach_line {rec} {
+        if {![_reach_out $rec]} { return "" }
+        return "[_fmt_num [dict get $rec target]] s is out of reach by grind on this bag: change dose or yield instead."
+    }
+
+    # ==================================================================
+    #  Plain words (v3.19.0, design review F15; owner 2026-10-02: "Plain,
+    #  tile too", "Both popups"). Barista words up front on the popup, the
+    #  main page and Lumen's tile; slope, R2, method and rungs stay behind
+    #  Why? and Calculation Details. Built from rec keys only, so a saved rec
+    #  from an older version gets the same words at draw time. The technical
+    #  `reason`, the method literals and confidence_band stay byte-stable:
+    #  Lumen parses them.
+    # ==================================================================
+
+    # v3.19.1: a grind setting as the owner's mock writes it: "3.0", "3.25",
+    # "5.2" -- _fmt_num keeps a quarter step's two decimals but turned a
+    # whole number into "3" ("3.5 -> 3" on the card).
+    proc _grind_fmt {v} {
+        set s [_fmt_num $v]
+        if {$s ne "" && [string first . $s] < 0} { append s ".0" }
+        return $s
+    }
+
+    # A number as a barista reads it (seconds, grams): one decimal, no ".0".
+    proc _num1 {v} {
+        set s [format %.1f $v]
+        if {[string match "*.0" $s]} { set s [string range $s 0 end-2] }
+        return $s
+    }
+
+    # Poor / Fair / Good / Excellent (_confidence_band) in plain words.
+    proc _band_plain {band} {
+        switch -- $band {
+            Poor      { return "low" }
+            Fair      { return "medium" }
+            Good      { return "high" }
+            Excellent { return "very high" }
+        }
+        return ""
+    }
+
+    # v3.24.0 (design review F23, word before number): the Why? Confidence
+    # row reads "Medium (40%)" (was "40% (medium)"); the bare score when
+    # there is no band.
+    proc _conf_words {score band} {
+        set w [_band_plain $band]
+        if {$w eq ""} { return "$score%" }
+        return "[string totitle $w] ($score%)"
+    }
+
+    # The words every surface shares. Keys:
+    #   move       "finer by 0.5" / "coarser by 0.5" / "keep this grind"
+    #   conf       "medium confidence, 4 shots" / "first shot on this bag"
+    #   band       the confidence_band it came from ("" without one)
+    #   time_line  "15.5 s against a 28 s target" -- the time the engine
+    #              used: when yield normalization moved it by 0.5 s or
+    #              more, "16.4 s yield-adjusted ..." (v3.11.0: the raw
+    #              clock time can point the other way)
+    #   reach      the out-of-reach sentence, or ""
+    #   warning    the channeling warning in plain words, or ""
+    #   short      one line for a skin tile, about 55 characters at most
+    #              (Lumen's tile note is one line of ~560 px)
+    proc _plain_words {rec} {
+        # v3.20.0: `used` / `adj` -- the shot time the engine judged and
+        # whether that is the yield-adjusted time -- so the History card's
+        # fast / slow word agrees with the move (review: "1 s fast" next to
+        # "coarser by 0.1" when the adjusted time was 28.3 s).
+        set out [dict create move "" conf "" band "" time_line "" reach "" warning "" short "" used "" adj 0]
+        if {![dict exists $rec ok] || ![dict get $rec ok]} { return $out }
+        set grind [dict get $rec grind]
+        set next  [dict get $rec next]
+        set delta [expr {$next - $grind}]
+        if {abs($delta) < 0.001} {
+            set move "keep this grind"
+            set go "keep this grind"
+        } elseif {$delta < 0} {
+            set move "finer by [_grind_fmt [expr {abs($delta)}]]"
+            set go "go finer"
+        } else {
+            set move "coarser by [_grind_fmt [expr {abs($delta)}]]"
+            set go "go coarser"
+        }
+        dict set out move $move
+
+        set n [_dget $rec n]
+        set band [_dget $rec confidence_band]
+        dict set out band $band
+        set bw [_band_plain $band]
+        # v3.19.1: n is the shots the forecast USED (outliers left out); the
+        # card's recipe line counts every shot of the bag ("shot 5 on this
+        # bag"), so say "4 of 5 shots" rather than two different counts.
+        set cnt ""
+        if {$n ne ""} {
+            set cnt [_plural $n shot]
+            set bs [_dget $rec bag_shot]
+            if {[string is integer -strict $bs] && [string is integer -strict $n] && $bs > $n} {
+                set cnt "$n of $bs shots"
+            }
+        }
+        if {$bw ne "" && $n ne ""} {
+            dict set out conf "$bw confidence, $cnt"
+        } elseif {$n eq "1"} {
+            dict set out conf "first shot on this bag"
+        } elseif {$n ne ""} {
+            dict set out conf "[_plural $n shot] on this bag"
+        }
+
+        set actual [dict get $rec actual]
+        set used $actual
+        set adj 0
+        if {[_dget $rec normalized] eq "1"} {
+            set s0 {}
+            catch { set s0 [lindex [dict get $rec shots] 0] }
+            if {[dict exists $s0 t_norm] && [dict exists $s0 t_raw] \
+                    && abs([dict get $s0 t_raw] - $actual) < 0.05 \
+                    && abs([dict get $s0 t_norm] - $actual) >= 0.5} {
+                set used [dict get $s0 t_norm]
+                set adj 1
+            }
+        }
+        dict set out used $used
+        dict set out adj $adj
+        set tgt [_num1 [dict get $rec target]]
+        if {$adj} {
+            dict set out time_line "[_num1 $used] s yield-adjusted against a $tgt s target"
+        } else {
+            dict set out time_line "[_num1 $used] s against a $tgt s target"
+        }
+
+        dict set out reach [_reach_line $rec]
+        # The rule (_channel_warning) is "much faster than the recent shots
+        # at about this grind": say that, then the likely cause.
+        if {[dict exists $rec channel_warning]} {
+            dict set out warning "Much faster than recent shots at this grind: check puck prep"
+        }
+        if {[_reach_out $rec]} {
+            dict set out short "$tgt s is out of reach by grind: change dose or yield"
+        } elseif {$adj} {
+            # v3.19.1: label the adjusted time here too -- next to the LAST
+            # SHOT card's clock time a bare 26.2 s reads as a contradiction.
+            dict set out short "[_num1 $used] s yield-adjusted, target $tgt s: $go"
+        } else {
+            dict set out short "[_num1 $used] s, target $tgt s: $go"
+        }
+        return $out
+    }
+
+    # Calculation Details wording: the technical side of the same fact.
+    proc _reach_txt {rec} {
+        variable GA_REACH_MIN_GRINDS
+        variable GA_REACH_TOL
+        if {![dict exists $rec reach out]} { return "n/a (saved before v3.18.0)" }
+        if {[dict exists $rec reach assessed] && ![dict get $rec reach assessed]} {
+            return "not assessed (fewer than $GA_REACH_MIN_GRINDS different grinds tried)"
+        }
+        set tgt [_fmt_num [dict get $rec target]]
+        set lim [_dget [dict get $rec reach] limit]
+        if {[_reach_out $rec]} {
+            return "out of the grinder range: at [_fmt_num $lim] the fit predicts [format %.1f [dict get $rec reach t_at_limit]]s against a ${tgt}s target. Change dose or yield instead."
+        }
+        if {$lim ne ""} {
+            return "at the grinder's end: at [_fmt_num $lim] the fit predicts [format %.1f [dict get $rec reach t_at_limit]]s, within [_fmt_num $GA_REACH_TOL]s of the ${tgt}s target"
+        }
+        return "inside the grinder range"
+    }
+
     # The ladder: choose the rung by eligible count n.
     proc _compute_forecast {shots} {
         variable GA_MIN_SHOTS
@@ -2547,7 +3380,8 @@ namespace eval ::plugins::GrindAdvisor {
 
     proc _forecast_excluded_txt {rec} {
         set ex [expr {[dict exists $rec excluded] ? [dict get $rec excluded] : 0}]
-        if {$ex > 0} { return ", $ex outlier(s) excluded" }
+        # v3.23.0 (F21): "1 outlier" / "2 outliers" (was "outlier(s)").
+        if {$ex > 0} { return ", [_plural $ex outlier] excluded" }
         return ""
     }
 
@@ -2582,12 +3416,15 @@ namespace eval ::plugins::GrindAdvisor {
         set next [dict get $fc next]
         lassign [_grinder_range] gmin gmax
         set r2raw [expr {[dict exists $fc r2raw] ? [dict get $fc r2raw] : ""}]
-        return [dict create ok 1 \
+        # v3.23.0: the key is text, picked with if (never `expr ?:`).
+        set bag_key ""
+        if {[dict exists $cur bag_key]} { set bag_key [dict get $cur bag_key] }
+        set rec [dict create ok 1 \
             grind $grind actual $actual target $target next $next \
             error [expr {$target - $actual}] \
             reason [_forecast_reason $fc $next] \
             shots $shots \
-            bag_key [expr {[dict exists $cur bag_key] ? [dict get $cur bag_key] : ""}] \
+            bag_key $bag_key \
             method [dict get $fc method] \
             m [dict get $fc m] b [dict get $fc b] r2 [dict get $fc r2] r2raw $r2raw \
             n [dict get $fc n] normalized [dict get $fc normalized] \
@@ -2596,6 +3433,10 @@ namespace eval ::plugins::GrindAdvisor {
             s_per_step [dict get $fc s_per_step] \
             rounding_increment [_safe_rounding_increment] \
             grinder_min $gmin grinder_max $gmax]
+        # v3.18.0: here, not in _decorate_rec, so History cards, the per-bag
+        # recommendation cache and the saved rec all carry it.
+        dict set rec reach [_reach $fc $shots $gmin $gmax]
+        return $rec
     }
 
     # Round to the configured increment.
@@ -2967,8 +3808,16 @@ namespace eval ::plugins::GrindAdvisor {
         if {[_show_overlay_dialog $rec]} { return }
         if {[_show_tk_dialog $rec]}      { return }
         set popup_active 0
-        catch { borg toast [_oneline $rec] }
+        catch { borg toast [_toast_line $rec] }
         return
+    }
+
+    # v3.19.1: the last-resort toast (no overlay, no Tk dialog) in the
+    # popup's plain words; the log keeps the technical _oneline.
+    proc _toast_line {rec} {
+        if {![dict exists $rec ok] || ![dict get $rec ok]} { return [_oneline $rec] }
+        set P [_plain_words $rec]
+        return "Next grind [_grind_fmt [dict get $rec grind]] [_char arrow] [_grind_fmt [dict get $rec next]]: [dict get $P move] ([dict get $P time_line])"
     }
 
     proc _oneline {rec} {
@@ -2984,46 +3833,30 @@ namespace eval ::plugins::GrindAdvisor {
         return [string map {\n { }} [dict get $rec error]]
     }
 
-    # Returns {body bignum}. bignum is "" for errors.
+    # Returns {body bignum tail} for the plain-Tk fallback dialog. bignum and
+    # tail are "" for errors. v3.19.0: the same plain words as the overlay
+    # popup (title, neutral hero, move and confidence, time, warnings).
     proc _dialog_lines {rec} {
         if {![dict get $rec ok]} {
-            return [list "\u26A0 Grind Advisor\n\n[dict get $rec error]" ""]
+            return [list "[format %c 0x26A0] Grind Advisor\n\n[dict get $rec error]" "" ""]
         }
-        set g [format %.1f [dict get $rec grind]]
-        set a [format %.1f [dict get $rec actual]]
-        set n [format %.1f [dict get $rec next]]
-
-        set lines [list "\u2713 Shot Saved" "" "Grind: $g"]
-        if {[dict exists $rec dose]} {
-            lappend lines "Dose: [format %.1f [dict get $rec dose]]g"
+        set P [_plain_words $rec]
+        set sub [dict get $P move]
+        if {[dict get $P conf] ne ""} {
+            append sub "  [format %c 0xB7]  [dict get $P conf]"
         }
-        if {[dict exists $rec set_yield]} {
-            lappend lines "Yield: [format %.1f [dict get $rec set_yield]]g"
+        set tail [list $sub [dict get $P time_line]]
+        foreach k {reach warning} {
+            if {[dict get $P $k] ne ""} { lappend tail "[format %c 0x26A0] [dict get $P $k]" }
         }
-        if {[dict exists $rec bag_shot]} {
-            lappend lines "Bag Shot: #[dict get $rec bag_shot]"
-        } else {
-            lappend lines "Bag Shot: unknown"
-        }
-        lappend lines "Time: ${a}s"
-        if {[dict exists $rec reason]} {
-            lappend lines "Reason: [dict get $rec reason]"
-        }
-        if {[dict exists $rec channel_warning]} {
-            lappend lines [dict get $rec channel_warning]
-        }
-        lappend lines "" "Recommended Next Grind:"
-        set body [join $lines "\n"]
-
-        set delta [expr {[dict get $rec next] - [dict get $rec grind]}]
-        if {abs($delta) < 0.001} {
-            set dir "dialed in"
-        } elseif {$delta < 0} {
-            set dir "finer"
-        } else {
-            set dir "coarser"
-        }
-        return [list $body "$n   ($dir)"]
+        # v3.19.1: the recipe line too (this fallback has no Why? button).
+        set recipe {}
+        if {[dict exists $rec dose]} { lappend recipe "[_num1 [dict get $rec dose]] g in" }
+        if {[dict exists $rec set_yield]} { lappend recipe "[_num1 [dict get $rec set_yield]] g out" }
+        if {[dict exists $rec bag_shot]} { lappend recipe "shot [dict get $rec bag_shot] on this bag" }
+        if {[llength $recipe]} { lappend tail "" [join $recipe "  [format %c 0xB7]  "] }
+        set hero "[_grind_fmt [dict get $rec grind]] [format %c 0x2192] [_grind_fmt [dict get $rec next]]"
+        return [list "Next grind" $hero [join $tail "\n"]]
     }
 
     # ------------------------------------------------------------------
@@ -3066,9 +3899,23 @@ namespace eval ::plugins::GrindAdvisor {
         }
         if {$W <= 1} { catch { set W [winfo width  $parent] } }
         if {$H <= 1} { catch { set H [winfo height $parent] } }
-        if {$W <= 1} { set W [winfo screenwidth .] }
-        if {$H <= 1} { set H [winfo screenheight .] }
-        set o [expr {$parent eq "." ? ".grindadvisor_overlay" : "$parent.grindadvisor_overlay"}]
+        # v3.23.0 (F8): last resort = the core's own canvas size (the
+        # coordinate source), else 1340x800 -- never winfo screenwidth /
+        # screenheight (736 tall on the tablet: every overlay at 92%).
+        if {$W <= 1 || $H <= 1} {
+            set cw 1340
+            set ch 800
+            if {[llength [info commands ::dui::cget]]} {
+                set v [::dui::cget screen_size_width]
+                if {[string is double -strict $v] && $v > 1} { set cw $v }
+                set v [::dui::cget screen_size_height]
+                if {[string is double -strict $v] && $v > 1} { set ch $v }
+            }
+            if {$W <= 1} { set W $cw }
+            if {$H <= 1} { set H $ch }
+        }
+        set o "$parent.grindadvisor_overlay"
+        if {$parent eq "."} { set o ".grindadvisor_overlay" }
         return [list $parent $W $H $o]
     }
 
@@ -3076,8 +3923,12 @@ namespace eval ::plugins::GrindAdvisor {
     # section 24, primary 22, body 19, caption 16, button 20 at the 800px
     # reference height), scaled by real height and the popup_font_scale
     # setting, clamped to tablet-sane ranges.
-    proc _pfonts {H} {
-        set s [_setting popup_font_scale 1.0]
+    # v3.20.0: `scale` overrides the setting -- the full-page lists (History,
+    # Bag Stats) pass 1.0: their 96 px cards and page zones are fixed, so a
+    # 1.5 popup scale stacked their three lines into each other. Like the dui
+    # pages, they follow the page type scale, not the popup's.
+    proc _pfonts {H {scale ""}} {
+        set s [expr {$scale ne "" ? $scale : [_num_value popup_font_scale]}]   ;# v3.17.0: always a number
         set fs [expr {double($H) / 800.0 * $s}]
         return [dict create \
             title   [_clamp [expr {int(40 * $fs)}] 30 56] \
@@ -3112,16 +3963,40 @@ namespace eval ::plugins::GrindAdvisor {
         return $n
     }
 
+    # v3.19.0: the real rendered height of a wrapped text item, measured on
+    # the overlay canvas itself (created, measured, deleted). 0 when it
+    # cannot be measured; callers then fall back to one line.
+    proc _measure_h {o text size wrap} {
+        set h 0
+        if {[catch {
+            # Created visible (a hidden item has no bbox) and deleted before
+            # any redraw can show it.
+            set id [$o create text 0 0 -text $text -anchor nw -width $wrap \
+                -font [_font $size]]
+            set bb [$o bbox $id]
+            $o delete $id
+            if {[llength $bb] == 4} { set h [expr {[lindex $bb 3] - [lindex $bb 1]}] }
+        } err]} {
+            catch { msg -NOTICE "GrindAdvisor: could not measure overlay text: $err" }
+        }
+        if {$h <= 0} { set h [expr {int($size * 135 / 100)}] }
+        return $h
+    }
+
     # Single-line ellipsis truncation for card text (Tk -width wraps instead
     # of truncating, which would collide with the next baseline).
-    proc _fit_text {text size maxw} {
+    # v3.20.0: weight -- a bold line measured at normal weight came out
+    # wider than its budget (the card titles are bold).
+    proc _fit_text {text size maxw {weight normal}} {
         if {[catch {
-            set f [_font $size]
+            set f [_font $size $weight]
             if {[font measure $f $text] > $maxw} {
-                while {[string length $text] > 1 && [font measure $f "$text\u2026"] > $maxw} {
+                # v3.24.0: the one ellipsis glyph (_char), measured as drawn.
+                set e [_char ellipsis]
+                while {[string length $text] > 1 && [font measure $f "$text$e"] > $maxw} {
                     set text [string range $text 0 end-1]
                 }
-                set text "$text\u2026"
+                set text "$text$e"
             }
         }]} {
             # font measure unavailable: leave text as-is.
@@ -3398,7 +4273,8 @@ namespace eval ::plugins::GrindAdvisor {
             # via the draw-scoped override, so helpers that fetch their
             # own colors (_obutton) agree too (v3.14.5).
             set glass [_glass_setup $W $H]
-            set _colors_override [expr {$glass ? [dict get $_glass_mat theme] : ""}]
+            set _colors_override ""
+            if {$glass} { set _colors_override [dict get $_glass_mat theme] }
             set col [_colors]
             set F [_pfonts $H]
             set fsec  [dict get $F section]
@@ -3438,63 +4314,56 @@ namespace eval ::plugins::GrindAdvisor {
             if {[dict get $rec ok]} {
                 set _last_rec_shown $rec
 
-                set g [format %.1f [dict get $rec grind]]
-                set a [format %.1f [dict get $rec actual]]
-                set t [format %.1f [dict get $rec target]]
-                set n [format %.1f [dict get $rec next]]
-                set delta [expr {[dict get $rec next] - [dict get $rec grind]}]
-                if {abs($delta) < 0.001} {
-                    set dirline "dialed in \u2014 keep this grind"
-                } elseif {$delta < 0} {
-                    set dirline "finer by [format %.1f [expr {abs($delta)}]]"
-                } else {
-                    set dirline "coarser by [format %.1f [expr {abs($delta)}]]"
+                # v3.19.0 (design review F15; owner 2026-10-02: "Plain, tile
+                # too", "Both popups"): the barista version, glass and opaque
+                # alike. "Next grind" (the old check-mark "Shot Saved" claimed
+                # something GrindAdvisor never did), a NEUTRAL hero (green read
+                # as "all good" even at low confidence), the move and the
+                # confidence directly under it, one plain time line, warnings
+                # in amber behind a warning sign, a one-line recipe caption.
+                # Slope, method, the technical reason and the % score are
+                # behind Why?. Numbers via _fmt_num (format %.1f showed a
+                # 0.25-step grind of 3.25 as "3.2").
+                set P [_plain_words $rec]
+                set arrow [format %c 0x2192]
+                set sep "  [format %c 0xB7]  "
+                set sign [format %c 0x26A0]
+                set bullet [format %c 0x25CF]
+                set hero "[_grind_fmt [dict get $rec grind]] $arrow [_grind_fmt [dict get $rec next]]"
+                set move [dict get $P move]
+                set conf [dict get $P conf]
+                # v3.23.0 (F21): the shared ok role (was `good`).
+                switch -- [dict get $P band] {
+                    Poor             { set dotcol [dict get $col warn] }
+                    Good - Excellent { set dotcol [dict get $col ok] }
+                    default          { set dotcol [dict get $col muted] }
                 }
-
-                # Detail rows (label/value grid). Dose/Yield reflect the
-                # source mode (v2.3.0); the exact source is on the reason line.
-                set rows [list "Time" "${a}s  (target ${t}s)"]
-                if {[dict exists $rec dose]} {
-                    lappend rows "Dose" "[format %.1f [dict get $rec dose]]g"
-                }
+                set alerts {}
+                if {[dict get $P reach] ne ""}   { lappend alerts "$sign [dict get $P reach]" }
+                if {[dict get $P warning] ne ""} { lappend alerts "$sign [dict get $P warning]" }
+                set recipe {}
+                if {[dict exists $rec dose]} { lappend recipe "[_num1 [dict get $rec dose]] g in" }
                 if {[dict exists $rec set_yield]} {
-                    lappend rows "Yield" "[format %.1f [dict get $rec set_yield]]g"
+                    set out_g "[_num1 [dict get $rec set_yield]] g out"
+                    if {[dict exists $rec ratio]} { append out_g " (1:[dict get $rec ratio])" }
+                    lappend recipe $out_g
                 }
-                if {[dict exists $rec ratio]} {
-                    lappend rows "Ratio" "1:[dict get $rec ratio]"
-                }
-                if {[dict exists $rec bag_shot]} {
-                    lappend rows "Bag Shot" "#[dict get $rec bag_shot]"
-                } else {
-                    lappend rows "Bag Shot" "unknown"
-                }
-                set nrows [expr {[llength $rows] / 2}]
+                if {[dict exists $rec bag_shot]} { lappend recipe "shot [dict get $rec bag_shot] on this bag" }
+                set recipe [join $recipe $sep]
+                # Captions never below the 16 px floor (_pfonts allows 14).
+                set fnote [expr {max($fcap, 16)}]
 
-                set warn ""
-                if {[dict exists $rec channel_warning]} {
-                    set warn "\u26A0 [dict get $rec channel_warning]"
-                }
-
-                set reason ""
-                if {[dict exists $rec reason]} { set reason [dict get $rec reason] }
-                set rlines [_text_lines $reason $fbody $inner]
-                if {$rlines > 4} { set rlines 4 }
-
-                # Display-only calibration confidence (v2.1.0), one caption
-                # line under the Reason block.
-                set conf_line ""
-                if {[dict exists $rec confidence]} {
-                    set conf_line "Calibration: [dict get $rec confidence]% [format %c 0x2014] [dict get $rec confidence_band]"
-                }
+                # Real heights for the wrapped amber lines, measured on this
+                # canvas before the card is sized (an estimate from one
+                # font measure can be a line short).
+                set alert_h {}
+                foreach a $alerts { lappend alert_h [_measure_h $o $a $fbody $inner] }
 
                 # Content-driven card height.
                 set ch [expr {$pad + $fsec + $gap_lg + $fhero + $gap_sm + $fbody \
-                    + $gap_xl + $nrows * $row_pitch}]
-                if {$warn ne ""} { set ch [expr {$ch + $gap_sm + $fcap}] }
-                if {$reason ne ""} {
-                    set ch [expr {$ch + $gap_xl + $fcap + $gap_sm + $rlines * $reason_lineh}]
-                }
-                if {$conf_line ne ""} { set ch [expr {$ch + $gap_sm + $fcap}] }
+                    + $gap_xl + $fbody}]
+                foreach h $alert_h { set ch [expr {$ch + $gap_sm + $h}] }
+                if {$recipe ne ""} { set ch [expr {$ch + $gap_lg + $fnote}] }
                 set ch [expr {$ch + $gap_xl + $btnh + $pad}]
                 if {$ch > ($H - 40)} { set ch [expr {$H - 40}] }
 
@@ -3508,41 +4377,48 @@ namespace eval ::plugins::GrindAdvisor {
                     x0 y0 x1 y1 cx
 
                 set y [expr {$y0 + $pad}]
-                _otext $o $cx [expr {$y + $fsec / 2}] center "\u2713 Shot Saved" $fsec [dict get $col text] $inner center bold
+                _otext $o $cx [expr {$y + $fsec / 2}] center "Next grind" $fsec [dict get $col text] $inner center bold
                 incr y [expr {$fsec + $gap_lg}]
 
                 # Hero: the grind change is the one number the user came for.
-                _otext $o $cx [expr {$y + $fhero / 2}] center "$g \u2192 $n" $fhero [dict get $col accent] $inner center bold
+                _otext $o $cx [expr {$y + $fhero / 2}] center $hero $fhero [dict get $col text] $inner center bold
                 incr y [expr {$fhero + $gap_sm}]
-                _otext $o $cx [expr {$y + $fbody / 2}] center $dirline $fbody [dict get $col text] $inner
+
+                # "finer by 0.5  .  * medium confidence, 4 shots", centred as
+                # one line; the dot alone carries the status colour.
+                set ly [expr {$y + $fbody / 2}]
+                set parts [list $move [dict get $col text]]
+                if {$conf ne ""} {
+                    lappend parts $sep [dict get $col muted]
+                    if {[dict get $P band] ne ""} { lappend parts "$bullet " $dotcol }
+                    lappend parts $conf [dict get $col text]
+                }
+                # v3.19.1: a 3 px seam between the pieces. Tk pads every
+                # text bbox by 1 px a side, so pieces laid end to end had
+                # boxes overlapping by 2 px -- invisible, but verify.sh's
+                # overlay overlap rule (no tolerance) would fail them.
+                set f [_font $fbody]
+                set seam 3
+                set total [expr {-$seam}]
+                foreach {s c} $parts { incr total [expr {[font measure $f $s] + $seam}] }
+                set lx [expr {$cx - $total / 2}]
+                foreach {s c} $parts {
+                    _otext $o $lx $ly w $s $fbody $c $inner left
+                    incr lx [expr {[font measure $f $s] + $seam}]
+                }
                 incr y [expr {$fbody + $gap_xl}]
 
-                # Detail label/value grid.
-                set lab_x [expr {$x0 + $pad}]
-                set val_x [expr {$x0 + $pad + int($inner * 0.40)}]
-                set val_w [expr {$x1 - $pad - $val_x}]
-                foreach {lab val} $rows {
-                    set ly [expr {$y + $row_pitch / 2}]
-                    _otext $o $lab_x $ly w $lab $fbody [dict get $col muted] [expr {$val_x - $lab_x - 10}] left
-                    _otext $o $val_x $ly w [_fit_text $val $fbody $val_w] $fbody [dict get $col text] $val_w left
-                    incr y $row_pitch
-                }
-                if {$warn ne ""} {
-                    incr y $gap_sm
-                    _otext $o $lab_x [expr {$y + $fcap / 2}] w [_fit_text $warn $fcap $inner] $fcap [dict get $col accent] $inner left
-                    incr y $fcap
-                }
+                _otext $o $cx [expr {$y + $fbody / 2}] center [dict get $P time_line] $fbody [dict get $col body] $inner
+                incr y $fbody
 
-                if {$reason ne ""} {
-                    incr y $gap_xl
-                    _otext $o $lab_x [expr {$y + $fcap / 2}] w "Reason" $fcap [dict get $col muted] $inner left
-                    incr y [expr {$fcap + $gap_sm}]
-                    _otext $o $lab_x $y nw $reason $fbody [dict get $col text] $inner left
-                    incr y [expr {$rlines * $reason_lineh}]
-                }
-                if {$conf_line ne ""} {
+                foreach a $alerts h $alert_h {
                     incr y $gap_sm
-                    _otext $o $lab_x [expr {$y + $fcap / 2}] w [_fit_text $conf_line $fcap $inner] $fcap [dict get $col muted] $inner left
+                    _otext $o $cx $y n $a $fbody [dict get $col warn] $inner center
+                    incr y $h
+                }
+                if {$recipe ne ""} {
+                    incr y $gap_lg
+                    _otext $o $cx [expr {$y + $fnote / 2}] center [_fit_text $recipe $fnote $inner] $fnote [dict get $col muted] $inner
                 }
 
                 # Button row: OK / Why? / Curve / History, identical size,
@@ -3650,12 +4526,12 @@ namespace eval ::plugins::GrindAdvisor {
     # The plotted y series MUST be the series the model fitted, or the drawn
     # residuals and the reported R2 would describe different things:
     # _weighted_regression is always called with ynorm=1, so `regression`
-    # works in t_norm — and since v3.11.0 the ladder rungs work in t_norm
+    # works in t_norm -- and since v3.11.0 the ladder rungs work in t_norm
     # too. The choice is keyed on the REC's own `normalized` flag rather
     # than hardcoded per rung, because a recommendation saved by 3.10.x was
     # computed from raw time and carries normalized 0: plotting it in
     # t_norm would draw residuals that disagree with its own `next`. (When
-    # normalization was never active the two series are identical anyway —
+    # normalization was never active the two series are identical anyway --
     # _norm_time returns t_norm == t_raw without scale data.) For ladder
     # rungs there is no fitted line, so we draw the one the ladder implies:
     # through the latest shot with slope -s_per_step, because it solves
@@ -3761,21 +4637,24 @@ namespace eval ::plugins::GrindAdvisor {
     # Caption under the plot: the point of the whole view. R2 alone is not
     # accuracy, so bias and spread are shown beside it, and a fit that scores
     # well while missing badly is called out rather than left to look good.
+    # v3.23.0: superscript two, plus-minus and middle dot from code points
+    # (ASCII source); the drawn caption is unchanged.
     proc _curve_caption {rec cm} {
         set parts {}
         set r2 [_dget $rec r2]
+        set R2 "R[format %c 0xB2]"
         if {$r2 eq ""} {
-            lappend parts "R² n/a"
+            lappend parts "$R2 n/a"
         } else {
-            lappend parts "R² [format %.3f $r2]"
+            lappend parts "$R2 [format %.3f $r2]"
         }
         if {[dict get $cm bias] ne ""} {
             lappend parts "bias [format %+.2f [dict get $cm bias]]s"
-            lappend parts "spread ±[format %.2f [dict get $cm rmse]]s"
+            lappend parts "spread [format %c 0xB1][format %.2f [dict get $cm rmse]]s"
         }
         set n [_dget $rec n]
         if {$n ne ""} { lappend parts "n=$n" }
-        return [join $parts "   ·   "]
+        return [join $parts "   [format %c 0xB7]   "]
     }
 
     proc _curve_verdict {rec cm} {
@@ -3786,7 +4665,7 @@ namespace eval ::plugins::GrindAdvisor {
         set r2 [_dget $rec r2]
         set rmse [dict get $cm rmse]
         if {$r2 ne "" && $rmse ne "" && $r2 >= 0.97 && $rmse > 1.0} {
-            return "High R² but the residuals are large: the trend is right, the individual predictions are not. Treat the next number as a nudge, not a target."
+            return "High R[format %c 0xB2] but the residuals are large: the trend is right, the individual predictions are not. Treat the next number as a nudge, not a target."
         }
         if {$rmse ne "" && $rmse > 2.0} {
             return "Residuals are scattered widely, so shot time is being driven by something other than grind alone. Check dose and distribution before chasing the grind."
@@ -3845,7 +4724,8 @@ namespace eval ::plugins::GrindAdvisor {
             # draw-scoped override so _obutton and the plot agree (v3.14.5
             # rule). Any glass failure falls back to the opaque card.
             set glass [_glass_setup $W $H]
-            set _colors_override [expr {$glass ? [dict get $_glass_mat theme] : ""}]
+            set _colors_override ""
+            if {$glass} { set _colors_override [dict get $_glass_mat theme] }
             set col [_colors]
             set F [_pfonts $H]
             set fsec  [dict get $F section]
@@ -3918,7 +4798,7 @@ namespace eval ::plugins::GrindAdvisor {
                 x0 y0 x1 y1 cx
 
             set y [expr {$y0 + $pad}]
-            _otext $o $cx [expr {$y + $fsec / 2}] center "Calibration Curve" $fsec [dict get $col text] $inner center bold
+            _otext $o $cx [expr {$y + $fsec / 2}] center "Calibration curve" $fsec [dict get $col text] $inner center bold
             incr y [expr {$fsec + $gap_lg}]
 
             if {![dict get $cm ok]} {
@@ -3933,7 +4813,7 @@ namespace eval ::plugins::GrindAdvisor {
                     + $tickh + 2 + $fcap + $gap_sm + $fcap + $gap_lg}]
 
                 _otext $o $cx [expr {$y + $fcap / 2}] center [_curve_caption $rec $cm] \
-                    $fcap [dict get $col accent] $inner center bold
+                    $fcap [dict get $col info] $inner center bold
                 incr y [expr {$fcap + $gap_sm}]
                 _otext $o [expr {$x0 + $pad}] $y nw [_curve_verdict $rec $cm] \
                     $fcap [dict get $col muted] $inner left
@@ -4086,7 +4966,7 @@ namespace eval ::plugins::GrindAdvisor {
             $o create line \
                 [expr {$px0 + ($lx0 - $xmin) * $sx}] [expr {$py1 - ($ly0 - $ymin) * $sy}] \
                 [expr {$px0 + ($lx1 - $xmin) * $sx}] [expr {$py1 - ($ly1 - $ymin) * $sy}] \
-                -fill [dict get $col accent] -width 2 -tags gad
+                -fill [dict get $col info] -width 2 -tags gad
         }
 
         # The recommended grind, as a labelled vertical. On the regression rung
@@ -4096,15 +4976,15 @@ namespace eval ::plugins::GrindAdvisor {
         # rather than leaving the user to read it off the axis.
         if {$nextg ne ""} {
             set nx [expr {$px0 + ($nextg - $xmin) * $sx}]
-            $o create line $nx $py0 $nx $py1 -fill [dict get $col accent] \
+            $o create line $nx $py0 $nx $py1 -fill [dict get $col info] \
                 -width 1 -dash {2 5} -tags gad
             # Label inside the plot, flipped to the other side of the line when
             # the marker sits near the right edge so it cannot run off the card.
             set ntxt "grind [_fmt_num $nextg]"
             if {$nx > ($px0 + $px1) / 2} {
-                _otext $o [expr {$nx - 5}] [expr {$py0 + 2}] ne $ntxt $fcap [dict get $col accent] 0 right
+                _otext $o [expr {$nx - 5}] [expr {$py0 + 2}] ne $ntxt $fcap [dict get $col info] 0 right
             } else {
-                _otext $o [expr {$nx + 5}] [expr {$py0 + 2}] nw $ntxt $fcap [dict get $col accent] 0 left
+                _otext $o [expr {$nx + 5}] [expr {$py0 + 2}] nw $ntxt $fcap [dict get $col info] 0 left
             }
         }
 
@@ -4120,7 +5000,7 @@ namespace eval ::plugins::GrindAdvisor {
                 set rr [expr {$r + 2}]
                 $o create oval [expr {$cxp - $rr}] [expr {$cyp - $rr}] \
                     [expr {$cxp + $rr}] [expr {$cyp + $rr}] \
-                    -fill [dict get $col accent] -outline [dict get $col panel] \
+                    -fill [dict get $col info] -outline [dict get $col panel] \
                     -width 2 -tags gad
             } else {
                 $o create oval [expr {$cxp - $r}] [expr {$cyp - $r}] \
@@ -4134,7 +5014,8 @@ namespace eval ::plugins::GrindAdvisor {
         # fitted -- normalized time is not the same thing as shot time.
         _otext $o [expr {$px0 - 6}] $py0 ne [format %.0f $ymax] $fcap [dict get $col muted] 0 right
         _otext $o [expr {$px0 - 6}] $py1 se [format %.0f $ymin] $fcap [dict get $col muted] 0 right
-        set ylab [expr {[dict get $cm normalized] ? "time (normalized), s" : "shot time, s"}]
+        set ylab "shot time, s"
+        if {[dict get $cm normalized]} { set ylab "time (normalized), s" }
         _otext $o $px0 [expr {$py1 + $gap}] nw $ylab $fcap [dict get $col muted] 0 left
 
         # ---- residual strip data, same x scale (axes and grid already drawn) ----
@@ -4153,7 +5034,8 @@ namespace eval ::plugins::GrindAdvisor {
                 # Stem to zero: makes a one-sided (biased) pattern obvious.
                 $o create line $cxp $rmid $cxp $cyp -fill [dict get $col muted] \
                     -width 1 -tags gad
-                set fillc [expr {$i == 0 ? [dict get $col accent] : [dict get $col text]}]
+                set fillc [dict get $col text]
+                if {$i == 0} { set fillc [dict get $col info] }
                 $o create oval [expr {$cxp - $r}] [expr {$cyp - $r}] \
                     [expr {$cxp + $r}] [expr {$cyp + $r}] \
                     -fill $fillc -outline "" -tags gad
@@ -4165,7 +5047,7 @@ namespace eval ::plugins::GrindAdvisor {
         _otext $o $px0 [expr {$ry1 + $tickh + 2 + $fcap + $gap}] nw \
             "residuals, s" $fcap [dict get $col muted] 0 left
         _otext $o $px1 [expr {$ry1 + $tickh + 2 + $fcap + $gap}] ne \
-            "grind setting →" $fcap [dict get $col muted] 0 right
+            "grind setting [format %c 0x2192]" $fcap [dict get $col muted] 0 right
     }
 
     proc _show_why_dialog {rec} {
@@ -4179,7 +5061,8 @@ namespace eval ::plugins::GrindAdvisor {
             # the draw-scoped override, the shared _present_card call
             # site, the opaque v3.13.x card on any glass failure.
             set glass [_glass_setup $W $H]
-            set _colors_override [expr {$glass ? [dict get $_glass_mat theme] : ""}]
+            set _colors_override ""
+            if {$glass} { set _colors_override [dict get $_glass_mat theme] }
             set col [_colors]
             set F [_pfonts $H]
             set fsec  [dict get $F section]
@@ -4212,10 +5095,25 @@ namespace eval ::plugins::GrindAdvisor {
                 "Method" [_forecast_method_label [_dget $rec method]] \
                 "Bag shots (n)" "[_dget $rec n] eligible[_forecast_excluded_txt $rec]" \
                 "Shot time" "[_fmt_num [dict get $rec actual]]s  (target [_fmt_num [dict get $rec target]]s)"]
+            # v3.19.0: the score left the popup (it shows plain words now).
+            if {[dict exists $rec confidence]} {
+                # v3.19.1: the popup's word for the band, not GA's internal
+                # Poor/Fair/Good/Excellent (confidence_band stays raw for Lumen).
+                # v3.24.0 (F23): word first, the score after: "Medium (40%)".
+                lappend rows "Confidence" [_conf_words [dict get $rec confidence] [_dget $rec confidence_band]]
+            }
             if {[dict get $rec method] eq "regression"} {
                 lappend rows "Learned slope" "[_fmt_num [dict get $rec m]] s/grind" \
                     "Model fit R\u00B2" [_forecast_r2_txt $rec] \
                     "Predicted time" "[_fmt_num [dict get $rec predicted_time]]s at [_fmt_num [dict get $rec next]]"
+                # v3.18.0: one row, only when the target is out of reach.
+                # v3.18.1: advice first, number last -- _fit_text clips the
+                # END of a value, and at popup_font_scale 1.25+ it clipped
+                # "change dose or yield" itself.
+                if {[_reach_out $rec]} {
+                    lappend rows "Grind reach" \
+                        "change dose or yield (ideal [format %.1f [dict get $rec reach g_target]])"
+                }
             } else {
                 # v3.11.0: the ladder works in normalized time now. When that
                 # differs from the clock, show the number the rung actually
@@ -4239,11 +5137,22 @@ namespace eval ::plugins::GrindAdvisor {
             set rlines [_text_lines $reason $fbody $inner]
             if {$rlines > 3} { set rlines 3 }
 
-            set ch [expr {$pad + $fsec + $gap_lg + $nrows * $row_pitch}]
+            set reason_h 0
             if {$reason ne ""} {
-                set ch [expr {$ch + $gap_xl + $fcap + $gap_sm + $rlines * $reason_lineh}]
+                set reason_h [expr {$gap_xl + $fcap + $gap_sm + $rlines * $reason_lineh}]
             }
-            set ch [expr {$ch + $gap_xl + $btnh + $pad}]
+            set fixed_h [expr {$pad + $fsec + $gap_lg + $reason_h + $gap_xl + $btnh + $pad}]
+            # v3.18.1: the card is capped at H-40 and the buttons hang from
+            # its bottom, so anything over the cap used to come out of the
+            # gap above them -- at popup_font_scale 1.4+ the reason's last
+            # line ran into Back / OK once the Grind reach row was added.
+            # Take the overflow from the row pitch instead, never below one
+            # reason line.
+            set over [expr {$fixed_h + $nrows * $row_pitch - ($H - 40)}]
+            if {$over > 0 && $nrows > 0} {
+                set row_pitch [expr {max($reason_lineh, $row_pitch - int(ceil(double($over) / $nrows)))}]
+            }
+            set ch [expr {$fixed_h + $nrows * $row_pitch}]
             if {$ch > ($H - 40)} { set ch [expr {$H - 40}] }
 
             set x0 [expr {int(($W - $cw) / 2)}]
@@ -4324,27 +5233,78 @@ namespace eval ::plugins::GrindAdvisor {
         }
     }
 
-    proc _obutton {o x0 y0 x1 y1 label size cmd} {
+    # v3.16.6: enabled 0 draws the palette's disabled look (btnoff fill,
+    # btnofftext label) and binds no tap -- the pager's unavailable end,
+    # the same "disabled, never hidden" rule the dui pages follow.
+    proc _obutton {o x0 y0 x1 y1 label size cmd {enabled 1}} {
         variable _btnseq
         set col [_colors]
         set tag "gad_btn_[incr _btnseq]"
         set r [_clamp [expr {int(($y1 - $y0) * 0.22)}] 8 18]
+        if {$enabled} {
+            set fill [dict get $col btn]
+            set edge [dict get $col btnborder]
+            set ink  [dict get $col btntext]
+        } else {
+            set fill [dict get $col btnoff]
+            set edge $fill
+            set ink  [dict get $col btnofftext]
+        }
+        # v3.22.0 (F9): the shape alone carries ${tag}_face (the label shares
+        # $tag), so a press tints the face and never the text.
         if {[catch {
-            _opoly $o $x0 $y0 $x1 $y1 $r [dict get $col btn] [dict get $col btnborder] [list gad $tag]
+            _opoly $o $x0 $y0 $x1 $y1 $r $fill $edge [list gad $tag ${tag}_face]
         }]} {
-            $o create rectangle $x0 $y0 $x1 $y1 -fill [dict get $col btn] \
-                -outline [dict get $col btnborder] -width 1 -tags [list gad $tag]
+            $o create rectangle $x0 $y0 $x1 $y1 -fill $fill \
+                -outline $edge -width 1 -tags [list gad $tag ${tag}_face]
         }
         if {[catch {
             $o create text [expr {($x0 + $x1) / 2}] [expr {($y0 + $y1) / 2}] \
-                -text $label -anchor center -fill [dict get $col btntext] \
+                -text $label -anchor center -fill $ink \
                 -font [_font $size bold] -tags [list gad $tag]
         }]} {
             $o create text [expr {($x0 + $x1) / 2}] [expr {($y0 + $y1) / 2}] \
-                -text $label -anchor center -fill [dict get $col btntext] \
+                -text $label -anchor center -fill $ink \
                 -tags [list gad $tag]
         }
-        $o bind $tag <ButtonRelease-1> $cmd
+        # v3.22.0 (F9): tint on touch-down (painted at once), act on release
+        # as before. The tones are captured here: the glass/opaque choice is
+        # draw-scoped (_colors_override is cleared after each draw).
+        if {$enabled} {
+            $o bind $tag <ButtonPress-1> [list ::plugins::GrindAdvisor::_obutton_press $o ${tag}_face \
+                [dict get $col btnpress] $fill $edge]
+            $o bind $tag <ButtonRelease-1> [list ::plugins::GrindAdvisor::_obutton_release $o ${tag}_face \
+                $fill $edge $cmd]
+        }
+    }
+
+    # The outline takes the tone too where it normally matches the fill (the
+    # opaque families: one solid shape, like a pressed page button); the
+    # glass families keep their deliberate border (review). A safety
+    # restore after 2 s covers a touch Android cancels without a release
+    # (the face would otherwise stay tinted until the next redraw).
+    proc _obutton_press {o face tone fill edge} {
+        if {$edge eq $fill} {
+            $o itemconfigure $face -fill $tone -outline $tone
+        } else {
+            $o itemconfigure $face -fill $tone
+        }
+        update idletasks
+        after 2000 [list ::plugins::GrindAdvisor::_obutton_unpress $o $face $fill $edge]
+    }
+
+    proc _obutton_unpress {o face fill edge} {
+        if {[winfo exists $o] && [llength [$o find withtag $face]] > 0} {
+            $o itemconfigure $face -fill $fill -outline $edge
+        }
+    }
+
+    # The face goes back to its resting fill, then the action runs. Most
+    # actions destroy or redraw the overlay, so the restore comes first and
+    # only touches the face if the canvas still exists.
+    proc _obutton_release {o face fill edge cmd} {
+        _obutton_unpress $o $face $fill $edge
+        uplevel #0 $cmd
     }
 
     # Color scheme for the popup. Dark by default to match dark skins; set
@@ -4366,23 +5326,68 @@ namespace eval ::plugins::GrindAdvisor {
     # in that draw agrees on the material's palette. The popup, Curve
     # and Why? glass this way; History and every opaque fallback keep
     # following popup_theme (v3.16.2).
+    #
+    # v3.16.6: two palette families. GLASS draws (override = the
+    # material's theme) keep the v3.14 material palettes byte for byte.
+    # OPAQUE draws (no override: History, Bag Stats, the opaque popup,
+    # Curve/Why without glass) follow popup_theme with the SHARED PLUGIN
+    # PAGE palette -- _apply_palette's values, the ones ShotHistoryEditor,
+    # MaintenanceTracker and BeanScanner paint -- instead of the old black
+    # #000000 scrim and iOS greys (owner 2026-09-30: "should be the same
+    # dark as all the plugins"). New keys: body (secondary card line,
+    # text_body) and btnoff/btnofftext (a disabled pager button).
+    #
+    # v3.16.7 contrast pass: the OPAQUE palettes follow _apply_palette's
+    # new values -- light btntext #2b2b2b (white on the periwinkle was
+    # 1.7:1) and muted #595959, dark muted #9aa0ad. The GLASS palettes
+    # are untouched.
+    # v3.22.0 (F9): btnpress, an enabled button's face while a finger is
+    # on it (opaque = the pages' btn_press_fill; glass light #D1D1D6 keeps
+    # #222222 at 10.5:1, glass dark #48484A keeps #ECECEC at 7.7:1).
     variable _colors_override ""
 
     proc _colors {{override ""}} {
         variable _colors_override
         if {$override eq ""} { set override $_colors_override }
-        set t [_setting popup_theme dark]
-        if {$override in {light dark}} { set t $override }
-        if {$t eq "light"} {
-            return [dict create \
+        # v3.19.0 (F15): status colours only on warnings and the confidence
+        # dot, never the hero. v3.23.0 (F21): every family takes the shared
+        # roles from _status_roles -- ok (was `good`: #0B6E4F / #34C759),
+        # warn (dark #E8B34C everywhere; opaque dark was #e0a860), danger,
+        # and info (was `accent`, the Curve's green: a neutral plot no
+        # longer reads as "OK"). Text >= 4.5:1 on the panel, the scrim and
+        # Lumen's baked glass (worst: light ok 4.75 on the #d5d6e3 scrim,
+        # light ok 4.94 on the #D8DBE1 glass); glass art is baked, so
+        # check its screenshot.
+        if {$override eq "light"} {
+            return [dict merge [dict create \
                 scrim "#F2F3F5" panel "#FFFFFF" border "#CCCCCC" \
-                text "#222222" muted "#6a6a6a" accent "#0B6E4F" \
-                btn "#EFEFEF" btnborder "#999999" btntext "#222222"]
+                text "#222222" body "#222222" muted "#6a6a6a" \
+                btn "#EFEFEF" btnborder "#999999" btntext "#222222" \
+                btnoff "#EFEFEF" btnofftext "#999999" btnpress "#D1D1D6"] \
+                [_status_roles 0]]
         }
-        return [dict create \
-            scrim "#000000" panel "#1C1C1E" border "#3A3A3C" \
-            text "#ECECEC" muted "#A0A0A6" accent "#34C759" \
-            btn "#2C2C2E" btnborder "#48484A" btntext "#ECECEC"]
+        if {$override eq "dark"} {
+            return [dict merge [dict create \
+                scrim "#000000" panel "#1C1C1E" border "#3A3A3C" \
+                text "#ECECEC" body "#ECECEC" muted "#A0A0A6" \
+                btn "#2C2C2E" btnborder "#48484A" btntext "#ECECEC" \
+                btnoff "#2C2C2E" btnofftext "#6A6A6E" btnpress "#48484A"] \
+                [_status_roles 1]]
+        }
+        if {[_setting popup_theme dark] eq "light"} {
+            return [dict merge [dict create \
+                scrim "#d5d6e3" panel "#FFFFFF" border "#dcdcdc" \
+                text "#2b2b2b" body "#444444" muted "#595959" \
+                btn "#c0c5e3" btnborder "#c0c5e3" btntext "#2b2b2b" \
+                btnoff "#dddddd" btnofftext "#999999" btnpress "#a6acd1"] \
+                [_status_roles 0]]
+        }
+        return [dict merge [dict create \
+            scrim "#23252e" panel "#32353f" border "#464b58" \
+            text "#e8e9ee" body "#c2c5cf" muted "#9aa0ad" \
+            btn "#4a5473" btnborder "#4a5473" btntext "#ffffff" \
+            btnoff "#3a3e4a" btnofftext "#999999" btnpress "#5f6a8c"] \
+            [_status_roles 1]]
     }
 
     proc _close_dialog {} {
@@ -4416,15 +5421,94 @@ namespace eval ::plugins::GrindAdvisor {
         _show_history_dialog
     }
 
-    proc _format_clock {raw} {
-        set raw [string trim $raw]
-        if {$raw eq ""} { return "" }
-        if {[string is integer -strict $raw]} {
-            if {![catch { clock format $raw -format "%Y-%m-%d %H:%M" } out]} {
-                return $out
-            }
+    # ------------------------------------------------------------------
+    #  v3.23.0 (design review F21): one date and one count language across
+    #  the owner's plugins and Lumen. Copied verbatim from the shared spec;
+    #  they replace _format_clock ("2026-09-29 21:29", always 24 h) and
+    #  _bag_date_short ("29 Sep"), and the "Shots 1-5 of 25" / "Page 1 / 3"
+    #  strings. SDB's shot clock is an INTEGER epoch; anything else reads as
+    #  no date.
+    # ------------------------------------------------------------------
+    # F21 (shared): dates follow Lumen's clock settings when Lumen is the skin, else the
+    # core's enable_ampm; day first unless Lumen says mdy. Text is picked with if, never expr ?:.
+    proc _clock_24h {} {
+        if {[llength [info commands ::lumen::time_format]]} {
+            if {[::lumen::time_format] == 12} { return 0 }
+            return 1
         }
-        return $raw
+        if {[info exists ::settings(enable_ampm)] && $::settings(enable_ampm) == 1} { return 0 }
+        return 1
+    }
+    proc _clock_mdy {} {
+        if {[llength [info commands ::lumen::date_format]] && [::lumen::date_format] eq "mdy"} { return 1 }
+        return 0
+    }
+    # Same day/time strings as Lumen's own taskbar (zero-padded day and 12 h hour), so a
+    # plugin date and Lumen read identically: "Fri 02 Oct 21:29", "Fri Oct 02 09:29 PM".
+    # " 2025" is added when the date is not in the current year.
+    proc _fmt_when {ts} {
+        if {![string is wide -strict $ts] || $ts <= 0} { return {} }
+        if {[_clock_mdy]} { set f {%a %b %d} } else { set f {%a %d %b} }
+        if {[clock format $ts -format %Y] ne [clock format [clock seconds] -format %Y]} { append f { %Y} }
+        if {[_clock_24h]} { append f { %H:%M} } else { append f { %I:%M %p} }
+        return [clock format $ts -format $f]
+    }
+    # Date only, for ranges and tight columns: "29 Sep" / "Sep 29" (+ " 2025" if not this year).
+    proc _fmt_day {ts} {
+        if {![string is wide -strict $ts] || $ts <= 0} { return {} }
+        if {[_clock_mdy]} { set f {%b %d} } else { set f {%d %b} }
+        if {[clock format $ts -format %Y] ne [clock format [clock seconds] -format %Y]} { append f { %Y} }
+        return [clock format $ts -format $f]
+    }
+    # Time only (e.g. "comes back at 21:39" / "09:39 PM"): same 12/24 h rule.
+    proc _fmt_time {ts} {
+        if {![string is wide -strict $ts] || $ts <= 0} { return {} }
+        if {[_clock_24h]} { return [clock format $ts -format %H:%M] }
+        return [clock format $ts -format {%I:%M %p}]
+    }
+
+    # MaintenanceTracker's _fmt_ago, verbatim (the shared relative caption).
+    # v0.20.0: human relative time -- minutes up to 59, hours up to 23,
+    # then days (owner request; "0 days ago" told you nothing on the day
+    # you actually did the task). Singular/plural spelled out; a clock
+    # skew into the future reads as "just now".
+    proc _fmt_ago {ts} {
+        if {![string is wide -strict $ts] || $ts <= 0} { return "" }
+        set secs [expr {[clock seconds] - $ts}]
+        if {$secs < 60} { return [translate "just now"] }
+        set mins [expr {$secs / 60}]
+        if {$mins < 60} {
+            if {$mins == 1} { return "1 [translate {minute ago}]" }
+            return "$mins [translate {minutes ago}]"
+        }
+        set hours [expr {$secs / 3600}]
+        if {$hours < 24} {
+            if {$hours == 1} { return "1 [translate {hour ago}]" }
+            return "$hours [translate {hours ago}]"
+        }
+        set days [expr {$secs / 86400}]
+        if {$days == 1} { return "1 [translate {day ago}]" }
+        return "$days [translate {days ago}]"
+    }
+
+    # F21 counts: one pattern per list type (shared spec, verbatim).
+    proc _plural {n one {many ""}} {
+        if {$many eq ""} { set many "${one}s" }
+        if {$n == 1} { return "$n $one" }
+        return "$n $many"
+    }
+    # Card lists: "1-5 of 188 shots" (en dash); "No shots" when empty.
+    proc _range_count {first last total one {many ""}} {
+        if {$many eq ""} { set many "${one}s" }
+        if {$total <= 0} { return "No $many" }
+        set word $many
+        if {$total == 1} { set word $one }
+        return "$first[format %c 0x2013]$last of $total $word"
+    }
+    # Paged text, grids, menus: "Page 1 of 4" ("" for one page).
+    proc _page_count {idx total} {
+        if {$total <= 1} { return "" }
+        return "Page [expr {$idx + 1}] of $total"
     }
 
     proc _fmt1 {value suffix} {
@@ -4443,17 +5527,21 @@ namespace eval ::plugins::GrindAdvisor {
 
     # ------------------------------------------------------------------
     #  v2.0.0 history card list. Same data pipeline as before (read-only
-    #  SDB fetch -> valid-espresso filter -> per-shot recommendation), now
-    #  producing three text baselines per shot for the standard card list:
-    #    line1 (primary): date/time + grind -> recommended
-    #    line2 (secondary): dose, ratio, yields, shot time
-    #    line3 (caption): reason, bag shot, channel warning
+    #  SDB fetch -> valid-espresso filter -> per-shot recommendation).
+    #  v3.20.0 (F16): one card dict per shot for _draw_card:
+    #    big / cap: the recommended grind, large on the right, the move
+    #    l1 (primary): the grind used + the time against the target
+    #    l2 (body): date/time, dose, ratio, yields
+    #    l3 (caption): bag name, "shot N on this bag", the confidence word
+    #       (or "first shot on this bag") -- never the shot time
+    #    warn (amber): out of reach, then channeling; warn_short when both
     #  honoring the user's history_show_* display options.
     # ------------------------------------------------------------------
     variable _hist_offset 0
     variable _hist_cards {}
 
     proc _history_cards {{max_shots 25}} {
+        variable GA_ON_TARGET_TOL
         lassign [locate_shot_source] db table fields
         if {$db eq "" || $table eq ""} { return [list] }
         set rows [_fetch_recent $db $table $fields [expr {$max_shots + 35}]]
@@ -4475,53 +5563,343 @@ namespace eval ::plugins::GrindAdvisor {
             if {$bag_shot ne ""} { dict set rec bag_shot $bag_shot }
             set warning [_channel_warning $current $rows [expr {$pos + 1}]]
             if {$warning ne ""} { dict set rec channel_warning $warning }
+            # The confidence that shot's popup showed (as _decorate_rec,
+            # display only): the plain reason in l3, read only when shown.
+            if {[_setting history_show_reason 1]} {
+                set conf [_calibration_confidence [lrange $rows $pos end]]
+                if {[dict get $conf ok]} { dict set rec confidence_band [dict get $conf band] }
+            }
+
+            # v3.20.0 (design review F16, plain words): the recommended grind
+            # LARGE on the right with the move under it; the left column
+            # leads with what happened -- the grind and the time against the
+            # target -- then the recipe, then the bag. Each part still obeys
+            # its history_show_* option (History Display Options).
+            set P [_plain_words $rec]
+            set sep "  [format %c 0xB7]  "
+            set card [dict create]
+            # Every valid row forecasts (first_shot at least); a rec without
+            # `next` only loses its big number, never the whole list.
+            if {[_setting history_show_recommended_grind 1] && [_dget $rec next] ne ""} {
+                dict set card big [_grind_fmt [dict get $rec next]]
+                dict set card cap [dict get $P move]
+            }
 
             set l1 {}
-            if {[_setting history_show_datetime 1]} {
-                set dt [_format_clock [_dget $r timestamp]]
-                if {$dt ne ""} { lappend l1 $dt }
+            if {[_setting history_show_set_grind 1]} { lappend l1 "Grind [_grind_fmt $g]" }
+            if {[_setting history_show_shot_time 1]} {
+                # The time the engine judged (review): the yield-adjusted one
+                # when normalization moved it 0.5 s+, labelled as the popup
+                # labels it, so "fast" never sits next to "coarser by".
+                set tu $t
+                set adj 0
+                if {[dict get $P used] ne ""} {
+                    set tu [dict get $P used]
+                    set adj [dict get $P adj]
+                }
+                set tgt [_dget $rec target]
+                if {$tgt eq ""} { set tgt [_setting target_time 28.0] }
+                # Judged at the 0.1 s it is printed at, so "30 s ... (2 s
+                # slow)" never sits beside a "30 s (on target)".
+                set err [expr {round(($tgt - $tu) * 10) / 10.0}]
+                if {abs($err) <= $GA_ON_TARGET_TOL} {
+                    set how "on target"
+                } elseif {$err > 0} {
+                    set how "[_num1 $err] s fast"
+                } else {
+                    set how "[_num1 [expr {-$err}]] s slow"
+                }
+                if {$adj} {
+                    lappend l1 "[_num1 $tu] s yield-adjusted ($how)"
+                } else {
+                    lappend l1 "[_num1 $tu] s ($how)"
+                }
             }
-            set show_g [_setting history_show_set_grind 1]
-            set show_n [_setting history_show_recommended_grind 1]
-            if {$show_g && $show_n} {
-                lappend l1 [format "Grind %.1f \u2192 %.1f" $g [dict get $rec next]]
-            } elseif {$show_g} {
-                lappend l1 [format "Grind %.1f" $g]
-            } elseif {$show_n} {
-                lappend l1 [format "Recommended %.1f" [dict get $rec next]]
-            }
+            dict set card l1 [join $l1 $sep]
 
             set l2 {}
-            if {[_setting history_show_set_dose 1] && $d ne ""} {
-                lappend l2 "Dose [_fmt1 $d g]"
+            if {[_setting history_show_datetime 1]} {
+                # v3.23.0 (F21): "Mon 29 Sep 21:29" / "Mon Sep 29 09:29 PM"
+                # (Lumen's clock settings) leads l2; "4 days ago" is the
+                # caption in the l1 row's date column, which ends on one
+                # column for the page (datebw, as Bag Stats).
+                set ts [string trim [_dget $r timestamp]]
+                set dt [_fmt_when $ts]
+                if {$dt ne ""} {
+                    lappend l2 $dt
+                    dict set card date [_fmt_ago $ts]
+                }
             }
+            if {[_setting history_show_set_dose 1] && $d ne ""} { lappend l2 "[_num1 $d] g in" }
             if {[_setting history_show_set_ratio 1] && $d ne "" && $set_y ne "" && $d > 0} {
-                lappend l2 [format "Ratio 1:%.1f" [expr {$set_y / double($d)}]]
+                lappend l2 [format "1:%.1f" [expr {$set_y / double($d)}]]
             }
-            if {[_setting history_show_set_yield 1] && $set_y ne ""} {
-                lappend l2 "Set Yield [_fmt1 $set_y g]"
-            }
-            if {[_setting history_show_actual_yield 0] && $actual_y ne ""} {
-                lappend l2 "Actual Yield [_fmt1 $actual_y g]"
-            }
-            if {[_setting history_show_shot_time 1]} {
-                lappend l2 [format "Time %.1fs" $t]
-            }
+            if {[_setting history_show_set_yield 1] && $set_y ne ""} { lappend l2 "[_num1 $set_y] g target" }
+            if {[_setting history_show_actual_yield 0] && $actual_y ne ""} { lappend l2 "[_num1 $actual_y] g out" }
+            dict set card l2 [join $l2 $sep]
 
+            # F16: "the bean on line 3" -- shots of two bags must not run
+            # together -- so the bag leads, then its shot number, then the
+            # reason in plain words: how sure the recommendation was (the
+            # time is l1's, under its own Shot Time option; the move is
+            # under the big number; the technical reason lives under Why?).
             set l3 {}
-            if {[_setting history_show_reason 1] && [dict exists $rec reason]} {
-                lappend l3 [dict get $rec reason]
+            if {[_setting history_show_bag_name 1]} {
+                set bl [_bag_label $r]
+                if {$bl ne ""} { lappend l3 $bl }
             }
+            set bs_shown 0
             if {[_setting history_show_bag_shot 1] && [dict exists $rec bag_shot]} {
-                lappend l3 "Bag Shot #[dict get $rec bag_shot]"
+                lappend l3 "shot [dict get $rec bag_shot] on this bag"
+                set bs_shown 1
             }
-            if {[dict exists $rec channel_warning]} {
-                lappend l3 [dict get $rec channel_warning]
+            if {[_setting history_show_reason 1]} {
+                set bw [_band_plain [dict get $P band]]
+                if {$bw ne ""} {
+                    lappend l3 "$bw confidence"
+                } elseif {[_dget $rec n] eq "1" && !$bs_shown} {
+                    # "shot 1 on this bag" already says it when shown.
+                    lappend l3 "first shot on this bag"
+                }
             }
-
-            lappend cards [list [join $l1 "   "] [join $l2 "  |  "] [join $l3 "  \u00b7  "]]
+            dict set card l3 [join $l3 $sep]
+            # Warnings in amber, as the popup shows them: the bag's dead end
+            # (out of reach, the actionable one) first, then the shot's own
+            # (channeling). Both together outgrow a shared row, so the card
+            # also carries a short form _draw_card uses when it must.
+            set sign [format %c 0x26A0]
+            set reach ""
+            if {[_reach_out $rec]} {
+                set reach "[_num1 [dict get $rec target]] s is out of reach by grind: change dose or yield"
+            }
+            set chan [dict get $P warning]
+            set warns {}
+            foreach w [list $reach $chan] { if {$w ne ""} { lappend warns $w } }
+            if {[llength $warns] > 0} {
+                dict set card warn "$sign [join $warns $sep]"
+            }
+            if {$reach ne "" && $chan ne ""} {
+                dict set card warn_short "$sign $reach${sep}check puck prep"
+            }
+            lappend cards $card
         }
         return $cards
+    }
+
+    # v3.20.0 (design review F16): one card of the History / Bag Stats
+    # lists, drawn the same way for both. The number you came for is LARGE
+    # and right-aligned (`big`, title size -- or primary size for a word,
+    # `bigsize word` -- in `bigrole`'s colour, `cap` under it); the left
+    # column keeps the three baselines (l1 bold, l2 body, l3 caption with
+    # `warn` appended in amber; stacked, so an empty line leaves no hole),
+    # clipped an xl gap short of that block;
+    # `date` sits right-aligned in the l1 row, left of the block. Card keys
+    # are all optional. Physical px, like every overlay.
+    proc _draw_card {o lx rx top pf F col card} {
+        set fprim [dict get $F primary]
+        set fbody [dict get $F body]
+        set fcap  [dict get $F caption]
+        set card_h [expr {int(96 * $pf)}]
+        set pad_x  [expr {int(18 * $pf)}]
+        set xl     [expr {int(32 * $pf)}]
+        set lg     [expr {int(24 * $pf)}]
+        set seam   3
+        _opoly $o $lx $top $rx [expr {$top + $card_h}] [expr {int(12 * $pf)}] \
+            [dict get $col panel] [dict get $col border] gad
+        set left  [expr {$lx + $pad_x}]
+        set right [expr {$rx - $pad_x}]
+
+        lassign [_card_block $card $F [_card_maxbw $lx $rx $pf]] bw big cap bsize
+        set role [_dget $card bigrole]
+        if {$role eq ""} { set role text }
+        if {$big ne ""} {
+            _otext $o $right [expr {$top + int(40 * $pf)}] e $big $bsize [dict get $col $role] [expr {$bw + 4}] right bold
+        }
+        if {$cap ne ""} {
+            _otext $o $right [expr {$top + int(80 * $pf)}] e $cap $fcap [dict get $col muted] [expr {$bw + 4}] right
+        }
+        set text_r [expr {$bw > 0 ? $right - $bw - $xl : $right}]
+        set text_w [expr {$text_r - $left}]
+
+        # The left lines stack on the three baselines with no hole: a line
+        # whose options are all off (the owner's History has date, dose,
+        # ratio and yield off, so l2 is empty) lets the next one move up.
+        # Text is picked with if, never `expr ?:` (it rewrites "0715").
+        set ys [list [expr {$top + int(30 * $pf)}] [expr {$top + int(56 * $pf)}] [expr {$top + int(80 * $pf)}]]
+        set k 0
+        set l1 [_dget $card l1]
+        set date [_dget $card date]
+        if {$l1 ne "" || $date ne ""} {
+            set y [lindex $ys $k]
+            set l1w $text_w
+            if {$date ne ""} {
+                # v3.21.0: `datebw` (Bag Stats) is the widest right block
+                # on the page, so every date ends on one column (they moved
+                # ~70 px between "Out of reach" and number cards).
+                set date_r $text_r
+                set dbw [_dget $card datebw]
+                if {[string is double -strict $dbw] && $dbw > $bw} {
+                    set date_r [expr {$right - $dbw - $xl}]
+                }
+                set dw [font measure [_font $fcap] $date]
+                _otext $o $date_r $y e $date $fcap [dict get $col muted] [expr {$dw + 4}] right
+                set l1w [expr {$date_r - $dw - $lg - $left}]
+            }
+            if {$l1 ne ""} {
+                _otext $o $left $y w [_fit_text $l1 $fprim $l1w bold] $fprim [dict get $col text] $l1w left bold
+            }
+            incr k
+        }
+        set l2 [_dget $card l2]
+        if {$l2 ne ""} {
+            _otext $o $left [lindex $ys $k] w [_fit_text $l2 $fbody $text_w] $fbody [dict get $col body] $text_w left
+            incr k
+        }
+        # The caption (l3, muted) and the warning (amber). A warning takes
+        # its own full-width row when one is free below the caption (the
+        # owner's History: l2 off), or the caption's row when there is no
+        # caption. Otherwise they share the last row: the warning is
+        # budgeted FIRST (up to 60%) and l3 gets what is left, so a long
+        # caption never pushes a warning off; it follows l3 an lg gap (+ the
+        # bbox seam) on. `warn_short` stands in when `warn` would be cut.
+        set fc [_font $fcap]
+        set l3 [_dget $card l3]
+        set warn [_dget $card warn]
+        set wshort [_dget $card warn_short]
+        if {$warn eq ""} {
+            if {$l3 ne ""} {
+                _otext $o $left [lindex $ys $k] w [_fit_text $l3 $fcap $text_w] $fcap [dict get $col muted] $text_w left
+            }
+            return
+        }
+        if {$l3 eq "" || $k < 2} {
+            if {$l3 ne ""} {
+                _otext $o $left [lindex $ys $k] w [_fit_text $l3 $fcap $text_w] $fcap [dict get $col muted] $text_w left
+                incr k
+            }
+            if {$wshort ne "" && [font measure $fc $warn] > $text_w} { set warn $wshort }
+            _otext $o $left [lindex $ys $k] w [_fit_text $warn $fcap $text_w] $fcap [dict get $col warn] $text_w left
+            return
+        }
+        set y [lindex $ys $k]
+        set wmax [expr {int($text_w * 0.60)}]
+        if {$wshort ne "" && [font measure $fc $warn] > $wmax} { set warn $wshort }
+        set warn [_fit_text $warn $fcap $wmax]
+        set l3w [expr {$text_w - [font measure $fc $warn] - $lg - $seam}]
+        set l3t ""
+        if {$l3w > 40} { set l3t [_fit_text $l3 $fcap $l3w] }
+        set used 0
+        if {$l3t ne ""} {
+            _otext $o $left $y w $l3t $fcap [dict get $col muted] $l3w left
+            set used [expr {[font measure $fc $l3t] + $lg + $seam}]
+        }
+        _otext $o [expr {$left + $used}] $y w $warn $fcap [dict get $col warn] [expr {$text_w - $used}] left
+    }
+
+    # The right block's widest line and its fitted texts: {bw big cap bsize}.
+    # One measure for _draw_card and for Bag Stats' date column (datebw).
+    proc _card_block {card F maxbw} {
+        set fcap [dict get $F caption]
+        set bsize [dict get $F title]
+        if {[_dget $card bigsize] eq "word"} { set bsize [dict get $F primary] }
+        set big [_dget $card big]
+        set cap [_dget $card cap]
+        set bw 0
+        if {$big ne ""} {
+            set big [_fit_text $big $bsize $maxbw bold]
+            set bw [font measure [_font $bsize bold] $big]
+        }
+        if {$cap ne ""} {
+            set cap [_fit_text $cap $fcap $maxbw]
+            set bw [expr {max($bw, [font measure [_font $fcap] $cap])}]
+        }
+        return [list $bw $big $cap $bsize]
+    }
+
+    # The right block's cap: 40% of the card's inner width.
+    proc _card_maxbw {lx rx pf} {
+        set pad_x [expr {int(18 * $pf)}]
+        return [expr {int((($rx - $pad_x) - ($lx + $pad_x)) * 0.40)}]
+    }
+
+    # One page of a card list (History, Bag Stats): up to five cards from
+    # the list top. v3.21.0: the date column ends on one column, left of the
+    # page's widest right block (datebw), not each card's own; v3.23.0 (F21)
+    # moved it here so History's "4 days ago" lines up the same way.
+    proc _draw_card_page {o lx rx pf F col cards} {
+        set list_top [expr {int(168 * $pf)}]
+        set card_h [expr {int(96 * $pf)}]
+        set card_gap [expr {int(12 * $pf)}]
+        set maxbw [_card_maxbw $lx $rx $pf]
+        set dbw 0
+        foreach c $cards { set dbw [expr {max($dbw, [lindex [_card_block $c $F $maxbw] 0])}] }
+        set i 0
+        foreach c $cards {
+            set top [expr {$list_top + $i * ($card_h + $card_gap)}]
+            dict set c datebw $dbw
+            _draw_card $o $lx $rx $top $pf $F $col $c
+            incr i
+        }
+    }
+
+    # The card's words in reading order, for tests and logs.
+    proc _card_text {card} {
+        set out {}
+        foreach k {l1 date l2 l3 warn big cap} {
+            if {[_dget $card $k] ne ""} { lappend out [_dget $card $k] }
+        }
+        return [join $out " | "]
+    }
+
+    # v3.16.6: page chrome for the full-page card-list overlays (History,
+    # Bag Stats), so they read as plugin pages: the GA page header (title
+    # 40 bold at y 28, caption subtitle at y 72), Done bottom-left, and the
+    # cross-plugin pager bottom-right -- Next's right edge on the right
+    # margin, Prev an sm gap to its left, both always drawn, the
+    # unavailable end disabled. Physical px: vertical ref px scale by H/800;
+    # the bar's x edges come from the dui pages' own virtual tokens
+    # (left_x, right_x, btn_w_std, sm) mapped by W/2560, so these buttons
+    # land on exactly the pixels of the Help page's Done / Prev / Next.
+    proc _overlay_chrome {o W H col title subtitle has_prev has_next prev_cmd next_cmd} {
+        variable L
+        set F [_pfonts $H 1.0]
+        set ftitle [dict get $F title]
+        set fcap   [dict get $F caption]
+        set fbtn   [dict get $F button]
+        set pf [expr {double($H) / 800.0}]
+        set mg [expr {int(max($W * 0.036, 32))}]
+        set lx $mg
+        set rx [expr {$W - $mg}]
+        set cx [expr {($lx + $rx) / 2}]
+        set content_w [expr {$rx - $lx}]
+
+        _otext $o $cx [expr {int(28 * $pf)}] center $title $ftitle [dict get $col text] $content_w center bold
+        if {$subtitle ne ""} {
+            _otext $o $cx [expr {int(72 * $pf)}] center [_fit_text $subtitle $fcap $content_w] \
+                $fcap [dict get $col muted] $content_w center
+        }
+
+        set bar_y0 [expr {int(716 * $pf)}]
+        set bar_y1 [expr {int(776 * $pf)}]
+        # Virtual tokens (defaults = the 2560x1600 values if layout init
+        # has not run), then virtual -> physical.
+        set vl 92; set vr 2468; set vw 400; set vg 20
+        if {[info exists L(btn_w_std)] && [info exists L(sm)] && [info exists L(right_x)]} {
+            set vl $L(left_x); set vr $L(right_x); set vw $L(btn_w_std); set vg $L(sm)
+        }
+        set hx [expr {double($W) / 2560.0}]
+        set done_x0 [expr {int(round($vl * $hx))}]
+        set done_x1 [expr {int(round(($vl + $vw) * $hx))}]
+        set prev_x0 [expr {int(round(($vr - 2 * $vw - $vg) * $hx))}]
+        set prev_x1 [expr {int(round(($vr - $vw - $vg) * $hx))}]
+        set next_x0 [expr {int(round(($vr - $vw) * $hx))}]
+        set next_x1 [expr {int(round($vr * $hx))}]
+        _obutton $o $done_x0 $bar_y0 $done_x1 $bar_y1 "Done" $fbtn \
+            [list ::plugins::GrindAdvisor::_close_dialog]
+        _obutton $o $prev_x0 $bar_y0 $prev_x1 $bar_y1 \
+            "[format %c 0x25C0] Prev" $fbtn $prev_cmd $has_prev
+        _obutton $o $next_x0 $bar_y0 $next_x1 $bar_y1 \
+            "Next [format %c 0x25B6]" $fbtn $next_cmd $has_next
     }
 
     proc _show_history_dialog {} {
@@ -4554,7 +5932,7 @@ namespace eval ::plugins::GrindAdvisor {
             # dialogs keep their material glass, but this full-page list
             # stays on the flat popup_theme scrim.
             set col [_colors]
-            set F [_pfonts $H]
+            set F [_pfonts $H 1.0]
             set fsec  [dict get $F section]
             set fprim [dict get $F primary]
             set fbody [dict get $F body]
@@ -4574,61 +5952,39 @@ namespace eval ::plugins::GrindAdvisor {
             set cx [expr {($lx + $rx) / 2}]
             set content_w [expr {$rx - $lx}]
 
-            _otext $o $cx [expr {int(48 * $pf)}] center "Recent Shot History" $fsec [dict get $col text] $content_w center bold
+            set total [llength $_hist_cards]
+            # v3.16.6: GA page header, Done bottom-left and the standard
+            # pager bottom-right (was a 24 px title and a top-right,
+            # always-enabled Prev/Next pair).
+            _overlay_chrome $o $W $H $col "Recent shot history" "Newest first. Espresso shots only." \
+                [expr {$_hist_offset > 0}] [expr {$_hist_offset + 5 < $total}] \
+                [list ::plugins::GrindAdvisor::_hist_page -1] \
+                [list ::plugins::GrindAdvisor::_hist_page 1]
 
             set tb0 [expr {int(104 * $pf)}]
             set tb1 [expr {int(152 * $pf)}]
-            set btnw [expr {int(200.0 * $W / 1340.0)}]
-            set gap [expr {int(10 * $pf)}]
-            set next_x1 [expr {$rx - $btnw}]
-            set prev_x1 [expr {$next_x1 - $gap - $btnw}]
-
-            set total [llength $_hist_cards]
-            if {$total == 0} {
-                set count_text "No valid espresso shots found (rinse/flush/steam rows are ignored)."
-            } else {
-                set last [expr {$_hist_offset + 5}]
-                if {$last > $total} { set last $total }
-                set count_text "Shots [expr {$_hist_offset + 1}]\u2013$last of $total"
-            }
-            _otext $o $lx [expr {($tb0 + $tb1) / 2}] w [_fit_text $count_text $fcap [expr {$prev_x1 - $lx - $gap}]] \
-                $fcap [dict get $col muted] [expr {$prev_x1 - $lx - $gap}] left
-            _obutton $o $prev_x1 $tb0 [expr {$prev_x1 + $btnw}] $tb1 "\u25c0 Prev" $fbtn \
-                [list ::plugins::GrindAdvisor::_hist_page -1]
-            _obutton $o $next_x1 $tb0 $rx $tb1 "Next \u25b6" $fbtn \
-                [list ::plugins::GrindAdvisor::_hist_page 1]
+            # v3.23.0 (F21): "1-5 of 25 shots" (en dash) / "No shots", the
+            # card-list count every owner plugin uses.
+            set last [expr {$_hist_offset + 5}]
+            if {$last > $total} { set last $total }
+            set count_text [_range_count [expr {$_hist_offset + 1}] $last $total shot]
+            _otext $o $lx [expr {($tb0 + $tb1) / 2}] w [_fit_text $count_text $fcap $content_w] \
+                $fcap [dict get $col muted] $content_w left
 
             set list_top [expr {int(168 * $pf)}]
             set card_h [expr {int(96 * $pf)}]
             set card_gap [expr {int(12 * $pf)}]
-            set card_r [expr {int(12 * $pf)}]
-            set pad_x [expr {int(18 * $pf)}]
-            set l1_dy [expr {int(30 * $pf)}]
-            set l2_dy [expr {int(56 * $pf)}]
-            set l3_dy [expr {int(80 * $pf)}]
-            set text_x [expr {$lx + $pad_x}]
-            set text_w [expr {$content_w - 2 * $pad_x}]
 
-            for {set i 0} {$i < 5} {incr i} {
-                set idx [expr {$_hist_offset + $i}]
-                if {$idx >= $total} { break }
-                lassign [lindex $_hist_cards $idx] line1 line2 line3
-                set top [expr {$list_top + $i * ($card_h + $card_gap)}]
-                set bottom [expr {$top + $card_h}]
-                _opoly $o $lx $top $rx $bottom $card_r [dict get $col panel] [dict get $col border] gad
-                _otext $o $text_x [expr {$top + $l1_dy}] w [_fit_text $line1 $fprim $text_w] $fprim [dict get $col text] $text_w left bold
-                _otext $o $text_x [expr {$top + $l2_dy}] w [_fit_text $line2 $fbody $text_w] $fbody [dict get $col text] $text_w left
-                _otext $o $text_x [expr {$top + $l3_dy}] w [_fit_text $line3 $fcap $text_w] $fcap [dict get $col muted] $text_w left
-            }
+            # v3.20.0 (F16): the shared card -- next grind large on the right.
+            # v3.23.0: through the shared page drawer, so "4 days ago" ends
+            # on one column like Bag Stats' dates.
+            _draw_card_page $o $lx $rx $pf $F $col \
+                [lrange $_hist_cards $_hist_offset [expr {$_hist_offset + 4}]]
             if {$total == 0} {
                 _otext $o $cx [expr {$list_top + 2 * ($card_h + $card_gap)}] center \
-                    "No valid espresso shots found yet." $fbody [dict get $col text] $content_w
+                    "No valid espresso shots found yet (rinse, flush and steam are skipped)." \
+                    $fbody [dict get $col text] $content_w
             }
-
-            set bar_y0 [expr {int(716 * $pf)}]
-            set bar_y1 [expr {int(776 * $pf)}]
-            _obutton $o $lx $bar_y0 [expr {$lx + $btnw}] $bar_y1 "Done" $fbtn \
-                [list ::plugins::GrindAdvisor::_close_dialog]
 
             after 200  [list catch [list raise $o]]
             after 600  [list catch [list raise $o]]
@@ -4668,6 +6024,10 @@ namespace eval ::plugins::GrindAdvisor {
     #   newest_ts oldest_ts  + when trusted: m b ideal drift_txt
     #                        + when not:     why
     proc _bag_data {} {
+        variable GA_REACH_TOL
+        variable GA_REACH_MIN_GRINDS
+        variable GA_ON_TARGET_TOL
+        variable GA_FIT_MIN_SHOTS
         lassign [locate_shot_source] db table fields
         if {$db eq "" || $table eq ""} {
             return [dict create ok 0 summary "No SDB source detected."]
@@ -4717,7 +6077,11 @@ namespace eval ::plugins::GrindAdvisor {
                 if {[dict size $sh] == 0} { continue }
                 set g [dict get $sh grind]
                 lappend pts [list $g $tnorm]
-                lappend traws [dict get $sh duration]
+                # v3.20.0: the time the engine judged, as History shows it
+                # (_plain_words' rule: the yield-adjusted time once it moved
+                # 0.5 s+), so one shot never gets two verdicts.
+                set traw [dict get $sh duration]
+                lappend traws [expr {abs($tnorm - $traw) >= 0.5 ? $tnorm : $traw}]
                 set ts [_dget $r timestamp]
                 if {$ts ne "" && [string is integer -strict $ts]} {
                     lappend draws [list $g $ts $tnorm]
@@ -4734,7 +6098,7 @@ namespace eval ::plugins::GrindAdvisor {
             }
             set spread [expr {$n > 0 ? $gmax - $gmin : 0.0}]
 
-            # Average-R² feed (same recency-weighted fit as the forecast).
+            # Average-R2 feed (same recency-weighted fit as the forecast).
             set r2 ""
             if {$n >= 3} {
                 set shots {}
@@ -4748,15 +6112,16 @@ namespace eval ::plugins::GrindAdvisor {
                 }
             }
 
-            # Shots-to-target: first raw shot within 2s, oldest first.
+            # Shots-to-target: first shot within GA_ON_TARGET_TOL (2 s) on the
+            # time the engine judged (traws above), oldest first.
             set stt ""
             set idx 0
             foreach t [lreverse $traws] {
                 incr idx
-                if {abs($t - $target) <= 2.0} { set stt $idx; break }
+                if {abs($t - $target) <= $GA_ON_TARGET_TOL} { set stt $idx; break }
             }
             if {$stt eq ""} {
-                set stt_txt "Never within 2s of target"
+                set stt_txt "Never within [_fmt_num $GA_ON_TARGET_TOL]s of target"
             } elseif {$stt == 1} {
                 set stt_txt "On target in 1 shot"
             } else {
@@ -4765,11 +6130,14 @@ namespace eval ::plugins::GrindAdvisor {
 
             # Robust per-bag calibration with the v3.5.0 trust gate.
             set fit [_theil_sen $pts]
-            set trusted [expr {$n >= 4 && $spread >= 1.0 && $fit ne "" \
+            set trusted [expr {$n >= $GA_FIT_MIN_SHOTS && $spread >= 1.0 && $fit ne "" \
                 && abs([lindex $fit 0]) >= 0.5}]
 
+            # v3.23.0: the bag's values are text, picked with if.
+            set bvals {}
+            if {[dict exists $newest bag_values]} { set bvals [dict get $newest bag_values] }
             set bag [dict create key $k label $label \
-                bag_values [expr {[dict exists $newest bag_values] ? [dict get $newest bag_values] : {}}] \
+                bag_values $bvals \
                 profile [string trim [_dget $newest profile]] \
                 n $n excluded $excluded spread $spread stt_txt $stt_txt \
                 trusted $trusted r2 $r2 \
@@ -4780,7 +6148,37 @@ namespace eval ::plugins::GrindAdvisor {
                 lassign $fit m b
                 dict set bag m $m
                 dict set bag b $b
-                dict set bag ideal [_clamp_grind [expr {($target - $b) / double($m)}]]
+                # v3.18.0: keep the unclamped ideal and say when it is out of
+                # the grinder range: a clamped 0.0 read as a real ideal, and
+                # fed starting_estimate. v3.18.1: the same range test and
+                # tolerance as the rec's `reach` (_reach_miss, GA_REACH_TOL),
+                # but on THIS card's own robust fit -- Theil-Sen over every
+                # eligible shot, no R2 gate, not recency-weighted -- so its
+                # ideal (Bam Bam -4.0) is not the forecast's (-7.7) and the
+                # two verdicts can differ. reach_out gates starting_estimate,
+                # which consumes this same Theil-Sen ideal.
+                # v3.18.2: and the same GA_REACH_MIN_GRINDS gate -- 4 shots at
+                # two grinds pass the trust gate but are pair evidence. Such
+                # a trend is NOT assessed (reach_unassessed): never shown as
+                # out of reach, never as its clamped "Ideal", never a seed.
+                set raw [expr {($target - $b) / double($m)}]
+                lassign [_grinder_range] rlo rhi
+                dict set bag ideal_raw $raw
+                set gdistinct {}
+                foreach p $pts {
+                    if {[lsearch -exact $gdistinct [lindex $p 0]] < 0} { lappend gdistinct [lindex $p 0] }
+                }
+                dict set bag reach_out 0
+                dict set bag reach_unassessed 0
+                set miss [_reach_miss $m $raw $rlo $rhi]
+                if {[llength $miss] == 2 && [lindex $miss 1] > $GA_REACH_TOL} {
+                    if {[llength $gdistinct] >= $GA_REACH_MIN_GRINDS} {
+                        dict set bag reach_out 1
+                    } else {
+                        dict set bag reach_unassessed 1
+                    }
+                }
+                dict set bag ideal [_clamp_grind $raw]
                 set drift_txt ""
                 if {[llength $draws] >= 6 && $t_first ne ""} {
                     set dpts {}
@@ -4794,14 +6192,14 @@ namespace eval ::plugins::GrindAdvisor {
                     if {$span_d >= 3.0} {
                         set c [_drift_fit $dpts]
                         if {$c ne ""} {
-                            set drift_txt "  ·  Drift [format %+.1f $c] s/day"
+                            set drift_txt "drift [format %+.1f $c] s/day"
                         }
                     }
                 }
                 dict set bag drift_txt $drift_txt
             } else {
-                if {$n < 4} {
-                    set why "needs 4+ shots"
+                if {$n < $GA_FIT_MIN_SHOTS} {
+                    set why "needs ${GA_FIT_MIN_SHOTS}+ shots"
                 } elseif {$spread < 1.0} {
                     set why "grind spread only [format %.1f $spread]"
                 } else {
@@ -4815,6 +6213,8 @@ namespace eval ::plugins::GrindAdvisor {
     }
 
     proc _bag_cards_data {{max_bags 25}} {
+        variable GA_R2_MIN
+        variable GA_REACH_MIN_GRINDS
         set data [_bag_data]
         if {![dict get $data ok]} {
             return [dict create summary [dict get $data summary] cards {}]
@@ -4835,35 +6235,76 @@ namespace eval ::plugins::GrindAdvisor {
                 incr r2_count
             }
 
+            # v3.20.0 (design review F16): the ideal grind LARGE on the right
+            # ("ideal grind" under it), or the reason there is none; the bag
+            # name with its dates in the first row; how it went on the second
+            # (shots to target, shot count); slope, drift and fit in the
+            # caption. The verdict rules are 3.18.x's, unchanged.
+            set sep "  [format %c 0xB7]  "
+            set card [dict create l1 [dict get $bag label]]
+            set cap3 {}
             if {[dict get $bag trusted]} {
                 lappend slopes [dict get $bag m]
-                set l2 "Ideal [format %.1f [dict get $bag ideal]]  ·  Slope [format %.1f [dict get $bag m]] s/grind[dict get $bag drift_txt]"
+                lappend cap3 "slope [format %.1f [dict get $bag m]] s/grind"
+                if {[dict get $bag drift_txt] ne ""} { lappend cap3 [dict get $bag drift_txt] }
+                # r2 is numeric for every trusted bag (n >= 4, a real slope);
+                # the "" test only guards a future change of the trust gate.
+                set r2b [dict get $bag r2]
+                if {$r2b ne ""} { lappend cap3 "fit R2 [format %.2f $r2b]" }
+                if {[_dget $bag reach_out] eq "1" && ($r2b eq "" || $r2b < $GA_R2_MIN)} {
+                    # v3.18.1: never claim "out of reach" from a fit whose times
+                    # do not track the grind (the forecast refuses that fit).
+                    dict set card big "No ideal yet" ; dict set card bigsize word ; dict set card bigrole muted
+                    dict set card cap "times not tracking grind"
+                } elseif {[_dget $bag reach_unassessed] eq "1"} {
+                    dict set card big "No ideal yet" ; dict set card bigsize word ; dict set card bigrole muted
+                    dict set card cap "fewer than $GA_REACH_MIN_GRINDS different grinds"
+                } elseif {[_dget $bag reach_out] eq "1"} {
+                    dict set card big "Out of reach" ; dict set card bigsize word ; dict set card bigrole warn
+                    dict set card cap "trend ideal [format %.1f [dict get $bag ideal_raw]]"
+                } else {
+                    dict set card big [_grind_fmt [_round_grind [dict get $bag ideal]]]
+                    dict set card cap "ideal grind"
+                }
             } else {
-                set l2 "Fit not reliable ([dict get $bag why])"
+                dict set card big "No ideal yet" ; dict set card bigsize word ; dict set card bigrole muted
+                dict set card cap [dict get $bag why]
             }
 
-            set l1 [dict get $bag label]
+            # v3.23.0 (F21): date only on both ends ("30 Sep - 01 Oct" with an
+            # en dash; "Sep 30 - Oct 01" when Lumen says mdy; + the year when
+            # not this year) -- a timed range would squeeze the bag name.
             if {[dict get $bag n] > 0} {
-                set d_new [_bag_date_short [dict get $bag newest_ts]]
-                set d_old [_bag_date_short [dict get $bag oldest_ts]]
+                set d_new [_fmt_day [string trim [dict get $bag newest_ts]]]
+                set d_old [_fmt_day [string trim [dict get $bag oldest_ts]]]
                 if {$d_old ne "" && $d_new ne ""} {
-                    append l1 "   [expr {$d_old eq $d_new ? $d_new : "$d_old - $d_new"}]"
+                    if {$d_old eq $d_new} {
+                        dict set card date $d_new
+                    } else {
+                        dict set card date "$d_old [format %c 0x2013] $d_new"
+                    }
                 }
             }
             set ex [dict get $bag excluded]
-            set ex_txt [expr {$ex > 0 ? ", $ex excluded" : ""}]
-            set l3 "[dict get $bag stt_txt]  ·  [dict get $bag n] shots$ex_txt"
-            lappend cards [list $l1 $l2 $l3]
+            set n [dict get $bag n]
+            set shots [_plural $n shot]
+            if {$ex > 0} { append shots ", $ex left out" }
+            dict set card l2 "[dict get $bag stt_txt]$sep$shots"
+            dict set card l3 [join $cap3 $sep]
+            lappend cards $card
         }
 
+        # v3.23.0: separator, superscript two and the plural from code
+        # (ASCII source; "1 reliable bag" no longer reads "1 reliable bags").
+        set sep "  [format %c 0xB7]  "
         set sparts [list "Target [format %.0f $target]s"]
         if {[llength $slopes] > 0} {
-            lappend sparts "Median slope [format %.1f [_median $slopes]] s/grind ([llength $slopes] reliable bags)"
+            lappend sparts "Median slope [format %.1f [_median $slopes]] s/grind ([_plural [llength $slopes] {reliable bag}])"
         }
         if {$r2_count > 0} {
-            lappend sparts "Average R² [format %.2f [expr {$r2_sum / double($r2_count)}]]"
+            lappend sparts "Average R[format %c 0xB2] [format %.2f [expr {$r2_sum / double($r2_count)}]]"
         }
-        return [dict create summary [join $sparts "  ·  "] cards $cards]
+        return [dict create summary [join $sparts $sep] cards $cards]
     }
 
     proc show_bag_stats {} {
@@ -4882,10 +6323,13 @@ namespace eval ::plugins::GrindAdvisor {
         set est {}
         catch { set est [starting_estimate] }
         if {$est ne "" && [llength $_bag_cards] > 0} {
-            set _bag_cards [linsert $_bag_cards 0 [list \
-                "Starting estimate (new bag)" \
-                "Start ~[_fmt_num [dict get $est grind]]  ·  [dict get $est rung_txt]" \
-                "From: [join [dict get $est sources] {, }]"]]
+            # v3.20.0 (F16): the same card shape -- the estimate large on the
+            # right, never captioned as a recommendation.
+            set _bag_cards [linsert $_bag_cards 0 [dict create \
+                l1 "New bag: starting estimate" \
+                l2 "Borrowed from [dict get $est rung_txt]" \
+                l3 "From: [join [dict get $est sources] {, }]" \
+                big "~[_grind_fmt [dict get $est grind]]" cap "starting estimate"]]
             set _bag_est_present 1
         }
         return [_render_bag_stats_dialog]
@@ -4911,7 +6355,7 @@ namespace eval ::plugins::GrindAdvisor {
         if {[catch {
             catch { destroy $o }
             set col [_colors]
-            set F [_pfonts $H]
+            set F [_pfonts $H 1.0]
             set fsec  [dict get $F section]
             set fprim [dict get $F primary]
             set fbody [dict get $F body]
@@ -4929,79 +6373,53 @@ namespace eval ::plugins::GrindAdvisor {
             set cx [expr {($lx + $rx) / 2}]
             set content_w [expr {$rx - $lx}]
 
-            _otext $o $cx [expr {int(36 * $pf)}] center "Bag Stats" $fsec [dict get $col text] $content_w center bold
-            _otext $o $cx [expr {int(76 * $pf)}] center [_fit_text $_bag_summary $fcap $content_w] \
-                $fcap [dict get $col muted] $content_w center
+            set total [llength $_bag_cards]
+            # v3.16.6: GA page header (the summary is the subtitle), Done
+            # bottom-left and the standard pager bottom-right.
+            _overlay_chrome $o $W $H $col "Bag stats" $_bag_summary \
+                [expr {$_bag_offset > 0}] [expr {$_bag_offset + 5 < $total}] \
+                [list ::plugins::GrindAdvisor::_bag_page -1] \
+                [list ::plugins::GrindAdvisor::_bag_page 1]
 
             set tb0 [expr {int(104 * $pf)}]
             set tb1 [expr {int(152 * $pf)}]
-            set btnw [expr {int(200.0 * $W / 1340.0)}]
-            set gap [expr {int(10 * $pf)}]
-            set next_x1 [expr {$rx - $btnw}]
-            set prev_x1 [expr {$next_x1 - $gap - $btnw}]
-
-            set total [llength $_bag_cards]
-            if {$total == 0} {
-                set count_text "No bags found."
-            } elseif {$_bag_est_present} {
+            # v3.23.0 (F21): "1-5 of 16 bags" (en dash) / "No bags".
+            if {$_bag_est_present} {
                 # v3.13.0: card 0 is the starting estimate, not a bag. Cards
                 # shown on this page are indices offset..offset+4, i.e. bags
                 # max(offset,1)..min(offset+4, nbags) since bag i is card i.
                 set nbags [expr {$total - 1}]
-                set first [expr {$_bag_offset > 0 ? $_bag_offset : 1}]
+                set first [expr {max($_bag_offset, 1)}]
                 set last [expr {$_bag_offset + 4}]
                 if {$last > $nbags} { set last $nbags }
-                set count_text "Bags $first[format %c 0x2013]$last of $nbags"
+                set count_text [_range_count $first $last $nbags bag]
             } else {
                 set last [expr {$_bag_offset + 5}]
                 if {$last > $total} { set last $total }
-                set count_text "Bags [expr {$_bag_offset + 1}][format %c 0x2013]$last of $total"
+                set count_text [_range_count [expr {$_bag_offset + 1}] $last $total bag]
             }
-            _otext $o $lx [expr {($tb0 + $tb1) / 2}] w [_fit_text $count_text $fcap [expr {$prev_x1 - $lx - $gap}]] \
-                $fcap [dict get $col muted] [expr {$prev_x1 - $lx - $gap}] left
-            _obutton $o $prev_x1 $tb0 [expr {$prev_x1 + $btnw}] $tb1 "[format %c 0x25C0] Prev" $fbtn \
-                [list ::plugins::GrindAdvisor::_bag_page -1]
-            _obutton $o $next_x1 $tb0 $rx $tb1 "Next [format %c 0x25B6]" $fbtn \
-                [list ::plugins::GrindAdvisor::_bag_page 1]
+            _otext $o $lx [expr {($tb0 + $tb1) / 2}] w [_fit_text $count_text $fcap $content_w] \
+                $fcap [dict get $col muted] $content_w left
 
             set list_top [expr {int(168 * $pf)}]
             set card_h [expr {int(96 * $pf)}]
             set card_gap [expr {int(12 * $pf)}]
-            set card_r [expr {int(12 * $pf)}]
-            set pad_x [expr {int(18 * $pf)}]
-            set l1_dy [expr {int(30 * $pf)}]
-            set l2_dy [expr {int(56 * $pf)}]
-            set l3_dy [expr {int(80 * $pf)}]
-            set text_x [expr {$lx + $pad_x}]
-            set text_w [expr {$content_w - 2 * $pad_x}]
 
-            for {set i 0} {$i < 5} {incr i} {
-                set idx [expr {$_bag_offset + $i}]
-                if {$idx >= $total} { break }
-                lassign [lindex $_bag_cards $idx] line1 line2 line3
-                set top [expr {$list_top + $i * ($card_h + $card_gap)}]
-                set bottom [expr {$top + $card_h}]
-                _opoly $o $lx $top $rx $bottom $card_r [dict get $col panel] [dict get $col border] gad
-                _otext $o $text_x [expr {$top + $l1_dy}] w [_fit_text $line1 $fprim $text_w] $fprim [dict get $col text] $text_w left bold
-                _otext $o $text_x [expr {$top + $l2_dy}] w [_fit_text $line2 $fbody $text_w] $fbody [dict get $col text] $text_w left
-                _otext $o $text_x [expr {$top + $l3_dy}] w [_fit_text $line3 $fcap $text_w] $fcap [dict get $col muted] $text_w left
-            }
+            # v3.20.0 (F16): the shared card -- the ideal grind large on the right.
+            # v3.21.0: the dates end on one column (now _draw_card_page).
+            _draw_card_page $o $lx $rx $pf $F $col \
+                [lrange $_bag_cards $_bag_offset [expr {$_bag_offset + 4}]]
             if {$total == 0} {
                 _otext $o $cx [expr {$list_top + 2 * ($card_h + $card_gap)}] center \
                     $_bag_summary $fbody [dict get $col text] $content_w
             }
-
-            set bar_y0 [expr {int(716 * $pf)}]
-            set bar_y1 [expr {int(776 * $pf)}]
-            _obutton $o $lx $bar_y0 [expr {$lx + $btnw}] $bar_y1 "Done" $fbtn \
-                [list ::plugins::GrindAdvisor::_close_dialog]
 
             after 200  [list catch [list raise $o]]
             after 600  [list catch [list raise $o]]
         } err]} {
             catch { destroy $o }
             catch { msg "GrindAdvisor: bag stats dialog failed: $err" }
-            catch { borg toast "Bag Stats unavailable" }
+            catch { borg toast "Bag stats unavailable" }
             return 0
         }
         return 1
@@ -5054,15 +6472,21 @@ namespace eval ::plugins::GrindAdvisor {
             catch { wm transient .grindadvisor . }
             catch { .grindadvisor configure -bg $bg }
 
-            lassign [_dialog_lines $rec] body bignum
+            lassign [_dialog_lines $rec] body bignum tail
             label .grindadvisor.body -text $body -justify center -padx 24 -pady 16 \
                 -bg $bg -fg $fg
             pack .grindadvisor.body -fill x
             if {$bignum ne ""} {
+                # v3.19.0: neutral hero, like the overlay popup.
                 label .grindadvisor.big -text $bignum -justify center \
-                    -bg $bg -fg [dict get $col accent]
+                    -bg $bg -fg $fg
                 catch { .grindadvisor.big configure -font [_font 28 bold] }
                 pack .grindadvisor.big -pady {0 12}
+            }
+            if {$tail ne ""} {
+                label .grindadvisor.tail -text $tail -justify center -padx 24 \
+                    -bg $bg -fg $fg -wraplength 600
+                pack .grindadvisor.tail -fill x -pady {0 8}
             }
             frame .grindadvisor.btns -bg $bg
             button .grindadvisor.btns.ok -text "OK" \
@@ -5101,8 +6525,9 @@ namespace eval ::plugins::GrindAdvisor {
         return "not detected"
     }
 
+    # v3.24.0 (F23): ": " between a state and its reason (was " - ").
     proc _key_debug_value {k} {
-        if {$k eq ""} { return "(none - no bean fields set)" }
+        if {$k eq ""} { return "(none: no bean fields set)" }
         return $k
     }
 
@@ -5110,14 +6535,14 @@ namespace eval ::plugins::GrindAdvisor {
         variable last_recommendation
         if {$last_recommendation eq ""} { return "(nothing saved yet)" }
         if {![dict exists $last_recommendation bag_key]} {
-            return "(saved before v3.7.0 - no key)"
+            return "(saved before v3.7.0: no key)"
         }
         set k [dict get $last_recommendation bag_key]
         if {$k eq ""} { return "(none)" }
         # Braces, not square brackets: [..] inside a quoted Tcl string is
         # command substitution and would try to run "MATCHES CURRENT".
         if {[last_recommendation_is_current]} { return "$k  (matches current)" }
-        return "$k  (STALE - different bag or profile)"
+        return "$k  (stale: different bag or profile)"
     }
 
     proc detected_fields_text {} {
@@ -5127,6 +6552,13 @@ namespace eval ::plugins::GrindAdvisor {
             set table "not detected"
             set fields {}
         }
+        # v3.23.0: text picked with if, never `expr ?:`.
+        set hist_check "off (history folder not found)"
+        if {[llength [_history_dirs]] > 0} { set hist_check "active (history folder found)" }
+        set seg_txt off
+        if {[_segment_by_profile]} { set seg_txt on }
+        # v3.24.0 (F23): a range takes a spaced en dash (was " - ").
+        set nd " [_char endash] "
         set lines [list \
             "Detected SDB table: $table" \
             "Detected grind column: [_field_debug_value $fields grind]" \
@@ -5138,19 +6570,19 @@ namespace eval ::plugins::GrindAdvisor {
             "Detected bag fields: [_field_debug_value $fields bag_fields]" \
             "Detected filename column: [_field_debug_value $fields filename]" \
             "Detected removed-flag column: [_field_debug_value $fields removed]" \
-            "Deleted-shot file check: [expr {[llength [_history_dirs]] > 0 ? "active (history folder found)" : "off (history folder not found)"}]" \
+            "Deleted-shot file check: $hist_check" \
             "" \
             "Dose/yield source mode: [_dose_yield_mode_label [_setting dose_yield_mode auto]]" \
-            "Dose plausibility (Auto): [_fmt_num [_setting dose_min 12.0]] - [_fmt_num [_setting dose_max 22.0]] g" \
-            "Ratio plausibility (Auto): [_fmt_num [_setting ratio_min 1.0]] - [_fmt_num [_setting ratio_max 4.0]]" \
+            "Dose plausibility (Auto): [_fmt_num [_setting dose_min 12.0]]$nd[_fmt_num [_setting dose_max 22.0]] g" \
+            "Ratio plausibility (Auto): [_fmt_num [_setting ratio_min 1.0]]$nd[_fmt_num [_setting ratio_max 4.0]]" \
             "" \
             "Detected profile column: [_field_debug_value $fields profile]" \
-            "Segment calibration by profile: [expr {[_segment_by_profile] ? {on} : {off}}]" \
+            "Segment calibration by profile: $seg_txt" \
             "Current bag key: [_key_debug_value [current_bag_key]]" \
             "Saved rec bag key: [_saved_rec_key_text]" \
             "Shot window: $GA_FETCH_LIMIT rows" \
             "" \
-            "Per-shot input/intermediate trace: see Calculation Details."]
+            "Per-shot input/intermediate trace: see Calculation details."]
         return [join $lines "\n"]
     }
 
@@ -5173,6 +6605,8 @@ namespace eval ::plugins::GrindAdvisor {
             return "Recent shot trace: no valid espresso shots."
         }
         set lines [list "Recent shot trace (newest first; same engine the popup uses):"]
+        # v3.24.0 (F23): a middle dot between the facts of a line (was " | ").
+        set d " [_char middot] "
         set nrows [llength $rows]
         set idx 1
         for {set pos 0} {$pos < $nrows && $idx <= $limit} {incr pos} {
@@ -5183,24 +6617,28 @@ namespace eval ::plugins::GrindAdvisor {
             set rec [_forecast_rec $rows $fields $pos]
             if {[dict size $rec] == 0} { continue }
 
-            set dt [_format_clock [_dget $r timestamp]]
+            # v3.23.0 (F21): the shared date ("Mon 29 Sep 21:29" / 12 h per
+            # Lumen); text picked with if, never `expr ?:`.
+            set dt [_fmt_when [string trim [_dget $r timestamp]]]
             if {$dt eq ""} { set dt "(no timestamp)" }
             set dy [_effective_dose_yield $r]
-            set bag_t [expr {$bag_shot ne "" ? "#$bag_shot" : "-"}]
-            set ratio_t [expr {[dict get $dy ratio] ne "" ? "1:[dict get $dy ratio]" : "-"}]
+            set bag_t "-"
+            if {$bag_shot ne ""} { set bag_t "#$bag_shot" }
+            set ratio_t "-"
+            if {[dict get $dy ratio] ne ""} { set ratio_t "1:[dict get $dy ratio]" }
 
-            lappend lines [format "%d) %s | grind %s time %ss target %ss err %+.1f | bag %s" \
-                $idx $dt [_fmt_num [dict get $rec grind]] [_fmt_num [dict get $rec actual]] \
-                [_fmt_num [dict get $rec target]] [dict get $rec error] $bag_t]
-            lappend lines "   dose [dict get $dy dose_src] | yield [dict get $dy yield_src] | ratio $ratio_t"
+            lappend lines [format "%d) %s%sgrind %s time %ss target %ss err %+.1f%sbag %s" \
+                $idx $dt $d [_fmt_num [dict get $rec grind]] [_fmt_num [dict get $rec actual]] \
+                [_fmt_num [dict get $rec target]] [dict get $rec error] $d $bag_t]
+            lappend lines "   dose [dict get $dy dose_src]${d}yield [dict get $dy yield_src]${d}ratio $ratio_t"
             if {[dict get $rec method] eq "regression"} {
-                lappend lines [format "   %s: n=%s m=%s b=%s R2=%s -> rec %s (pred %ss)" \
+                lappend lines [format "   %s: n=%s m=%s b=%s R2=%s %s rec %s (pred %ss)" \
                     [_forecast_method_label [dict get $rec method]] [dict get $rec n] \
                     [_fmt_num [dict get $rec m]] [_fmt_num [dict get $rec b]] \
-                    [_forecast_r2_txt $rec] [_fmt_num [dict get $rec next]] \
+                    [_forecast_r2_txt $rec] [_char arrow] [_fmt_num [dict get $rec next]] \
                     [_fmt_num [dict get $rec predicted_time]]]
             } else {
-                lappend lines "   [_forecast_method_label [dict get $rec method]]: n=[dict get $rec n] s/step [_fmt_num [dict get $rec s_per_step]] -> rec [_fmt_num [dict get $rec next]]"
+                lappend lines "   [_forecast_method_label [dict get $rec method]]: n=[dict get $rec n] s/step [_fmt_num [dict get $rec s_per_step]] [_char arrow] rec [_fmt_num [dict get $rec next]]"
             }
             incr idx
         }
@@ -5211,16 +6649,22 @@ namespace eval ::plugins::GrindAdvisor {
         set rec [analyze_latest_shot]
         if {![dict exists $rec ok] || ![dict get $rec ok]} {
             if {[dict exists $rec error]} {
-                return "Calculation Diagnostics:\nLatest recommendation unavailable: [string map {\n { }} [dict get $rec error]]"
+                return "Calculation diagnostics:\nLatest recommendation unavailable: [string map {\n { }} [dict get $rec error]]"
             }
-            return "Calculation Diagnostics:\nLatest recommendation unavailable."
+            return "Calculation diagnostics:\nLatest recommendation unavailable."
         }
-        set dose_src [expr {[dict exists $rec dose_src] ? [dict get $rec dose_src] : "n/a"}]
-        set yield_src [expr {[dict exists $rec yield_src] ? [dict get $rec yield_src] : "n/a"}]
-        set ratio_txt [expr {[dict exists $rec ratio] ? "1:[dict get $rec ratio]" : "n/a"}]
-        set norm_txt [expr {[dict get $rec normalized] ? "active (yield/dose)" : "off (no scale data or no correction)"}]
+        # v3.23.0: text picked with if, never `expr ?:` (it rewrites
+        # number-like text: "1.50" -> "1.5").
+        set dose_src "n/a"
+        if {[dict exists $rec dose_src]} { set dose_src [dict get $rec dose_src] }
+        set yield_src "n/a"
+        if {[dict exists $rec yield_src]} { set yield_src [dict get $rec yield_src] }
+        set ratio_txt "n/a"
+        if {[dict exists $rec ratio]} { set ratio_txt "1:[dict get $rec ratio]" }
+        set norm_txt "off (no scale data or no correction)"
+        if {[dict get $rec normalized]} { set norm_txt "active (yield/dose)" }
         set lines [list \
-            "Calculation Diagnostics:" \
+            "Calculation diagnostics:" \
             "Method: [_forecast_method_label [dict get $rec method]]" \
             "Eligible bag shots (n): [dict get $rec n]" \
             "Outliers excluded: [dict get $rec excluded]" \
@@ -5238,6 +6682,7 @@ namespace eval ::plugins::GrindAdvisor {
                 "Intercept b: [_fmt_num [dict get $rec b]] s" \
                 "Model fit R2: [_forecast_r2_txt $rec]" \
                 "Ideal grind (predicts target): [_fmt_num [expr {([dict get $rec target] - [dict get $rec b]) / double([dict get $rec m])}]]" \
+                "Grind reach: [_reach_txt $rec]" \
                 "Predicted time at recommendation: [_fmt_num [dict get $rec predicted_time]]s"
         } else {
             lappend lines "Seconds per step: [_fmt_num [dict get $rec s_per_step]]"
@@ -5267,6 +6712,28 @@ namespace eval ::plugins::GrindAdvisor {
     #  wrapped-line count, and pack pages conservatively so nothing can
     #  clip; Prev/Next in the bottom bar flips pages.
     # ------------------------------------------------------------------
+    # v3.21.0 (F17): word-wrap a paragraph at `width` characters with
+    # explicit newlines, so Help reads as a column of <= width characters
+    # whatever the card's pixel width (a word longer than width keeps its
+    # own line).
+    proc _wrap_text {text width} {
+        set out {}
+        set line ""
+        foreach w [split [string trim $text] " "] {
+            if {$w eq ""} { continue }
+            if {$line eq ""} {
+                set line $w
+            } elseif {[string length $line] + 1 + [string length $w] <= $width} {
+                append line " " $w
+            } else {
+                lappend out $line
+                set line $w
+            }
+        }
+        if {$line ne ""} { lappend out $line }
+        return [join $out "\n"]
+    }
+
     proc _paginate_text {text max_lines chars_per_line} {
         set pages {}
         set cur {}
@@ -5282,6 +6749,9 @@ namespace eval ::plugins::GrindAdvisor {
                 set cur {}
                 set used 0
             }
+            # v3.18.1: a blank line never opens a page (Calculation Details
+            # page 2 started with one once Grind reach shifted the text).
+            if {$used == 0 && [llength $pages] > 0 && [string trim $line] eq ""} { continue }
             lappend cur $line
             incr used $cost
         }
@@ -5293,19 +6763,46 @@ namespace eval ::plugins::GrindAdvisor {
     # Shared bottom-bar pager controls for the long-text sub-pages.
     # Adds Prev/Next (right side) and a page indicator; the caller's
     # namespace provides a _pg {delta} proc.
+    # v3.16.6: the cross-plugin pager standard -- Prev sits an sm gap from
+    # Next (was lg), the pair ShotHistoryEditor and MaintenanceTracker use;
+    # _pager_state disables the unavailable end instead of leaving it live.
     proc _add_pager {page ns} {
         variable L
         set rx $L(right_x)
-        set prev_x0 [expr {$rx - 2 * $L(btn_w_std) - $L(lg)}]
+        set prev_x0 [expr {$rx - 2 * $L(btn_w_std) - $L(sm)}]
         set next_x0 [expr {$rx - $L(btn_w_std)}]
         dui add dtext $page [expr {$prev_x0 - $L(lg)}] [expr {($L(bar_y0) + $L(bar_y1)) / 2}] \
             -tags pg_ind -text "" -font $L(font_caption) -fill $L(text_mut) -anchor e -justify right
         dui add dbutton $page $prev_x0 $L(bar_y0) [expr {$prev_x0 + $L(btn_w_std)}] $L(bar_y1) \
             -tags pg_prev -label "[format %c 0x25C0] [translate "Prev"]" \
-            -command [list ${ns}::_pg -1] -label_font $L(font_button) -style ga_btn
+            -command [list ::plugins::GrindAdvisor::_tap $page pg_prev [list ${ns}::_pg -1]] -label_font $L(font_button) -style ga_btn
         dui add dbutton $page $next_x0 $L(bar_y0) $rx $L(bar_y1) \
             -tags pg_next -label "[translate "Next"] [format %c 0x25B6]" \
-            -command [list ${ns}::_pg 1] -label_font $L(font_button) -style ga_btn
+            -command [list ::plugins::GrindAdvisor::_tap $page pg_next [list ${ns}::_pg 1]] -label_font $L(font_button) -style ga_btn
+    }
+
+    # Disables the pager end that has no page (MaintenanceTracker's GFC
+    # -state pattern: the wildcard tag reaches the shape, the label and the
+    # tap rect; ga_btn carries the disabled fills). Called by each text
+    # page's _render with the 0-based page index and the page count.
+    proc _pager_state {page idx total} {
+        # v3.23.0: states picked with if, never `expr ?:`.
+        set ps disabled
+        if {$idx > 0} { set ps normal }
+        set ns disabled
+        if {$idx < $total - 1} { set ns normal }
+        catch { dui item config $page pg_prev* -state $ps }
+        catch { dui item config $page pg_next* -state $ns }
+    }
+
+    # v3.17.4 (F22, review): the pager's state for the FIRST frame. Called
+    # from load, where the items are hidden: enable_or_disable's -initial 1
+    # writes the st: tag that dui's re-show applies (dui.tcl ~7953), so the
+    # ends paint greyed from the start; _pager_state sets the live state in
+    # show. Safe: GA's pager buttons are never hidden.
+    proc _pager_initial {page idx total} {
+        catch { dui item enable_or_disable [expr {$idx > 0}] $page pg_prev* -initial 1 }
+        catch { dui item enable_or_disable [expr {$idx < $total - 1}] $page pg_next* -initial 1 }
     }
 
     # ------------------------------------------------------------------
@@ -5316,14 +6813,6 @@ namespace eval ::plugins::GrindAdvisor {
     #  t = b + m*grind + c*days, Cramer's rule on the 3x3 normal
     #  equations. Nothing here feeds back into any recommendation.
     # ------------------------------------------------------------------
-    proc _bag_date_short {raw} {
-        set raw [string trim $raw]
-        if {$raw ne "" && [string is integer -strict $raw]} {
-            if {![catch { clock format $raw -format "%d %b" } out]} { return $out }
-        }
-        return ""
-    }
-
     proc _median {vals} {
         set n [llength $vals]
         if {$n == 0} { return "" }
@@ -5412,47 +6901,54 @@ namespace eval ::dui::pages::GrindAdvisor_settings {
 
         # v3.12.0: page-theme toggle, top-right corner of the header
         # (sun/moon; the popup's own theme stays a separate setting).
-        set th_y1 [expr {int(($L(header_y1) - $L(btn_h)) / 2)}]
+        # v3.16.6: y = 11 ref, the box MaintenanceTracker, BeanScanner and
+        # ShotHistoryEditor use (was header-centred, 7 px lower).
+        set th_y1 [expr {int(round(11 * $L(scale)))}]
+        set th_font $L(font_button)
+        if {$L(have_icons)} { set th_font $L(font_icon) }
         dui add dbutton $page [expr {$rx - $L(btn_h)}] $th_y1 \
             $rx [expr {$th_y1 + $L(btn_h)}] \
             -tags btn_theme -label [::plugins::GrindAdvisor::_theme_button_face] \
-            -command ::plugins::GrindAdvisor::toggle_theme \
-            -label_font [expr {$L(have_icons) ? $L(font_icon) : $L(font_button)}] \
+            -command [list ::plugins::GrindAdvisor::_tap $page btn_theme ::plugins::GrindAdvisor::toggle_theme] \
+            -label_font $th_font \
             -style ga_btn
 
         # v2.0.1: stock App-tab section cards, two balanced columns.
         # Precomputed content-driven heights:
-        #   entries card  = pad + title + md + (3*entry_pitch - md) + pad
+        #   stepper card  = pad + title + md + (3*row_pitch - md) + pad
         #   2-row card    = pad + title + md + (2*row_pitch - md) + pad
         #   actions card  = pad + title + md + 2*btn_h + md + pad
+        # v3.17.0 (F5): Shot Settings holds three 60 px stepper rows (it held
+        # 48 px entries), so History and Bag Stats share the Actions card's
+        # second row: the left column ends 64 px above the bottom bar.
         set col_w $L(sec_col_w)
         set c2x $L(sec_col2_x)
-        set shot_h [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + 3 * $L(entry_row_pitch) - $L(md)}]
-        # v3.6.0: three action buttons (Recommendation / History / Bag Stats).
-        set act_h  [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + 3 * $L(btn_h) + 2 * $L(md)}]
+        set shot_h [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + 3 * $L(row_pitch) - $L(md)}]
+        set act_h  [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + 2 * $L(btn_h) + $L(md)}]
         set two_h  [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + 2 * $L(row_pitch) - $L(md)}]
         set three_h [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + 3 * $L(row_pitch) - $L(md)}]
+        # v3.24.0 (F24): the Recommendation card is one caption line taller
+        # for the Confidence row's next step (the right column still ends
+        # well above the left one).
+        set reco_h [expr {$two_h + $L(conf_step_h)}]
 
-        # --- LEFT column: Shot Settings first so its numeric entries sit in
-        # --- the top half of the screen (Android keyboard), then Actions.
+        # --- LEFT column: Shot settings, then Actions.
         set y0 $L(sec_top)
-        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_shot $lx $y0 $col_w $shot_h "Shot Settings"]
+        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_shot $lx $y0 $col_w $shot_h "Shot settings"]
         set lab_x [expr {$lx + $L(sec_pad)}]
-        set ent_x [expr {$lx + $L(sec_value_dx)}]
+        set step_x2 [expr {$lx + $col_w - $L(sec_pad)}]
         set row 0
         foreach {key label} {
             target_time "Target shot time (s)"
             grinder_min "Grinder minimum"
             grinder_max "Grinder maximum"
         } {
-            set ry [expr {$rows_y + $row * $L(entry_row_pitch)}]
-            set mid [expr {$ry + $L(entry_row_h) / 2}]
-            dui add dtext $page $lab_x $mid -tags ${key}_label -text [translate $label] \
-                -font $L(font_body) -width $L(sec_label_w) -fill $L(text_body) -anchor w -justify left
-            dui add entry $page $ent_x $mid -tags $key \
-                -textvariable ::plugins::GrindAdvisor::settings($key) \
-                -width 8 -font $L(font_body) -canvas_anchor w \
-                -borderwidth 1 -bg $L(entry_bg) -foreground $L(value_blue) -relief flat
+            set ry [expr {$rows_y + $row * $L(row_pitch)}]
+            dui add dtext $page $lab_x [expr {$ry + $L(btn_h) / 2}] -tags ${key}_label \
+                -text [translate $label] -font $L(font_body) \
+                -width [expr {$step_x2 - $L(step_w) - $L(lg) - $lab_x}] \
+                -fill $L(text_body) -anchor w -justify left
+            ::plugins::GrindAdvisor::_add_stepper $page $key $step_x2 $ry
             incr row
         }
 
@@ -5461,18 +6957,18 @@ namespace eval ::dui::pages::GrindAdvisor_settings {
         set abtn_x1 [expr {$lx + $L(sec_pad)}]
         set abtn_x2 [expr {$lx + $col_w - $L(sec_pad)}]
         dui add dbutton $page $abtn_x1 $rows_y $abtn_x2 [expr {$rows_y + $L(btn_h)}] \
-            -tags show_latest_recommendation -label [translate "Show Latest Recommendation"] \
-            -command ::plugins::GrindAdvisor::show_latest_recommendation \
-            -label_font $L(font_button) -style ga_btn
+            -tags show_latest_recommendation -label [translate "Show next grind"] \
+            -command [list ::plugins::GrindAdvisor::_tap $page show_latest_recommendation ::plugins::GrindAdvisor::show_latest_recommendation] \
+            -label_font $L(font_button) -style ga_btn_primary
         set rows_y [expr {$rows_y + $L(btn_h) + $L(md)}]
-        dui add dbutton $page $abtn_x1 $rows_y $abtn_x2 [expr {$rows_y + $L(btn_h)}] \
+        set half_w [expr {($abtn_x2 - $abtn_x1 - $L(lg)) / 2}]
+        dui add dbutton $page $abtn_x1 $rows_y [expr {$abtn_x1 + $half_w}] [expr {$rows_y + $L(btn_h)}] \
             -tags recent_shot_history -label [translate "History"] \
-            -command ::plugins::GrindAdvisor::_show_history_dialog \
+            -command [list ::plugins::GrindAdvisor::_tap $page recent_shot_history ::plugins::GrindAdvisor::_show_history_dialog] \
             -label_font $L(font_button) -style ga_btn
-        set rows_y [expr {$rows_y + $L(btn_h) + $L(md)}]
-        dui add dbutton $page $abtn_x1 $rows_y $abtn_x2 [expr {$rows_y + $L(btn_h)}] \
-            -tags bag_stats_action -label [translate "Bag Stats"] \
-            -command ::plugins::GrindAdvisor::show_bag_stats \
+        dui add dbutton $page [expr {$abtn_x2 - $half_w}] $rows_y $abtn_x2 [expr {$rows_y + $L(btn_h)}] \
+            -tags bag_stats_action -label [translate "Bag stats"] \
+            -command [list ::plugins::GrindAdvisor::_tap $page bag_stats_action ::plugins::GrindAdvisor::show_bag_stats] \
             -label_font $L(font_button) -style ga_btn
 
         # --- RIGHT column: Recommendation (2 rows: rounding control + the
@@ -5481,10 +6977,10 @@ namespace eval ::dui::pages::GrindAdvisor_settings {
         # (v3.0.0: the recommendation-mode selector is gone -- there is one
         # built-in Regression Forecast method, no modes.)
         foreach {card_tag card_title card_y card_h rows} [list \
-            sec_reco "Recommendation" $L(sec_top) $two_h {
+            sec_reco "Recommendation" $L(sec_top) $reco_h {
                 rounding "Grind rounding increment" rounding_value "Next" cycle_rounding
             } \
-            sec_popup "Popup" [expr {$L(sec_top) + $two_h + $L(sec_gap)}] $two_h {
+            sec_popup "Popup" [expr {$L(sec_top) + $reco_h + $L(sec_gap)}] $two_h {
                 theme "Popup theme" popup_theme_value "Toggle" toggle_popup_theme
                 popup "Automatic popup" enable_popup_value "Toggle" toggle_enable_popup
             }] {
@@ -5504,7 +7000,7 @@ namespace eval ::dui::pages::GrindAdvisor_settings {
                     -font $L(font_primary) -width $val_w -fill $L(value_blue) -anchor w -justify left
                 dui add dbutton $page $btn_x1 $ry $btn_x2 [expr {$ry + $L(btn_h)}] \
                     -tags ${key}_btn -label [translate $btn_label] \
-                    -command ::dui::pages::GrindAdvisor_settings::$btn_cmd \
+                    -command [list ::plugins::GrindAdvisor::_tap $page ${key}_btn ::dui::pages::GrindAdvisor_settings::$btn_cmd] \
                     -label_font $L(font_button) -style ga_btn
                 incr row
             }
@@ -5518,7 +7014,7 @@ namespace eval ::dui::pages::GrindAdvisor_settings {
         set gmid [expr {$gy + $L(btn_h) / 2}]
         set glab_x [expr {$c2x + $L(sec_pad)}]
         set gval_x [expr {$c2x + $L(sec_value_dx)}]
-        dui add dtext $page $glab_x $gmid -tags conf_label -text [translate "Calibration Accuracy"] \
+        dui add dtext $page $glab_x $gmid -tags conf_label -text [translate "Confidence"] \
             -font $L(font_body) -width $L(sec_label_w) -fill $L(text_body) -anchor w -justify left
         set seg_y0 [expr {$gy + ($L(btn_h) - $L(conf_seg_h)) / 2}]
         set seg_y1 [expr {$seg_y0 + $L(conf_seg_h)}]
@@ -5531,26 +7027,61 @@ namespace eval ::dui::pages::GrindAdvisor_settings {
         dui add dtext $page $conf_text_x $gmid -tags conf_text -text "" \
             -font $L(font_caption) -width [expr {$c2x + $col_w - $L(sec_pad) - $conf_text_x}] \
             -fill $L(text_body) -anchor w -justify left
+        # v3.24.0 (F24): one next step under the row, below High only, from
+        # facts GA computes (refresh_confidence; "" when there is none).
+        # Top at the row's bottom edge, one caption line (conf_step_h), the
+        # card's inner width; the card's sec_pad stays below it.
+        dui add dtext $page $glab_x [expr {$gy + $L(btn_h)}] -tags conf_step -text "" \
+            -font $L(font_caption) -width [expr {$col_w - 2 * $L(sec_pad)}] \
+            -fill $L(text_body) -anchor nw -justify left
 
-        # Bottom bar unchanged, outside any card: Done left, Advanced right.
+        # Bottom bar, outside any card: Done left, Advanced right.
+        # v3.21.0 (F17): Help one slot left of Advanced, an md gap apart
+        # (BeanScanner's Diagnostics | Help), so Advanced keeps its corner.
+        # Tag ga_help: unique across plugins (the press flash repaints a
+        # same-named <tag>-btn on every page).
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
             -tags page_done -label [translate "Done"] \
-            -command ::dui::pages::GrindAdvisor_settings::page_done \
+            -command [list ::plugins::GrindAdvisor::_tap $page page_done ::dui::pages::GrindAdvisor_settings::page_done] \
             -label_font $L(font_button) -style ga_btn
         dui add dbutton $page [expr {$rx - $L(btn_w_std)}] $L(bar_y0) $rx $L(bar_y1) \
             -tags advanced -label [translate "Advanced"] \
-            -command {::plugins::GrindAdvisor::open_settings_dialog GrindAdvisor_advanced} \
+            -command [list ::plugins::GrindAdvisor::_tap $page advanced {::plugins::GrindAdvisor::open_settings_dialog GrindAdvisor_advanced}] \
             -label_font $L(font_button) -style ga_btn
+        set help_x1 [expr {$rx - $L(btn_w_std) - $L(md)}]
+        dui add dbutton $page [expr {$help_x1 - $L(btn_w_std)}] $L(bar_y0) $help_x1 $L(bar_y1) \
+            -tags ga_help -label [translate "Help"] \
+            -command [list ::plugins::GrindAdvisor::_tap $page ga_help {::plugins::GrindAdvisor::open_settings_dialog GrindAdvisor_help}] \
+            -label_font $L(font_button) -style ga_btn
+    }
+
+    # v3.17.4 (F22): the values are written before the page appears; the
+    # Calibration Accuracy gauge reads SDB (200 rows), so load parks it on
+    # "Reading shots..." and show fills it, as before (owner 2026-10-01:
+    # placeholder, then fill -- no added tap delay, never last visit's score).
+    proc load { page_to_hide page_to_show args } {
+        return [::plugins::GrindAdvisor::_page_load "settings page" $page_to_show {
+            ::plugins::GrindAdvisor::apply_defaults
+            _refresh_texts $page_to_show
+            _conf_placeholder $page_to_show
+        }]
     }
 
     proc show { page_to_hide page_to_show } {
         variable data
         ::plugins::GrindAdvisor::_capture_return_page $page_to_hide
+        if {![::plugins::GrindAdvisor::_page_is_current $page_to_show]} { return }
         ::plugins::GrindAdvisor::apply_defaults
         refresh_values $page_to_show
     }
 
     proc refresh_values {page} {
+        _refresh_texts $page
+        refresh_confidence $page
+    }
+
+    # Everything on the page that needs no database read.
+    proc _refresh_texts {page} {
         variable data
         set data(popup_theme_value) [string totitle $::plugins::GrindAdvisor::settings(popup_theme)]
         set data(rounding_value) $::plugins::GrindAdvisor::settings(grind_rounding_increment)
@@ -5562,30 +7093,53 @@ namespace eval ::dui::pages::GrindAdvisor_settings {
         catch { dui item config $page popup_theme_value -text $data(popup_theme_value) }
         catch { dui item config $page rounding_value -text $data(rounding_value) }
         catch { dui item config $page enable_popup_value -text $data(enable_popup_value) }
+        # v3.17.0 (F5): stepper values and their greyed ends.
+        foreach key {target_time grinder_min grinder_max} {
+            ::plugins::GrindAdvisor::_stepper_refresh $page $key
+        }
         # v3.12.0: page-theme button face follows the current theme.
         catch { dui item config $page btn_theme \
             -label [::plugins::GrindAdvisor::_theme_button_face] }
-        refresh_confidence $page
+    }
+
+    # v3.17.4 (F22): the gauge empty, its line reading "Reading shots...",
+    # until refresh_confidence has read SDB (in show).
+    proc _conf_placeholder {page} {
+        upvar #0 ::plugins::GrindAdvisor::L L
+        for {set i 0} {$i < $L(conf_segments)} {incr i} {
+            catch { dui item config $page conf_seg$i -fill $L(conf_empty) -outline $L(conf_empty) }
+        }
+        # v3.19.1: "Reading..." -- "Reading shots..." was wider than the
+        # 114 px gauge column and wrapped. v3.24.0 (F23): the one ellipsis
+        # glyph; the next step stays empty until show has read SDB.
+        catch { dui item config $page conf_text -text "[translate Reading][::plugins::GrindAdvisor::_char ellipsis]" }
+        catch { dui item config $page conf_step -text "" }
     }
 
     # Calibration Accuracy gauge (v2.1.0, display-only; read-only fetch).
     proc refresh_confidence {page} {
         upvar #0 ::plugins::GrindAdvisor::L L
-        set emdash [format %c 0x2014]
         set conf [::plugins::GrindAdvisor::calibration_confidence]
         if {[dict exists $conf ok] && [dict get $conf ok]} {
             set score [dict get $conf score]
             set filled [expr {int(round($score / 10.0))}]
-            set txt "$score% $emdash [dict get $conf band]"
+            # v3.19.0 (F15 plain words): the word the popup uses; the ten
+            # segments already show the score (Why? keeps the number). The
+            # old "85% - Excellent" was wider than this column.
+            set txt [string totitle [::plugins::GrindAdvisor::_band_plain [dict get $conf band]]]
         } else {
             set filled 0
-            set txt [translate "Not enough data"]
+            set txt [translate "Too few shots"]
         }
         for {set i 0} {$i < $L(conf_segments)} {incr i} {
-            set color [expr {$i < $filled ? $L(conf_fill) : $L(conf_empty)}]
+            set color $L(conf_empty)
+            if {$i < $filled} { set color $L(conf_fill) }
             catch { dui item config $page conf_seg$i -fill $color -outline $color }
         }
         catch { dui item config $page conf_text -text $txt }
+        # v3.24.0 (F24): the next step ("" at High and above, or with no
+        # grounded step; a dict without the key shows none).
+        catch { dui item config $page conf_step -text [::plugins::GrindAdvisor::_dget $conf step] }
     }
 
     proc toggle_enable_popup {} {
@@ -5630,68 +7184,129 @@ namespace eval ::dui::pages::GrindAdvisor_settings {
 }
 
 namespace eval ::dui::pages::GrindAdvisor_history_options {
-    # v2.0.0: two-column checkbox grid on the standard token layout.
+    # v3.17.1 (F19): three cards of full-row toggles in one row (was a
+    # two-column grid of 20 px dcheckboxes, box and label separate targets).
+    # Each 60 px row: label left, a square / square-check glyph right (value
+    # blue when on, muted when off), and one invisible core dbutton over the
+    # whole row -- MaintenanceTracker's card-tap mechanism: shape-less,
+    # label-less, no press fill. A tap flips the setting and saves at once,
+    # as the checkboxes did. The settings, grouped by what they show (v3.20.0
+    # adds Bag Name, the eleventh; every card still holds at most four rows).
+    # v3.24.0 (F23): every row label in sentence case.
+    variable groups {
+        sec_hgrind "Grind" {
+            history_show_set_grind "Set grind"
+            history_show_recommended_grind "Recommended grind"
+            history_show_reason "Recommendation reason"
+        }
+        sec_hdose "Dose and yield" {
+            history_show_set_dose "Set dose"
+            history_show_set_ratio "Set ratio"
+            history_show_set_yield "Set yield"
+            history_show_actual_yield "Actual yield"
+        }
+        sec_hshot "Shot" {
+            history_show_datetime "Date & time"
+            history_show_shot_time "Shot time"
+            history_show_bag_shot "Bag shot number"
+            history_show_bag_name "Bag name"
+        }
+    }
+
     proc setup {} {
+        variable groups
         set page [namespace tail [namespace current]]
         upvar #0 ::plugins::GrindAdvisor::L L
         ::plugins::GrindAdvisor::_page_bg $page
         set lx $L(left_x)
         set cx $L(center_x)
 
-        dui add dtext $page $cx $L(header_title_y) -tags page_title -text [translate "History Display Options"] \
+        dui add dtext $page $cx $L(header_title_y) -tags page_title -text [translate "History display options"] \
             -font $L(font_title) -width $L(content_w) -fill $L(text_hi) -anchor center -justify center
         dui add dtext $page $cx $L(header_subtitle_y) -tags subtitle \
             -text [translate "Choose which fields each history card shows."] \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor center -justify center
 
-        set i 0
-        foreach {key label} {
-            history_show_datetime "Date & Time"
-            history_show_set_grind "Set Grind"
-            history_show_recommended_grind "Recommended Grind"
-            history_show_set_dose "Set Dose"
-            history_show_set_ratio "Set Ratio"
-            history_show_set_yield "Set Yield"
-            history_show_actual_yield "Actual Yield"
-            history_show_shot_time "Shot Time"
-            history_show_reason "Recommendation Reason"
-            history_show_bag_shot "Bag Shot Number"
-        } {
-            set c [expr {$i / 5}]
-            set r [expr {$i % 5}]
-            set x [expr {$c == 0 ? $lx : $L(col2_x)}]
-            set y [expr {$L(list_top) + $r * $L(row_pitch) + $L(row_h) / 2}]
-            dui add dcheckbox $page $x $y -tags $key \
-                -textvariable ::plugins::GrindAdvisor::settings($key) \
-                -label [translate $label] -label_font $L(font_body) \
-                -command ::dui::pages::GrindAdvisor_history_options::save_settings
-            incr i
+        # Equal cards; the tallest holds four rows.
+        set card_w $L(hopt_card_w)
+        set card_h [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + 4 * $L(row_pitch) - $L(md)}]
+        set tog_font $L(font_body)
+        if {[::plugins::GrindAdvisor::_toggle_icons]} { set tog_font $L(font_icon) }
+        set c 0
+        foreach {tag title rows} $groups {
+            set x [expr {$lx + $c * ($card_w + $L(sec_gutter))}]
+            set rows_y [::plugins::GrindAdvisor::_sec_card $page $tag $x $L(sec_top) $card_w $card_h $title]
+            set x0 [expr {$x + $L(sec_pad)}]
+            set x1 [expr {$x + $card_w - $L(sec_pad)}]
+            set r 0
+            foreach {key label} $rows {
+                set ry [expr {$rows_y + $r * $L(row_pitch)}]
+                set mid [expr {$ry + $L(btn_h) / 2}]
+                dui add dtext $page $x0 $mid -tags ${key}_label -text [translate $label] \
+                    -font $L(font_body) -width [expr {$x1 - $L(tog_w) - $L(lg) - $x0}] \
+                    -fill $L(text_body) -anchor w -justify left
+                dui add dtext $page $x1 $mid -tags ${key}_tog \
+                    -text [::plugins::GrindAdvisor::_toggle_face [_on $key]] \
+                    -font $tog_font -fill [_tog_fill $key] -anchor e -justify right
+                # After the texts, so its tap rect sits above them.
+                dui add dbutton $page $x0 $ry $x1 [expr {$ry + $L(btn_h)}] \
+                    -tags ${key}_row \
+                    -command [list ::dui::pages::GrindAdvisor_history_options::toggle $key]
+                incr r
+            }
+            incr c
         }
 
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
-            -tags page_done -label [translate "Done"] \
-            -command ::dui::pages::GrindAdvisor_history_options::page_done \
+            -tags page_done -label [translate "Back"] \
+            -command [list ::plugins::GrindAdvisor::_tap $page page_done ::dui::pages::GrindAdvisor_history_options::page_done] \
             -label_font $L(font_button) -style ga_btn
+    }
+
+    proc _on {key} {
+        return [string is true -strict [::plugins::GrindAdvisor::_setting $key 0]]
+    }
+
+    proc _tog_fill {key} {
+        upvar #0 ::plugins::GrindAdvisor::L L
+        if {[_on $key]} { return $L(value_blue) }
+        return $L(text_mut)
+    }
+
+    # Every row's glyph and colour from its setting and the current palette
+    # (show, each tap, and the live theme switch).
+    proc render {page} {
+        variable groups
+        foreach {tag title rows} $groups {
+            foreach {key label} $rows {
+                catch { dui item config $page ${key}_tog \
+                    -text [::plugins::GrindAdvisor::_toggle_face [_on $key]] -fill [_tog_fill $key] }
+            }
+        }
+    }
+
+    proc toggle {key} {
+        set ::plugins::GrindAdvisor::settings($key) [expr {[_on $key] ? 0 : 1}]
+        ::plugins::GrindAdvisor::save_settings
+        render GrindAdvisor_history_options
     }
 
     proc show { page_to_hide page_to_show } {
         ::plugins::GrindAdvisor::apply_defaults
+        render $page_to_show
     }
 
-    proc save_settings {} {
-        ::plugins::GrindAdvisor::save_settings
-    }
-
+    # v3.17.2 (F13): Back, one level, to Advanced.
     proc page_done {} {
         ::plugins::GrindAdvisor::save_settings
-        ::plugins::GrindAdvisor::_exit_subpage
+        ::plugins::GrindAdvisor::_back_to_advanced
     }
 }
 
 namespace eval ::dui::pages::GrindAdvisor_advanced {
-    # v2.0.0: Advanced gathers the tuning entries plus every secondary page
-    # (History Display Options, Diagnostics, Calculation Details, Help).
-    # Entries sit in two columns in the top half for the Android keyboard.
+    # v2.0.0: Advanced gathers the popup tuning values plus every secondary
+    # page (History Display Options, Diagnostics, Calculation Details, Help).
+    # v3.17.0: the tuning values are steppers (no keyboard).
     proc setup {} {
         set page [namespace tail [namespace current]]
         upvar #0 ::plugins::GrindAdvisor::L L
@@ -5703,51 +7318,66 @@ namespace eval ::dui::pages::GrindAdvisor_advanced {
         dui add dtext $page $cx $L(header_title_y) -tags page_title -text [translate "Advanced"] \
             -font $L(font_title) -width $L(content_w) -fill $L(text_hi) -anchor center -justify center
         dui add dtext $page $cx $L(header_subtitle_y) -tags version_text \
-            -text "Grind Advisor $::plugins::GrindAdvisor::version \u2014 tuning and tools" \
+            -text "Grind Advisor $::plugins::GrindAdvisor::version[::plugins::GrindAdvisor::_sep]tuning and tools" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor center -justify center
 
         # v3.0.0 section cards. The Regression Forecast method has no user
-        # tuning (its constants are fixed), so only Popup Tuning remains,
-        # numeric entries in the top half of the screen, tools below.
+        # tuning (its constants are fixed). v3.17.0 (F5): the popup values
+        # are steppers. v3.17.3 (F18): grouped by purpose instead of a
+        # six-button Tools wall -- SETTINGS (left: the two popup values,
+        # then Dose / Yield Source and History Display Options) and INSPECT
+        # (right, under Shot Data: Diagnostics, Calculation Details, Help,
+        # Bag Stats in a 2x2 grid). Same buttons, tags and commands; the
+        # card tags sec_ptun / sec_tools are kept for the retheme walk.
+        # v3.21.0 (F17): Help moved to the main page; Inspect holds three.
         set col_w $L(sec_col_w)
         set c2x $L(sec_col2_x)
-        set ptun_h [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + 2 * $L(entry_row_pitch) - $L(md)}]
-        set tools_h [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + 3 * $L(row_pitch) - $L(md)}]
+        set ptun_h [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + 4 * $L(row_pitch) - $L(md)}]
+        set tools_h [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + 2 * $L(row_pitch) - $L(md)}]
 
-        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_ptun $lx $L(sec_top) $col_w $ptun_h "Popup Tuning"]
+        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_ptun $lx $L(sec_top) $col_w $ptun_h "Settings"]
         set lab_x [expr {$lx + $L(sec_pad)}]
-        set ent_x [expr {$lx + $L(sec_value_dx)}]
+        set step_x2 [expr {$lx + $col_w - $L(sec_pad)}]
         set row 0
         foreach {key label} {
             popup_delay_ms "Popup delay (ms)"
             popup_font_scale "Popup font scale"
         } {
-            set ry [expr {$rows_y + $row * $L(entry_row_pitch)}]
-            set mid [expr {$ry + $L(entry_row_h) / 2}]
-            dui add dtext $page $lab_x $mid -tags ${key}_label -text [translate $label] \
-                -font $L(font_body) -width $L(sec_label_w) -fill $L(text_body) -anchor w -justify left
-            dui add entry $page $ent_x $mid -tags $key \
-                -textvariable ::plugins::GrindAdvisor::settings($key) \
-                -width 8 -font $L(font_body) -canvas_anchor w \
-                -borderwidth 1 -bg $L(entry_bg) -foreground $L(value_blue) -relief flat
+            set ry [expr {$rows_y + $row * $L(row_pitch)}]
+            dui add dtext $page $lab_x [expr {$ry + $L(btn_h) / 2}] -tags ${key}_label \
+                -text [translate $label] -font $L(font_body) \
+                -width [expr {$step_x2 - $L(step_w) - $L(lg) - $lab_x}] \
+                -fill $L(text_body) -anchor w -justify left
+            ::plugins::GrindAdvisor::_add_stepper $page $key $step_x2 $ry
+            incr row
+        }
+        # v3.17.3 (F18): the two settings pages, full card width, rows 3-4.
+        # v3.24.0 (F23): button labels in sentence case, as the pages' titles.
+        foreach {tag label target} [list \
+            dose_yield_source "Dose / yield source" GrindAdvisor_dose_yield \
+            history_display_options "History display options" GrindAdvisor_history_options] {
+            set ry [expr {$rows_y + $row * $L(row_pitch)}]
+            dui add dbutton $page $lab_x $ry $step_x2 [expr {$ry + $L(btn_h)}] \
+                -tags $tag -label [translate $label] \
+                -command [list ::plugins::GrindAdvisor::_tap $page $tag [list ::plugins::GrindAdvisor::open_settings_dialog $target]] \
+                -label_font $L(font_button) -style ga_btn
             incr row
         }
 
-        # Shot Data card (v3.9.0), in the empty top-right quadrant beside
-        # Popup Tuning -- nothing else moves. One button plus a status line
+        # Shot Data card (v3.9.0), top right. One button plus a status line
         # that starts as its explanation and is replaced by the result.
-        # Height budget: pad, title, md, button, md, two caption lines, pad.
-        # It must END clear of the full-width Tools card below, so the note
-        # text is kept short enough not to wrap past two lines at this width.
+        # Height budget: pad, title, md, button, md, two caption lines, pad;
+        # the note is kept short enough not to wrap past two lines, so the
+        # card ends clear of the Inspect card below it.
         set data_note_h [expr {int(round(32 * $L(scale)))}]
         set data_h [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) \
                           + $L(btn_h) + $L(md) + $data_note_h}]
         set drows_y [::plugins::GrindAdvisor::_sec_card $page sec_data $c2x $L(sec_top) \
-            $col_w $data_h "Shot Data"]
+            $col_w $data_h "Shot data"]
         dui add dbutton $page [expr {$c2x + $L(sec_pad)}] $drows_y \
             [expr {$c2x + $col_w - $L(sec_pad)}] [expr {$drows_y + $L(btn_h)}] \
-            -tags recalc_from_history -label [translate "Recalculate from History"] \
-            -command ::dui::pages::GrindAdvisor_advanced::recalculate \
+            -tags recalc_from_history -label [translate "Recalculate from history"] \
+            -command [list ::plugins::GrindAdvisor::_tap $page recalc_from_history ::dui::pages::GrindAdvisor_advanced::recalculate] \
             -label_font $L(font_button) -style ga_btn
         dui add dtext $page [expr {$c2x + $L(sec_pad)}] \
             [expr {$drows_y + $L(btn_h) + $L(md)}] -tags recalc_note \
@@ -5755,65 +7385,160 @@ namespace eval ::dui::pages::GrindAdvisor_advanced {
             -font $L(font_caption) -width [expr {$col_w - 2 * $L(sec_pad)}] \
             -fill $L(text_mut) -anchor nw -justify left
 
-        # Tools card: full content width, 2x3 grid of buttons inside.
-        set tools_y [expr {$L(sec_top) + $ptun_h + $L(sec_gap)}]
-        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_tools $lx $tools_y $L(content_w) $tools_h "Tools"]
-        set inner_w [expr {$L(content_w) - 2 * $L(sec_pad)}]
+        # v3.17.3 (F18): INSPECT card, right column under Shot Data, 2x2
+        # grid of the read-only views (was the full-width "Tools" card).
+        set tools_y [expr {$L(sec_top) + $data_h + $L(sec_gap)}]
+        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_tools $c2x $tools_y $col_w $tools_h "Inspect"]
+        set inner_w [expr {$col_w - 2 * $L(sec_pad)}]
         set half_w [expr {($inner_w - $L(lg)) / 2}]
-        set bx0 [expr {$lx + $L(sec_pad)}]
+        set bx0 [expr {$c2x + $L(sec_pad)}]
         set bx1 [expr {$bx0 + $half_w + $L(lg)}]
+        # v3.21.0 (F17): Help left for the main page's bottom bar (one
+        # parent), so Bag Stats moves up into its slot: Diagnostics |
+        # Calculation Details over Bag Stats.
         foreach {c r tag label target} [list \
-            0 0 dose_yield_source "Dose / Yield Source" GrindAdvisor_dose_yield \
-            1 0 history_display_options "History Display Options" GrindAdvisor_history_options \
-            0 1 diagnostics "Diagnostics" GrindAdvisor_diagnostics \
-            1 1 calculation_details "Calculation Details" GrindAdvisor_calculation_details \
-            0 2 help_guide "Help / Guide" GrindAdvisor_help] {
+            0 0 diagnostics "Diagnostics" GrindAdvisor_diagnostics \
+            1 0 calculation_details "Calculation details" GrindAdvisor_calculation_details] {
             set bx [expr {$c == 0 ? $bx0 : $bx1}]
             set by [expr {$rows_y + $r * $L(row_pitch)}]
             dui add dbutton $page $bx $by [expr {$bx + $half_w}] [expr {$by + $L(btn_h)}] \
                 -tags $tag -label [translate $label] \
-                -command [list ::plugins::GrindAdvisor::open_settings_dialog $target] \
+                -command [list ::plugins::GrindAdvisor::_tap $page $tag [list ::plugins::GrindAdvisor::open_settings_dialog $target]] \
                 -label_font $L(font_button) -style ga_btn
         }
         # v3.6.0: Bag Stats opens the overlay card list (same mechanism as
-        # History), not a dui page, so it fills the free (row 2, col 2) slot
-        # with its own command.
-        set by [expr {$rows_y + 2 * $L(row_pitch)}]
-        dui add dbutton $page $bx1 $by [expr {$bx1 + $half_w}] [expr {$by + $L(btn_h)}] \
-            -tags bag_stats -label [translate "Bag Stats"] \
-            -command ::plugins::GrindAdvisor::show_bag_stats \
+        # History), not a dui page, so it has its own command.
+        set by [expr {$rows_y + $L(row_pitch)}]
+        dui add dbutton $page $bx0 $by [expr {$bx0 + $half_w}] [expr {$by + $L(btn_h)}] \
+            -tags bag_stats -label [translate "Bag stats"] \
+            -command [list ::plugins::GrindAdvisor::_tap $page bag_stats ::plugins::GrindAdvisor::show_bag_stats] \
             -label_font $L(font_button) -style ga_btn
 
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
-            -tags page_done -label [translate "Done"] \
-            -command ::dui::pages::GrindAdvisor_advanced::page_done \
+            -tags page_done -label [translate "Back"] \
+            -command [list ::plugins::GrindAdvisor::_tap $page page_done ::dui::pages::GrindAdvisor_advanced::page_done] \
             -label_font $L(font_button) -style ga_btn
     }
 
+    # v3.17.4 (F22): the note and stepper values are reset before the page
+    # appears (also on every Back from a tool page, a dui page load); show
+    # repeats it for the button states, which need the items visible.
+    proc load { page_to_hide page_to_show args } {
+        return [::plugins::GrindAdvisor::_page_load "Advanced" $page_to_show {
+            _refresh $page_to_show
+        }]
+    }
+
     proc show { page_to_hide page_to_show } {
+        if {![::plugins::GrindAdvisor::_page_is_current $page_to_show]} { return }
+        _refresh $page_to_show
+    }
+
+    proc _refresh {page} {
         ::plugins::GrindAdvisor::apply_defaults
+        foreach key {popup_delay_ms popup_font_scale} {
+            ::plugins::GrindAdvisor::_stepper_refresh $page $key
+        }
         # Back to the explanation: a status line from a previous visit would
         # read as the result of something that just happened.
-        catch { dui item config $page_to_show recalc_note -text [_default_note] }
+        # v3.16.8: unless a run is still going (the user left and came back
+        # while SDB was syncing): then the button stays greyed and the note
+        # says so until the next progress line replaces it.
+        variable recalc_running
+        # v3.23.0: back to the muted ink (a failure's danger ink is for the
+        # visit that saw it).
+        _note_ink $page 0
+        if {$recalc_running} {
+            catch { dui item disable $page recalc_from_history* }
+            catch { dui item config $page recalc_note -text [_working_note] }
+        } else {
+            catch { dui item config $page recalc_note -text [_default_note] }
+        }
+    }
+
+    # v3.24.0 (F23): "Working" and the one ellipsis glyph (was "...").
+    proc _working_note {} {
+        return "[translate Working][::plugins::GrindAdvisor::_char ellipsis]"
     }
 
     # Deliberately short: the card's note area is two caption lines, and a
-    # third would spill past the card into the Tools card below.
+    # third would spill past the card into the Inspect card below.
     proc _default_note {} {
         return [translate "Re-reads edited shots into SDB and recomputes this bag."]
     }
 
+    # v3.16.8 (F4): 1 while this button's run is in progress. Cleared in the
+    # finally below, so it can never stick.
+    variable recalc_running 0
+
+    # v3.16.8: SDB's progress line ("Synchronizing DB: 120/1203 (9%)") shown
+    # in the note while the run lasts; SDB repaints right after setting it.
+    proc _progress {args} {
+        catch { dui item config GrindAdvisor_advanced recalc_note \
+            -text $::plugins::SDB::progress_msg }
+    }
+
     # v3.9.0. The whole chain lives in ::plugins::GrindAdvisor::refresh_from
     # _history; this only reports what it did.
+    # v3.16.8 (F4): one run at a time, the way SDB's own Resync works: a tap
+    # that arrives while SDB is syncing (populate yields every ten files)
+    # does nothing if it is this button's own run, and is refused with a
+    # note if SDB is busy for another reason; the button is disabled for the
+    # run (dui item disable, SDB_settings::resync_db's call) and the note
+    # follows SDB's progress_msg. Everything is restored in `finally`.
     proc recalculate {} {
-        catch { dui item config GrindAdvisor_advanced recalc_note \
-            -text [translate "Working..."] }
-        set status ""
-        if {[catch { set status [::plugins::GrindAdvisor::refresh_from_history] } err]} {
-            catch { msg "GrindAdvisor: recalculate failed: $err" }
-            set status [translate "Failed - see the app log"]
+        variable recalc_running
+        set page GrindAdvisor_advanced
+        if {$recalc_running} { return }
+        if {[::plugins::GrindAdvisor::_sdb_busy]} {
+            _note_ink $page 0
+            catch { dui item config $page recalc_note \
+                -text [translate "SDB is updating its database. Try again when it finishes."] }
+            catch { msg "GrindAdvisor: recalculate refused, SDB is busy" }
+            return
         }
-        catch { dui item config GrindAdvisor_advanced recalc_note -text $status }
+        set recalc_running 1
+        set traced 0
+        set status ""
+        set failed 0
+        try {
+            dui item disable $page recalc_from_history*
+            catch { dui item config $page recalc_note -text [_working_note] }
+            if {[info exists ::plugins::SDB::progress_msg]} {
+                trace add variable ::plugins::SDB::progress_msg write \
+                    ::dui::pages::GrindAdvisor_advanced::_progress
+                set traced 1
+            }
+            if {[catch { set status [::plugins::GrindAdvisor::refresh_from_history] } err]} {
+                catch { msg "GrindAdvisor: recalculate failed: $err" }
+                set status [translate "Failed: see the app log"]
+                set failed 1
+            } elseif {$::plugins::GrindAdvisor::refresh_failed} {
+                set failed 1
+            }
+        } finally {
+            # The flag first: nothing after it can leave the button blocked.
+            set recalc_running 0
+            if {$traced} {
+                catch { trace remove variable ::plugins::SDB::progress_msg write \
+                    ::dui::pages::GrindAdvisor_advanced::_progress }
+            }
+            catch { dui item enable $page recalc_from_history* }
+            # v3.23.0 (F21): a failure reads in the danger role; anything
+            # else stays muted (_refresh puts the muted ink back on load).
+            _note_ink $page $failed
+            catch { dui item config $page recalc_note -text $status }
+        }
+    }
+
+    # The note's ink: danger after a failure, else muted (the page's
+    # palette at the time of the call).
+    proc _note_ink {page failed} {
+        upvar #0 ::plugins::GrindAdvisor::L L
+        if {![info exists L(text_mut)] || ![info exists L(danger)]} { return }
+        set ink $L(text_mut)
+        if {$failed} { set ink $L(danger) }
+        catch { dui item config $page recalc_note -fill $ink }
     }
 
     proc page_done {} {
@@ -5823,6 +7548,39 @@ namespace eval ::dui::pages::GrindAdvisor_advanced {
 }
 
 namespace eval ::dui::pages::GrindAdvisor_help {
+    # v3.21.0 (design review F17): Help in plain words -- three headed
+    # sections, one per page (the card title is the section name), each
+    # paragraph wrapped at <= 90 characters (the old guide ran 130-160 and
+    # explained rungs, damping and decay constants; those live in the README
+    # and under Why? / Calculation Details). Opened from the main page's
+    # Help button; Back returns there (one load, its only parent).
+    variable wrap_chars 90
+    variable sections {
+        "What it does" {
+            {After every espresso, Grind Advisor reads the shot you just pulled and suggests the grind setting for your next one.}
+            {It learns from the shots of the bag you have loaded: one shot gives a first nudge, two show how your coffee reacts, and from three shots on it fits a line through them and aims at your target time. A new bag, or a different profile, starts fresh.}
+            {As on most grinders, a lower number means finer: "finer by 0.5" is 0.5 lower.}
+            {It only reads your shots. It never edits them and never changes anything on the machine.}
+        }
+        "Daily use" {
+            {Pull a shot as usual. A moment later a card shows the next grind and how sure it is, for example "finer by 0.5".}
+            {Set your grinder to that number, enter the same number as the grind in the app (your skin's grind setting, or DYE), and pull the next shot. Grind Advisor learns from the grind saved with each shot.}
+            {Confidence rises as the bag collects shots that land near your target time.}
+            {Why? on the card shows how the number was worked out. History lists your recent shots with the grind each one suggested; Bag stats compares your bags.}
+            {A new bag with no shots yet shows a starting estimate ("Start ~4.8") borrowed from bags you have already dialled in on the same profile.}
+            {On the main page: your target shot time, your grinder's lowest and highest numbers, how finely the grind is rounded, and the popup's theme and whether it opens by itself.}
+        }
+        "If something looks wrong" {
+            {No card after a shot: check that Automatic popup is On. Rinses, flushes, steam, cleaning and shots under 5 seconds are skipped on purpose, and so is a shot saved without a grind, dose or target yield.}
+            {Advice for the wrong coffee, or it starts over: it follows the coffee loaded in the app (bean, roaster and roast date) and the profile. Changing any of them starts fresh, like a new bag.}
+            {"Out of reach": even the end of your grinder cannot reach the target time. Change the dose or the yield instead.}
+            {"Much faster than recent shots at this grind": check your puck prep.}
+            {"4 of 5 shots": a shot whose dose or yield missed its target by more than 2 g is left out.}
+            {You edited a shot in another plugin: Advanced > Recalculate from history.}
+            {The full working is under Why? and Advanced > Calculation details.}
+        }
+    }
+
     proc setup {} {
         set page [namespace tail [namespace current]]
         upvar #0 ::plugins::GrindAdvisor::L L
@@ -5830,61 +7588,92 @@ namespace eval ::dui::pages::GrindAdvisor_help {
         set lx $L(left_x)
         set cx $L(center_x)
 
-        dui add dtext $page $cx $L(header_title_y) -tags page_title -text [translate "Help / Guide"] \
+        dui add dtext $page $cx $L(header_title_y) -tags page_title -text [translate "Help"] \
             -font $L(font_title) -width $L(content_w) -fill $L(text_hi) -anchor center -justify center
         dui add dtext $page $cx $L(header_subtitle_y) -tags version_text \
             -text "Grind Advisor $::plugins::GrindAdvisor::version" \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor center -justify center
 
-        set body [join [list \
-            "Grind Advisor reads recent SDB shot data and recommends the next grinder setting after a completed espresso shot." \
-            "" \
-            "Target shot time is the time you want the espresso shot to take." \
-            "Grind rounding increment controls how recommendations are rounded, such as 0.5 or 0.1." \
-            "Grinder minimum and maximum keep recommendations inside your grinder scale." \
-            "" \
-            "Higher or lower grind numbers can mean coarser or finer depending on your grinder; the method learns your grinder's direction from your shots, so you never set it." \
-            "" \
-            "The method (one built-in Regression Forecast ladder, not selectable): with 1 shot of a bag it nudges the grind from the time error; with 2 shots it measures your bean's seconds-per-grind from the pair; with 3 or more it fits a line through every shot of the bag (weighing recent shots more) and solves it for the grind that lands on your target time. Accuracy grows as shots accumulate, and it resets when the bag changes." \
-            "Reason strings tell you which rung was used: 'First shot', '2-shot calibration', 'Regression over N shots' (with the learned slope and predicted time), or 'Regression fallback: <why>' when there isn't enough spread to fit a line yet." \
-            "Internal constants (fixed, not settings): default 3.0 s per grind step, 0.5 damping for the 1-2 shot rungs, 0.85 recency decay, 1.8 s/g dose sensitivity, 2.0 g outlier threshold, and 3 shots minimum before regression." \
-            "" \
-            "New-bag starting estimate: a bag with no shots yet shows 'Start ~X (est. from N bags)' instead of nothing. The number is borrowed from bags already calibrated on the same profile, trying in order: the same coffee (same bean and roaster, an earlier bag), then the same roaster (median of its bags' ideal grinds), then this profile (median of the 6 most recently used bags). Only bags whose fit converged (the Bag Stats trust gate: 4+ shots, enough grind spread, a real slope) count; with no match the tile stays empty as before. It is an estimate, not a calibration: it never enters the regression, never counts as a shot, and Calibration Accuracy ignores it. The first real shot replaces it through the normal First shot rung." \
-            "" \
-            "Calibration Accuracy is a display-only confidence score from 0 to 100. It combines evidence (how many valid shots of the same bag or recipe feed the calibration; full credit at 5) with consistency (how close those recent shots landed to your target time; a 0s average error scores full, 10s or more scores zero), weighted 40/60. Fewer than 2 relevant shots shows Not enough data, and a new bag resets the score exactly like it resets calibration. More consistent shots on the same beans raise it; erratic times or a bean change lower it. It never changes the recommendation itself." \
-            "" \
-            "Dose / Yield Source (Advanced) chooses which dose and yield the plugin reports. Fixed uses your set dose and target yield. Actual uses the measured dose and final yield when present. Auto (default) uses measured values only when they pass plausibility (dose within Dose min/max, ratio within Ratio min/max), otherwise it falls back to the set values; a missing or zero measurement always falls back. The popup, reason line, and Diagnostics always state which source was used, e.g. 'dose: actual 18.4g' or 'dose: set 18.0g (actual 0.0g rejected)'. The grind recommendation is based on shot time only, so this choice never changes the recommended grind."] "\n"]
-
-        variable data
-        set data(full_text) $body
-
         set card_h [expr {$L(bar_y0) - $L(md) - $L(sec_top)}]
-        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_help $lx $L(sec_top) $L(content_w) $card_h "Guide"]
-        # v3.6.0: text is paginated (the full guide is ~2 cards tall and
-        # used to clip under the bottom bar); Prev/Next flip pages.
+        variable sections
+        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_help $lx $L(sec_top) $L(content_w) $card_h \
+            [lindex $sections 0]]
+        # v3.6.0: text is paginated; v3.21.0: one section per page, its name
+        # the card title (sec_help_title), Prev/Next flip sections.
         dui add dtext $page [expr {$lx + $L(sec_pad)}] $rows_y -tags help_text -text "" \
             -font $L(font_body) -width [expr {$L(content_w) - 2 * $L(sec_pad)}] -fill $L(text_body) -anchor nw -justify left
 
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
-            -tags page_done -label [translate "Done"] \
-            -command ::dui::pages::GrindAdvisor_help::page_done \
+            -tags page_done -label [translate "Back"] \
+            -command [list ::plugins::GrindAdvisor::_tap $page page_done ::dui::pages::GrindAdvisor_help::page_done] \
             -label_font $L(font_button) -style ga_btn
         ::plugins::GrindAdvisor::_add_pager $page [namespace current]
     }
 
+    # v3.17.4 (F22): page 1 is written before the page appears (it showed
+    # the page the user left on, then jumped); the pager state, a raw -state
+    # config, stays in show.
+    proc load { page_to_hide page_to_show args } {
+        return [::plugins::GrindAdvisor::_page_load "Help" $page_to_show {
+            variable data
+            _first_page
+            _render_text $page_to_show
+            ::plugins::GrindAdvisor::_pager_initial $page_to_show 0 [llength $data(pages)]
+        }]
+    }
+
     proc show { page_to_hide page_to_show } {
-        variable data
-        set data(pages) [::plugins::GrindAdvisor::_paginate_text $data(full_text) 19 115]
-        set data(page_idx) 0
+        if {![::plugins::GrindAdvisor::_page_is_current $page_to_show]} { return }
+        _first_page
         _render $page_to_show
+    }
+
+    # v3.21.0: one page per section, paragraphs wrapped at wrap_chars and
+    # separated by a blank line. A section that ever outgrows the card (a
+    # longer translation, a bigger font) continues on a page titled
+    # "<section> (2)" instead of clipping.
+    proc _first_page {} {
+        variable data
+        variable sections
+        variable wrap_chars
+        set data(pages) {}
+        set data(titles) {}
+        foreach {title paras} $sections {
+            set lines {}
+            foreach para $paras {
+                if {[llength $lines] > 0} { lappend lines "" }
+                # Not translated, like the guide before it: a desktop build
+                # appends every translation miss to translation.tcl.
+                lappend lines [::plugins::GrindAdvisor::_wrap_text $para $wrap_chars]
+            }
+            set n 0
+            foreach pg [::plugins::GrindAdvisor::_paginate_text [join $lines "\n"] 19 $wrap_chars] {
+                incr n
+                lappend data(pages) $pg
+                if {$n == 1} {
+                    lappend data(titles) [translate $title]
+                } else {
+                    lappend data(titles) "[translate $title] ($n)"
+                }
+            }
+        }
+        set data(page_idx) 0
+    }
+
+    proc _render_text {page} {
+        variable data
+        set total [llength $data(pages)]
+        catch { dui item config $page help_text -text [lindex $data(pages) $data(page_idx)] }
+        catch { dui item config $page sec_help_title -text [lindex $data(titles) $data(page_idx)] }
+        # v3.23.0 (F21): "Page 1 of 3" ("" for one page), every pager.
+        set ind [::plugins::GrindAdvisor::_page_count $data(page_idx) $total]
+        catch { dui item config $page pg_ind -text $ind }
     }
 
     proc _render {page} {
         variable data
-        set total [llength $data(pages)]
-        catch { dui item config $page help_text -text [lindex $data(pages) $data(page_idx)] }
-        set ind [expr {$total > 1 ? "Page [expr {$data(page_idx) + 1}] / $total" : ""}]
-        catch { dui item config $page pg_ind -text $ind }
+        _render_text $page
+        ::plugins::GrindAdvisor::_pager_state $page $data(page_idx) [llength $data(pages)]
     }
 
     proc _pg {delta} {
@@ -5895,6 +7684,9 @@ namespace eval ::dui::pages::GrindAdvisor_help {
         _render GrindAdvisor_help
     }
 
+    # v3.21.0 (F17): Help's one parent is the main page (its Help button),
+    # so Back is one load of GrindAdvisor_settings -- Advanced's own proven
+    # Back (_exit_subpage). It no longer opens from Advanced.
     proc page_done {} {
         ::plugins::GrindAdvisor::_exit_subpage
     }
@@ -5920,19 +7712,28 @@ namespace eval ::dui::pages::GrindAdvisor_diagnostics {
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor center -justify center
 
         set card_h [expr {$L(bar_y0) - $L(md) - $L(sec_top)}]
-        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_diag $lx $L(sec_top) $L(content_w) $card_h "Detected Fields"]
+        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_diag $lx $L(sec_top) $L(content_w) $card_h "Detected fields"]
         dui add dtext $page [expr {$lx + $L(sec_pad)}] $rows_y -tags diagnostics_text -text "" \
             -font $L(font_body) -width [expr {$L(content_w) - 2 * $L(sec_pad)}] -fill $L(text_body) -anchor nw -justify left
 
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
-            -tags page_done -label [translate "Done"] \
-            -command ::dui::pages::GrindAdvisor_diagnostics::page_done \
+            -tags page_done -label [translate "Back"] \
+            -command [list ::plugins::GrindAdvisor::_tap $page page_done ::dui::pages::GrindAdvisor_diagnostics::page_done] \
             -label_font $L(font_button) -style ga_btn
         ::plugins::GrindAdvisor::_add_pager $page [namespace current]
     }
 
+    # v3.17.4 (F22): the fields come from SDB schema reads, so load parks the
+    # text on a placeholder (never the last visit's fields) and show reads.
+    proc load { page_to_hide page_to_show args } {
+        return [::plugins::GrindAdvisor::_page_load "Diagnostics" $page_to_show {
+            ::plugins::GrindAdvisor::_reading_placeholder $page_to_show diagnostics_text
+        }]
+    }
+
     proc show { page_to_hide page_to_show } {
         variable data
+        if {![::plugins::GrindAdvisor::_page_is_current $page_to_show]} { return }
         set data(pages) [::plugins::GrindAdvisor::_paginate_text \
             [::plugins::GrindAdvisor::detected_fields_text] 19 115]
         set data(page_idx) 0
@@ -5943,8 +7744,9 @@ namespace eval ::dui::pages::GrindAdvisor_diagnostics {
         variable data
         set total [llength $data(pages)]
         catch { dui item config $page diagnostics_text -text [lindex $data(pages) $data(page_idx)] }
-        set ind [expr {$total > 1 ? "Page [expr {$data(page_idx) + 1}] / $total" : ""}]
+        set ind [::plugins::GrindAdvisor::_page_count $data(page_idx) $total]
         catch { dui item config $page pg_ind -text $ind }
+        ::plugins::GrindAdvisor::_pager_state $page $data(page_idx) $total
     }
 
     proc _pg {delta} {
@@ -5955,8 +7757,9 @@ namespace eval ::dui::pages::GrindAdvisor_diagnostics {
         _render GrindAdvisor_diagnostics
     }
 
+    # v3.17.2 (F13): Back, one level, to Advanced.
     proc page_done {} {
-        ::plugins::GrindAdvisor::_exit_subpage
+        ::plugins::GrindAdvisor::_back_to_advanced
     }
 }
 
@@ -5973,28 +7776,37 @@ namespace eval ::dui::pages::GrindAdvisor_calculation_details {
         set lx $L(left_x)
         set cx $L(center_x)
 
-        dui add dtext $page $cx $L(header_title_y) -tags page_title -text [translate "Calculation Details"] \
+        dui add dtext $page $cx $L(header_title_y) -tags page_title -text [translate "Calculation details"] \
             -font $L(font_title) -width $L(content_w) -fill $L(text_hi) -anchor center -justify center
         dui add dtext $page $cx $L(header_subtitle_y) -tags subtitle \
             -text [translate "How the latest recommendation was computed. Read-only."] \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor center -justify center
 
         set card_h [expr {$L(bar_y0) - $L(md) - $L(sec_top)}]
-        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_calcd $lx $L(sec_top) $L(content_w) $card_h "Latest Calculation"]
+        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_calcd $lx $L(sec_top) $L(content_w) $card_h "Latest calculation"]
         # v2.2.0: caption font so the per-shot trace fits below the summary
         # block without overflowing the card.
         dui add dtext $page [expr {$lx + $L(sec_pad)}] $rows_y -tags calculation_text -text "" \
             -font $L(font_caption) -width [expr {$L(content_w) - 2 * $L(sec_pad)}] -fill $L(text_body) -anchor nw -justify left
 
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
-            -tags page_done -label [translate "Done"] \
-            -command ::dui::pages::GrindAdvisor_calculation_details::page_done \
+            -tags page_done -label [translate "Back"] \
+            -command [list ::plugins::GrindAdvisor::_tap $page page_done ::dui::pages::GrindAdvisor_calculation_details::page_done] \
             -label_font $L(font_button) -style ga_btn
         ::plugins::GrindAdvisor::_add_pager $page [namespace current]
     }
 
+    # v3.17.4 (F22): the calculation reads SDB twice, so load parks the text
+    # on a placeholder (never the last visit's numbers) and show reads.
+    proc load { page_to_hide page_to_show args } {
+        return [::plugins::GrindAdvisor::_page_load "Calculation details" $page_to_show {
+            ::plugins::GrindAdvisor::_reading_placeholder $page_to_show calculation_text
+        }]
+    }
+
     proc show { page_to_hide page_to_show } {
         variable data
+        if {![::plugins::GrindAdvisor::_page_is_current $page_to_show]} { return }
         # v3.6.0: summary + 5-shot trace is ~1.5 cards tall at caption
         # size and used to clip under the bottom bar; now paginated.
         set data(pages) [::plugins::GrindAdvisor::_paginate_text \
@@ -6007,8 +7819,9 @@ namespace eval ::dui::pages::GrindAdvisor_calculation_details {
         variable data
         set total [llength $data(pages)]
         catch { dui item config $page calculation_text -text [lindex $data(pages) $data(page_idx)] }
-        set ind [expr {$total > 1 ? "Page [expr {$data(page_idx) + 1}] / $total" : ""}]
+        set ind [::plugins::GrindAdvisor::_page_count $data(page_idx) $total]
         catch { dui item config $page pg_ind -text $ind }
+        ::plugins::GrindAdvisor::_pager_state $page $data(page_idx) $total
     }
 
     proc _pg {delta} {
@@ -6019,14 +7832,15 @@ namespace eval ::dui::pages::GrindAdvisor_calculation_details {
         _render GrindAdvisor_calculation_details
     }
 
+    # v3.17.2 (F13): Back, one level, to Advanced.
     proc page_done {} {
-        ::plugins::GrindAdvisor::_exit_subpage
+        ::plugins::GrindAdvisor::_back_to_advanced
     }
 }
 
 namespace eval ::dui::pages::GrindAdvisor_dose_yield {
     # v2.3.0 sub-page (under Advanced). Mode selector + the four plausibility
-    # bounds, all numeric inputs kept in the top half of the screen.
+    # bounds (steppers since v3.17.0).
     variable data
     array set data { mode_value {} }
 
@@ -6036,16 +7850,16 @@ namespace eval ::dui::pages::GrindAdvisor_dose_yield {
         ::plugins::GrindAdvisor::_page_bg $page
         set lx $L(left_x); set rx $L(right_x); set cx $L(center_x)
 
-        dui add dtext $page $cx $L(header_title_y) -tags page_title -text [translate "Dose / Yield Source"] \
+        dui add dtext $page $cx $L(header_title_y) -tags page_title -text [translate "Dose / yield source"] \
             -font $L(font_title) -width $L(content_w) -fill $L(text_hi) -anchor center -justify center
         dui add dtext $page $cx $L(header_subtitle_y) -tags subtitle \
             -text [translate "Whether recommendations report set or measured dose and yield."] \
             -font $L(font_caption) -width $L(content_w) -fill $L(text_mut) -anchor center -justify center
 
         # One full-width card: mode selector row, then the 4 bounds in two
-        # columns (all entry centers land above y=800, the top half).
-        set card_h [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + $L(btn_h) + $L(md) + 2 * $L(entry_row_pitch) - $L(md)}]
-        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_dy $lx $L(sec_top) $L(content_w) $card_h "Source Mode"]
+        # columns. v3.17.0 (F5): steppers, each right-aligned in its column.
+        set card_h [expr {2 * $L(sec_pad) + $L(sec_title_h) + $L(md) + $L(btn_h) + $L(md) + 2 * $L(row_pitch) - $L(md)}]
+        set rows_y [::plugins::GrindAdvisor::_sec_card $page sec_dy $lx $L(sec_top) $L(content_w) $card_h "Source mode"]
 
         set mid [expr {$rows_y + $L(btn_h) / 2}]
         # v3.6.2: the button's right edge is inset by sec_pad so it keeps
@@ -6061,30 +7875,26 @@ namespace eval ::dui::pages::GrindAdvisor_dose_yield {
             -fill $L(value_blue) -anchor w -justify left
         dui add dbutton $page $btn_x1 $rows_y $btn_x2 [expr {$rows_y + $L(btn_h)}] \
             -tags mode_btn -label [translate "Next"] \
-            -command ::dui::pages::GrindAdvisor_dose_yield::cycle_mode \
+            -command [list ::plugins::GrindAdvisor::_tap $page mode_btn ::dui::pages::GrindAdvisor_dose_yield::cycle_mode] \
             -label_font $L(font_button) -style ga_btn
 
-        set entries_top [expr {$rows_y + $L(btn_h) + $L(md)}]
+        set steppers_top [expr {$rows_y + $L(btn_h) + $L(md)}]
+        set in_x0 [expr {$lx + $L(sec_pad)}]
+        set in_x1 [expr {$rx - $L(sec_pad)}]
+        set dcol_w [expr {($in_x1 - $in_x0 - $L(lg)) / 2}]
         foreach {c r key label} [list \
             0 0 dose_min  "Dose min (g)" \
             1 0 ratio_min "Ratio min" \
             0 1 dose_max  "Dose max (g)" \
             1 1 ratio_max "Ratio max"] {
-            if {$c == 0} {
-                set label_x [expr {$lx + $L(sec_pad)}]
-                set entry_x [expr {$lx + $L(sec_value_dx)}]
-            } else {
-                set label_x $L(col2_x)
-                set entry_x $L(col2_value_x)
-            }
-            set ry [expr {$entries_top + $r * $L(entry_row_pitch)}]
-            set emid [expr {$ry + $L(entry_row_h) / 2}]
-            dui add dtext $page $label_x $emid -tags ${key}_label -text [translate $label] \
-                -font $L(font_body) -width $L(sec_label_w) -fill $L(text_body) -anchor w -justify left
-            dui add entry $page $entry_x $emid -tags $key \
-                -textvariable ::plugins::GrindAdvisor::settings($key) \
-                -width 8 -font $L(font_body) -canvas_anchor w \
-                -borderwidth 1 -bg $L(entry_bg) -foreground $L(value_blue) -relief flat
+            set label_x [expr {$c == 0 ? $in_x0 : $in_x0 + $dcol_w + $L(lg)}]
+            set step_x2 [expr {$label_x + $dcol_w}]
+            set ry [expr {$steppers_top + $r * $L(row_pitch)}]
+            dui add dtext $page $label_x [expr {$ry + $L(btn_h) / 2}] -tags ${key}_label \
+                -text [translate $label] -font $L(font_body) \
+                -width [expr {$step_x2 - $L(step_w) - $L(lg) - $label_x}] \
+                -fill $L(text_body) -anchor w -justify left
+            ::plugins::GrindAdvisor::_add_stepper $page $key $step_x2 $ry
         }
 
         set cap_y [expr {$L(sec_top) + $card_h + $L(sec_gap)}]
@@ -6093,12 +7903,22 @@ namespace eval ::dui::pages::GrindAdvisor_dose_yield {
             -text [translate "Fixed always uses your set dose and target yield. Actual uses the measured dose and final yield when present. Auto uses measured values only when the dose is within Dose min/max and the ratio (yield/dose) is within Ratio min/max, otherwise it falls back to the set values; a missing or zero measurement always falls back. Plausibility bounds apply to Auto only. This choice affects what the popup, reason line, and Diagnostics report; it does not change the grind recommendation itself."]
 
         dui add dbutton $page $lx $L(bar_y0) [expr {$lx + $L(btn_w_std)}] $L(bar_y1) \
-            -tags page_done -label [translate "Done"] \
-            -command ::dui::pages::GrindAdvisor_dose_yield::page_done \
+            -tags page_done -label [translate "Back"] \
+            -command [list ::plugins::GrindAdvisor::_tap $page page_done ::dui::pages::GrindAdvisor_dose_yield::page_done] \
             -label_font $L(font_button) -style ga_btn
     }
 
+    # v3.17.4 (F22): the mode and bounds are written before the page appears
+    # (the mode used to paint blank on the first visit).
+    proc load { page_to_hide page_to_show args } {
+        return [::plugins::GrindAdvisor::_page_load "Dose / yield source" $page_to_show {
+            ::plugins::GrindAdvisor::apply_defaults
+            refresh_values $page_to_show
+        }]
+    }
+
     proc show { page_to_hide page_to_show } {
+        if {![::plugins::GrindAdvisor::_page_is_current $page_to_show]} { return }
         ::plugins::GrindAdvisor::apply_defaults
         refresh_values $page_to_show
     }
@@ -6107,6 +7927,9 @@ namespace eval ::dui::pages::GrindAdvisor_dose_yield {
         variable data
         set data(mode_value) [::plugins::GrindAdvisor::_dose_yield_mode_label $::plugins::GrindAdvisor::settings(dose_yield_mode)]
         catch { dui item config $page mode_value -text $data(mode_value) }
+        foreach key {dose_min dose_max ratio_min ratio_max} {
+            ::plugins::GrindAdvisor::_stepper_refresh $page $key
+        }
     }
 
     proc cycle_mode {} {
@@ -6119,9 +7942,10 @@ namespace eval ::dui::pages::GrindAdvisor_dose_yield {
         refresh_values GrindAdvisor_dose_yield
     }
 
+    # v3.17.2 (F13): Back, one level, to Advanced.
     proc page_done {} {
         ::plugins::GrindAdvisor::save_settings
-        ::plugins::GrindAdvisor::_exit_subpage
+        ::plugins::GrindAdvisor::_back_to_advanced
     }
 }
 

@@ -4,6 +4,346 @@ Entries follow the CLAUDE.md doc cap (about 15 lines each; entries that added or
 capability keep their full write-path description). The long pre-trim entries survive in the
 Desktop archive snapshot of each version ("GrindAdvisor Archive/GrindAdvisor vX.Y.Z").
 
+## v3.24.0 (one way of writing, a next step under Confidence, F23 + F24 + F26) - 2026-10-02 - TABLET-VERIFIED 17:50 (verify.sh PASS run 2; run 1 failed only on a checks.json encoding slip, see below)
+
+Base: v3.23.0 (on the tablet). Feature, minor (the F24 line is new). Protocol lane (preload's settings write goes). Batch F23-F26.
+- F23 copy: sentence case on every title, button and label (Shot settings, Bag stats, History display options and its 11 rows,
+  Dose / yield source, Source mode, Shot data, Recalculate from history, Calculation details, Latest calculation, Detected
+  fields, Recent shot history, Calibration curve); a bag reads "Bean · Roaster · Profile" (was an em dash before the profile);
+  Advanced's subtitle "Grind Advisor 3.24.0  ·  tuning and tools"; "Reading…" / "Working…" / "Reading the shot database…"
+  from one `_char ellipsis` helper (also `_fit_text`); Why? "Medium (40%)" (was "40% (medium)"); ": " for a state and its
+  reason ("New bag: pull a shot…", "Failed: see the app log", Diagnostics' "(stale: …)"); en-dash ranges in Diagnostics; the
+  trace's " | " is a middle dot and its "->" the arrow, as in the toast; no shouting ("SDB resync failed", "out of the grinder
+  range"). Help names the new labels.
+- F24: under Confidence, below High only, one caption line from facts GA computes for the latest shot's bag: out of reach ->
+  "28 s is out of reach by grind: change dose or yield."; fewer than GA_FIT_MIN_SHOTS 4 eligible shots (Bag stats' own minimum,
+  now one constant) -> "Pull N more shots on this bag for a steadier fit."; else, another bag loaded, or no bag: nothing. The
+  Recommendation card grows one caption line (conf_step_h 40); the right column still ends above the left.
+- F26: preload no longer calls `plugins save_settings`; the first real change saves every default with it.
+- Verify run 1 failed only because the checks.json was re-saved with a raw middle dot that checks.py reads in the Windows
+  code page; the file is ASCII again (· escapes). Screens checked on run 2.
+- Tests: pass_3.24.0_offline.tcl (v3.23.0 fails 31); updated 3.16.8, 3.17.3, 3.17.4, 3.18.2, 3.19.1, 3.20.0, 3.21.0, 3.23.0.
+
+**Safety status:** no new write; files written unchanged (settings.tdb now only on a real change). SELECT only.
+
+## v3.23.0 (full-size text, shared status colours, dates and counts, F8 + F21) - 2026-10-02 - TABLET-VERIFIED 2026-10-02 08:36 (verify.sh PASS run 1, run by Claude; main, History Options, Help, History, Bag Stats, glass popup screenshots checked)
+
+Base: v3.22.0 (on the tablet). Feature, minor. Protocol lane (layout init, a new page-note colour state). Batch F8 + F21.
+- F8: page fonts scale from `dui cget screen_size_height` (800; coordinates use it too), never `winfo screenheight`
+  (736: every page font at 92%); "" / missing / non-number -> 800. Title 37->40, body 17->19, button 18->20, icon 24->26.
+  _pgeom's last resort is the same source (else 1340x800). Overlays were already at 1.0: unchanged.
+- F21 colours: one `_status_roles` table (ok #2FD3A4/#086750, warn #E8B34C/#7a4b00, danger #ff8a80/#962219, info
+  #8ab4ff/#2753bb) read by _apply_palette and all four `_colors` families; good -> ok, the Curve's green accent -> info;
+  value_blue and the gauge fill = info (light gauge 2.85 -> 5.53:1). A failed Recalculate paints its note danger.
+- F21 dates: shared _fmt_when / _fmt_day / _fmt_time / _fmt_ago (Lumen 12/24 h + dmy/mdy, else enable_ampm) replace
+  _format_clock and _bag_date_short; History l2 + a "4 days ago" column (ends on one column, `_draw_card_page`);
+  Bag Stats ranges date-only with an en dash; Calculation Details trace.
+- F21 counts: _plural / _range_count / _page_count: "1-5 of 25 shots" (en dash), "No bags", "Page 1 of 3", "1 outlier".
+- Owner rules: 0 literal non-ASCII lines (was 14); no `expr ?:` picks text (24 text sites + 11 colour/font/key
+  picks -> if; numeric ternaries stay); bare catches in _apply_palette / _theme_button_face -> info exists.
+- Tests: pass_3.23.0_offline.tcl 71 PASS (v3.22.0 fails 24; mutations caught); updated 3.17.4, 3.19.0/.1, 3.20.0, 3.21.0.
+
+**Safety status:** no new write; files written unchanged. SELECT only.
+
+## v3.22.0 (buttons react to your finger; one primary, F9 + F10) - 2026-10-02 - TABLET-VERIFIED 2026-10-02 06:24 (verify.sh PASS run 1, run by Claude; main page screenshot checked)
+
+Base: v3.21.0 (on the tablet). Feature, minor. Protocol lane (every button's command path). Batch e.
+- F9: every labelled dui button (47 incl. steppers and pagers) is created with -command
+  [list _tap $page $tag <cmd>]: the face (<tag>-btn, page-scoped) takes the role's press tone, is
+  painted at once (update idletasks), the 120 ms restore is armed BEFORE the command runs, and the
+  restore repaints through `_paint_btn` from the palette and role at restore time (a tap that switches
+  the theme restores in the new one). No core -pressfill (creation-fill restore, canvas-global tags).
+  The 11 History Display Options rows (invisible tap rects) are not wrapped; their glyph flips.
+- Overlays: the shape carries ${tag}_face; touch-down tints it (btnpress in all four `_colors`
+  families), release restores it and runs the action as before; a 2 s safety restore covers a touch
+  Android cancels. Tones keep labels >= 7.7:1 pressed (glass) / >= 5.35:1 (pages).
+- F10: "Show next grind" is the one primary (ga_btn_primary, MaintenanceTracker's green #0a7a5f with a
+  white label, pressed #075c48). No danger role: GA deletes nothing. `_retheme_all` paints by role.
+- Review (9 agents, one round): the dui path clean; 1 confirmed (low) -- an opaque overlay button
+  kept its resting 2 px outline while pressed; the outline now takes the tone where it matches the
+  fill (glass keeps its border).
+- Tests: pass_3.22.0_offline.tcl 32 PASS (v3.21.0 fails 12; 10 mutations each caught); pass_3.17.3 and
+  pass_3.21.0 compare the command _tap wraps.
+
+**Safety status:** no new write; files written unchanged. SELECT only.
+
+## v3.21.0 (Help in plain words, one tap from the main page, F17) - 2026-10-02 - TABLET-VERIFIED 2026-10-02 05:20 (verify.sh PASS run 1; Help, main page, Advanced, Bag Stats screenshots checked)
+
+Base: v3.20.0 (on the tablet). Feature, minor. Protocol lane (navigation: Help's parent changes). Batch f.
+- Help: three sections, one per page, the section name as the card title ("What it does", "Daily use",
+  "If something looks wrong"); paragraphs wrapped at <= 90 characters (`_wrap_text`, was 130-160); no
+  rungs, damping, decay or formulas (README + Why? / Calculation Details keep them; README gains the
+  reason-line names). A section that outgrows the card continues as "<title> (2)". Page title "Help".
+- Main page: Help button in the bottom bar, one slot an md gap left of Advanced (tag ga_help, unique;
+  rethemed). Help's Back = `_exit_subpage` (one load of the main page, Advanced's proven Back).
+- Advanced Inspect: Help / Guide removed (one parent); Bag Stats takes its slot under Diagnostics.
+- Polish from the 3.20.0 screenshot: Bag Stats dates end on one column (`datebw`, the page's widest
+  right block via the new shared `_card_block` / `_card_maxbw`).
+- Review (12 agents; navigation clean): 4 copy fixes -- Help now says to enter the grind in the app too
+  (GA learns from the saved grind), that grinds read lower = finer (no false "learns the direction"),
+  that bean, roaster, roast date and profile make a bag, and that shots without grind / dose / yield are
+  skipped; README's reason-line list is complete.
+- Tests: pass_3.21.0_offline.tcl (v3.20.0 fails 15; 9 mutations each caught); pass_3.17.2 (Help Back to
+  the main page; FAILURE via Diagnostics), pass_3.17.3 (eleven Advanced buttons, Inspect three).
+
+**Safety status:** no new write; files written unchanged. SELECT only.
+
+## v3.20.0 (History / Bag Stats cards lead with the number, F16) - 2026-10-02 - TABLET-VERIFIED 2026-10-02 04:41 (verify.sh PASS run 1; History, Bag Stats, options screenshots checked)
+
+Base: v3.19.1. Feature, minor. Protocol lane (a new persisted setting). Design review F16, batch f.
+- One card renderer `_draw_card` for both lists: the number LARGE on the right (a word at primary size),
+  its caption under it; left lines l1 bold / l2 body / l3 caption stacked with no hole, cut with an
+  ellipsis an xl gap short of it; amber warnings are budgeted first (max 60% of the row).
+- History: "5.2" / "finer by 0.5"; "Grind 5.7 . 15.5 s (12.5 s fast)" from the time the engine judged
+  ("yield-adjusted" when it was), "on target" = the shared GA_ON_TARGET_TOL 2 s that Bag Stats counts;
+  date and recipe; bag name, "shot 5 on this bag", "medium confidence"; channeling + out-of-reach in amber.
+- Bag Stats: ideal / "ideal grind", or "Out of reach" (amber) / "trend ideal -4.0", or "No ideal yet"
+  (muted) / the reason; bag name + dates; shots to target + count; slope, drift, fit. Estimate card "~4.8".
+- History Display Options: "Bag Name" (history_show_bag_name, default on), the Shot card's 4th row. Both
+  lists use the 1.0 page type scale (`_pfonts H 1.0`; at popup scale 1.5 the lines stacked).
+- Reviews: 20 agents (6 confirmed: no `expr ?:` on caption text, "0715" drew as 461; verdict vs move;
+  the 2 s window; no time in the caption; "Start ~5.0"; PROJECT_STATE) and 15 on the fixes (8: Bag Stats
+  judges the same time, verdict at the printed 0.1 s, "shot 1" said once, a warning takes a free row
+  or a short form, confidence read only when shown, comments, checklist).
+- Tests: pass_3.20.0_offline.tcl 181 PASS (v3.19.1 fails 76; 16 mutations each caught); pass_3.18.2
+  reads dict cards; pass_3.17.1 knows eleven settings.
+
+**Safety status:** no new write; files written unchanged (settings gain one display key). SELECT only.
+
+## v3.19.1 (plain-voice review fixes) - 2026-10-02 - TABLET-VERIFIED 2026-10-02 02:57 (verify.sh PASS run 1, owner from Git Bash; popup glass + opaque, Why? checked)
+
+Base: v3.19.0 (archived, never on the tablet). Bugfix, protocol lane. 27-agent review, every finding
+checked by a skeptic.
+- The composed "finer by 0.5 . (dot) medium confidence" line gets a 3 px seam: Tk pads each text bbox
+  1 px a side, and verify.sh's overlay overlap rule (no tolerance) would have failed both popups.
+- Grinds keep ".0" (`_grind_fmt`: "3.5 -> 3.0" as the mock, "coarser by 1.0"); the count says "4 of 5
+  shots" when an off-target shot was left out (the recipe line says "shot 5 on this bag"); Why?'s
+  Confidence row uses the popup's word ("40% (medium)"); plain.short says "yield-adjusted" when the time
+  was; channeling reads "Much faster than recent shots at this grind: check puck prep".
+- load_last_recommendation words a saved pre-3.19 rec once (`plain`), so Lumen's tile is plain right
+  after the upgrade. Tk fallback keeps the recipe line; the last-resort toast is plain; the gauge
+  placeholder is "Reading..." (it wrapped); Help no longer says the popup shows the dose/yield source.
+- Tests: pass_3.19.1_offline.tcl 120 PASS with checks.py's exact overlap rule (3.19.0 fails 25); it
+  supersedes the 3.19.0 file. Checks: no data-bound "Confidence" on Why?, the glass popup opened with
+  ga_latest on page off plus a ga_last card that asserts only OK / History.
+
+**Safety status:** no new write; files written unchanged. SELECT only.
+
+## v3.19.0 (plain words up front, F15) - 2026-10-02
+
+Base: v3.18.2. Feature, minor. Protocol lane (new rec key Lumen reads). Owner 2026-10-02 (batch f): "Plain,
+tile too", "Both popups"; mock "Next grind / 3.5 -> 3.0 / finer by 0.5 . low confidence, 2 shots / 22.1 s
+against a 28 s target / [Why?]".
+- Popup (glass and opaque): title "Next grind" (was the check-mark "Shot Saved"), NEUTRAL hero (green read
+  as "all good"), "finer by 0.5 . (dot) medium confidence, 4 shots" under it (dot = status colour), one plain
+  time line ("yield-adjusted" when normalization moved it 0.5 s+), warnings in amber with a warning sign (the
+  3.18 out-of-reach sentence lands here), a recipe caption (16 px floor). The 5-row grid, the technical reason
+  and "Calibration: N% - Band" left; Why? keeps the reason and gains a "Confidence" row with the score.
+- New `_plain_words` -> rec key `plain` {move conf band time_line reach warning short}, set in _decorate_rec
+  (saved rec, per-bag recs): Lumen's tile reads `short`. `reason`, method literals, confidence_band unchanged.
+- `_colors` gains warn / good in all four palettes (light amber #7a4b00: Lumen's #B4761A is 3.8:1 on white).
+- Hero and move via _fmt_num (a 0.25 step showed 3.25 as "3.2"). Tk fallback dialog: same words, neutral.
+- Main page: "Show next grind", gauge "Confidence" reading Low / Medium / High / Very high ("Too few shots");
+  Help matches. pass_3.17.4_offline's gauge check accepts the new word.
+- Tests: pass_3.19.0_offline.tcl 105 PASS (real popup on Tk: opaque dark/light, glass dark/light, scales
+  0.8-1.5, both warnings; v3.18.2 fails 11); all earlier tests PASS. Non-ASCII lines still 18.
+
+**Safety status:** no new write; files written unchanged (last_recommendation.tdb now also holds `plain`).
+
+## v3.18.2 (second review: Bag Stats grind gate) - 2026-10-02 - TABLET-VERIFIED 2026-10-02 02:07 (verify.sh PASS run 1; live Bam Bam: Why? reach row, Bag Stats, Calculation Details)
+
+Base: v3.18.1 (archived, never on the tablet). Bugfix, protocol lane (starting_estimate input).
+- Bag Stats applies GA_REACH_MIN_GRINDS too: 4 shots at 2 grinds passed its trust gate and read "Out of
+  reach by grind (trend ideal -15.5)" while Why? said "not assessed". Such a trend is now
+  `reach_unassessed`: the card says "Fit not reliable (fewer than 3 different grinds)" (never the clamped
+  "Ideal 0.0"), and starting_estimate skips it like an out-of-reach bag.
+- Tests: pass_3.18.2_offline.tcl 59 PASS (v3.18.1 fails 2); supersedes the 3.18.0 / 3.18.1 files.
+
+**Safety status:** no new write; files written unchanged. SELECT only.
+
+## v3.18.1 (out-of-reach review fixes) - 2026-10-02
+
+Base: v3.18.0 (archived, never on the tablet). Bugfix, protocol lane. 21-agent review, every finding
+checked by a skeptic; all real ones fixed here.
+- `reach` gains two gates (`_reach {fc shots gmin gmax}`, shared `_reach_miss`): out only when the line
+  still misses the target by more than GA_REACH_TOL 2.0 s at the range end (an ideal of -0.2 said "change
+  dose or yield" while `next` was 0.0), and only with GA_REACH_MIN_GRINDS 3 different grinds (3 shots at 2
+  grinds are pair evidence). New key `assessed`. Bam Bam still flags (7.6 / 10.3 s short); backtest unchanged.
+- Bag Stats: same test and tolerance on its own Theil-Sen trend, labelled "trend ideal"; a trend with R2
+  below 0.30 says "Fit not reliable (times not tracking grind)". The "same rule" comment and README fixed.
+- Why?: the row reads "change dose or yield (ideal X)" (the advice was clipped from popup_font_scale 1.25);
+  overflow past the H-40 cap now comes out of the row pitch, not the gap above Back / OK (scale 1.4+).
+- Calculation Details: "at the grinder's end ... within 2s" / "not assessed (...)" lines;
+  `_paginate_text` never starts a page with a blank line.
+- Tests: pass_3.18.1_offline.tcl 54 PASS (v3.18.0 fails 15); it supersedes pass_3.18.0_offline.tcl.
+
+**Safety status:** no new write; files written unchanged (last_recommendation.tdb, settings). SELECT only.
+
+## v3.18.0 (say when grind cannot reach the target) - 2026-10-02
+
+Base: v3.17.4. Protocol lane (changes what the recommendation reports); queued 2026-10-01 by the
+owner ("yes, add that as a GrindAdvisor pass"), built in design review batch f ("go with batch f").
+- The rec gains `reach` {out g_target limit t_at_limit}, built in `_forecast_rec` from the
+  regression rung only: out when the unclamped ideal (target - b) / m lies outside grinder
+  min / max. first_shot, two_shot and both fallbacks never flag. Method literals, `reason` and
+  `next` unchanged (Lumen parses them); a saved pre-3.18 rec reads as not out (`_reach_out`).
+- No steps constant: the read-only backtest (new tools/backtest_reach.py, 2026-10-02 copy of
+  shots.db) flags only Bam Bam's two positions out of 93 with the range rule; any "N steps finer
+  than tried" threshold below 6.5 also flagged early n=3 fits that converged later.
+- Why? adds a "Grind reach" row when out; Calculation Details a "Grind reach" line (inside / OUT
+  with the fit's time at the range end); Bag Stats says "Out of reach by grind (ideal X)" instead
+  of the clamped "Ideal 0.0" (new `ideal_raw`, `reach_out`); starting_estimate skips such bags
+  (3.17.4 seeded a new Lykke bag at 0.0 from Bam Bam). The popup line and the tile come in F15.
+- Offline: pass_3.18.0_offline.tcl 33 PASS (v3.17.4 fails 10; real Why? rendered on Tk);
+  3.16.8-3.17.4 offline and check_guards still PASS. Non-ASCII lines still 18.
+
+**Safety status:** no new write. Files written are unchanged (last_recommendation.tdb now also
+holds `reach`; settings). SQL is SELECT only; the backtest opens a COPY with mode=ro&immutable=1.
+
+## v3.17.4 (pages never show the last visit, F22) - 2026-10-01 - TABLET-VERIFIED 2026-10-01 (verify.sh PASS)
+
+Base: v3.17.3. Protocol lane (page hooks), design review F22; owner 2026-10-01: "go with batch d
+next", "Placeholder, then fill".
+- dui page load runs a page's `load` synchronously BEFORE the page appears and `show` after idle,
+  once the last visit is already painted (dui.tcl ~6448, ~6700). Six pages get a `load` through
+  `_page_load` (skips until setup, logs any error with msg -ERROR, ALWAYS returns 1 -- a 0 would
+  cancel the open): main page (values; the SDB gauge parked on "Reading shots..."), Advanced
+  (note + values, also on every Back), Help (page 1), Dose / Yield Source (mode + bounds),
+  Diagnostics and Calculation Details ("Reading the shot database..."). No -state in load.
+- Every one of those shows is guarded by `_page_is_current` (MaintenanceTracker's, verbatim); the
+  main page captures its return page first. SDB is still read once per arrival, in show.
+- Multi-lens review (real dui on a Tk canvas: the first painted frame is load's content on every
+  page; no defect). Polish taken: stepper ends and pager ends are written with -initial 1 in load
+  (`_stepper_refresh`, `_pager_initial`), so the first frame is greyed right too.
+- Offline: pass_3.17.4_offline.tcl 21 PASS (v3.17.3 fails 6); the 3.17.0 and 3.16.8 tests now make
+  the page current before calling show (as dui does). All GA tests and check_guards PASS.
+- Safety status: unchanged -- no new write; SDB still read-only apart from the v3.9.0 Recalculate.
+
+## v3.17.3 (Advanced grouped by purpose, F18) - 2026-10-01 - TABLET-VERIFIED 2026-10-01 (verify.sh PASS)
+
+Base: v3.17.2. Polish lane (layout only: same buttons, tags and commands), design review F18;
+owner 2026-10-01: "go with batch c next".
+- The six-button full-width Tools card is gone. Left: **Settings** (popup delay and font scale
+  steppers, then Dose / Yield Source and History Display Options, full card width). Right:
+  **Shot Data** (Recalculate, unchanged) and under it **Inspect**, a 2x2 grid of Diagnostics,
+  Calculation Details, Help / Guide and Bag Stats.
+- Shot Data keeps its natural height again (3.17.0 stretched it level with the stepper card).
+  The card tags (sec_ptun, sec_data, sec_tools) are kept, so the light/dark retheme is unchanged.
+- Offline: pass_3.17.3_offline.tcl (v3.17.2 fails the grouping checks); the 3.17.0 test's
+  Advanced layout check now asserts the invariant (no card overlap, clear of the bar).
+- Safety status: unchanged -- writes only its own settings and last_recommendation.tdb; SDB
+  is still read-only apart from the v3.9.0 Recalculate resync.
+
+## v3.17.2 (Back goes back one page, F13) - 2026-10-01 - TABLET-VERIFIED 2026-10-01 (verify.sh PASS)
+
+Base: v3.17.1. Protocol lane (navigation), design review F13; owner 2026-10-01: "go with batch
+c next".
+- Bug: the five Tools pages' Done jumped to the main page, two levels up in one `dui page load`.
+  The core removes only one stacked level per load (`dict unset` with two keys, dui.tcl ~6470),
+  so page_stack kept Advanced and the tool page; a later close_dialog fallback from the main
+  page landed in Advanced instead of leaving.
+- Now: the Tools pages' button reads Back and goes to Advanced (`_back_to_advanced`, a logged
+  one-level `dui page load`, close_dialog fallback logged too); Advanced reads Back and goes to
+  the main page (`_exit_subpage`, one level); the main page keeps Done (unchanged). Titles
+  already met F13 (40 px + one-line subtitle on all seven pages). Saves on Back unchanged.
+- Offline: pass_3.17.2_offline.tcl 6 PASS (v3.17.1 fails 3); the 3.17.1, 3.17.0 and 3.16.8
+  tests, check_guards and the overlay harness PASS.
+- Safety status: unchanged -- writes only its own settings and last_recommendation.tdb; SDB
+  is still read-only apart from the v3.9.0 Recalculate resync.
+
+## v3.17.1 (History Display Options as full-row toggles, F19) - 2026-09-30 - TABLET-VERIFIED 2026-09-30 (verify.sh PASS)
+
+Base: v3.17.0. Polish lane (same ten settings, same save on tap), design review F19.
+- The ten 20 px dcheckboxes (box and label separate targets, no cards) are three cards in one
+  row -- Grind, Dose and yield, Shot -- of 60 px rows: label left, a Font Awesome square /
+  square-check glyph right (value blue on, muted off; On / Off text without the icon font), and
+  one invisible core dbutton over the whole row (MaintenanceTracker's card-tap mechanism, no
+  press fill). The page's `render` paints the glyphs on show, on each tap and in `_retheme_all`.
+- No "Bag name" option: it belongs to F16, not in this batch. `col2_x` removed (unused).
+- Offline: pass_3.17.1_offline.tcl 18 PASS (v3.17.0 fails 9); the 3.17.0 test still PASS.
+- Safety status: unchanged -- writes only its own settings (the same ten keys) and
+  last_recommendation.tdb; SDB is still read-only apart from the v3.9.0 Recalculate resync.
+
+## v3.17.0 (every number setting is a stepper, F5) - 2026-09-30 - TABLET-VERIFIED 2026-09-30 (verify.sh PASS)
+
+Base: v3.16.8. Protocol lane (settings persistence), design review F5. Owner 2026-09-30: "go
+with the touch batch next", steppers for all nine numbers (not typed entries for the rare six).
+- The nine typed entries (target time, grinder min/max; popup delay and font scale; dose and
+  ratio bounds) are [-] value [+] steppers: 60 px ga_btn buttons (MaintenanceTracker's threshold
+  stepper with one step size), value in value blue on an outlined plate, steps and wide ranges
+  in `num_spec`. The end that can do nothing is disabled via dui's enable_or_disable (a late show
+  hook cannot un-hide it), a pair keeps one step apart while in order (equal included), quick
+  taps go x5 / x10 (Lumen's `_accel_step`, 350 ms). No keyboard left.
+- `_num_value` reads stored text: "28,5" -> 28.5 (was silently 28), junk, NaN or "08" -> the
+  default, out of range -> clamped; sensible old values (grinder 0.5, 65 s, 32 g) do not move.
+  apply_defaults stores the canonical text and logs any value it changes; `after` and the popup
+  fonts read through it, so a blank delay no longer stops the popup (2026-09-17 item).
+- Settings: History | Bag Stats share the Actions card's second row, making room for the rows.
+- Review (independent, before the push): equal pairs, the late show hook, narrow ranges, "1,500"
+  ms and the invisible light plate fixed. Offline: pass_3.17.0_offline.tcl 44 PASS (v3.16.8
+  fails 15); check_guards, overlay harness, the F4 test and SHE's check_refresh PASS.
+- Safety status: writes only its own settings (numbers now stored canonical) and
+  last_recommendation.tdb; SDB is still read-only apart from the v3.9.0 Recalculate resync.
+
+## v3.16.8 (Recalculate runs one sync at a time, F4) - 2026-09-30 - TABLET-VERIFIED 2026-09-30 (verify.sh PASS)
+
+Base: v3.16.7. Protocol lane (guards the one indirect database-write path), design review F4.
+Bug: SDB::populate yields with `update` every ten files and never checks its own busy flag, so a
+second tap on Recalculate from History (or ShotHistoryEditor's refresh after an edit) started a
+second populate on top of the first, which then resumed from a stale list of the database rows.
+- `_sdb_busy`: busy only while SDB's `updating_db` is 1 AND an SDB populate / create / upgrade is
+  on the call stack (`info frame`; a mid-sync tap runs inside populate's `update`). SDB leaves the
+  flag at 1 when a populate fails, so the flag alone (SDB's own Resync rule, "Database busy. Try
+  later") would lock Recalculate out for the session; a stale flag is logged and ignored, and the
+  next successful run clears it (which frees SDB's own Resync as well).
+- `refresh_from_history` returns a busy note naming Advanced > Recalculate from History, without
+  syncing or recomputing; `recalculate` refuses with a note, ignores a tap during its own run
+  (`recalc_running`, cleared first in `finally`), disables the button for the run and shows SDB's
+  `progress_msg` through a variable trace removed at the end. Back on Advanced mid-run: still grey.
+- Offline: pass_3.16.8_offline.tcl 26 PASS against a stub that fails like SDB (flag left at 1);
+  v3.16.7 and a flag-only guard both FAIL it. check_guards, overlay harness, SHE check_refresh PASS.
+- Write path (unchanged in what it writes): Advanced > Shot Data > Recalculate from History ->
+  refresh_from_history -> ::plugins::SDB::populate "" "" 1 (SDB's public resync; SDB writes its
+  own shots.db) -> save_last_recommendation (last_recommendation.tdb). Button press only, now at
+  most one sync at a time. No other write exists; SDB is still read-only from GrindAdvisor.
+
+## v3.16.7 (contrast pass: readable labels and captions) - 2026-09-30 - TABLET-VERIFIED 2026-09-30 (verify.sh PASS)
+
+Base: v3.16.6. Polish lane, owner 2026-09-30 ("go with contrast first"): WCAG 2.1 at the tablet's
+rendered sizes, same values as ShotHistoryEditor, MaintenanceTracker and BeanScanner.
+- Light: button labels #2b2b2b on the periwinkle (were white, 1.7:1) -- pages through
+  `_apply_palette` btn_label_fill and the ga_btn label aspect, overlays through `_colors` btntext;
+  muted #595959 (was #666666, 4.0:1); value blue #2753bb (was #4e85f4, 3.4:1 in the entries).
+  Dark: muted #9aa0ad (was #8d92a0, 3.9:1 on cards); labels stay white.
+- `_retheme_all` repaints every button's `-lbl` too (theme toggle icon included).
+- History Display Options checkboxes get text_hi / text_body at creation: the preload retheme runs
+  before `dui setup_ui` creates them, so every restart showed the framework #7f879a label (2.5:1
+  light) and a black box (1.4:1 dark).
+- Glass palettes byte-identical. 16 failing text pairs -> 0; 221 procs compile; overlay harness,
+  53-check wiring harness (26 fail on v3.16.6) and check_guards PASS.
+- Safety status: unchanged -- SDB read-only SELECTs only; no write behavior added (the v3.9.0
+  Recalculate button stays the one SDB resync); colours only.
+
+## v3.16.6 (overlays on the shared plugin palette, one pager) - 2026-09-30 - TABLET-VERIFIED 2026-09-30 (verify.sh PASS)
+
+Base: v3.16.5. Polish lane, owner 2026-09-30: History "has a different design, with a black
+background" -- it should be the same dark as the other plugins.
+- `_colors`: OPAQUE draws (History, Bag Stats, the popup opened from Settings, Curve/Why
+  without glass) use the shared plugin page palette -- page #23252e, cards #32353f/#464b58,
+  filled #4a5473 buttons with white labels, text #e8e9ee/#c2c5cf/#8d92a0 (popup_theme light =
+  the page light palette). Was black #000000 + iOS greys. GLASS draws keep their v3.14
+  palettes byte for byte (the Lumen glass popup is unchanged).
+- History / Bag Stats get the GA page chrome (`_overlay_chrome`): 40 px title at y 28 +
+  subtitle, Done bottom-left, and the cross-plugin pager bottom-right ("◀ Prev" / "Next ▶" on
+  the Help page's exact pixels); the unavailable end is disabled (`_obutton` enabled 0 = grey,
+  no binding). Card line 2 uses text_body like ShotHistoryEditor's cards.
+- Help / Diagnostics / Calculation Details: Prev sits an sm gap from Next (was lg); the ends
+  disable (`_pager_state`). Settings: theme toggle at y 11 ref, the MT/BS/SHE box (7 px up).
+- Offline: 219 procs compile; overlay/pager/palette harness PASS (fails on v3.16.5);
+  check_guards PASS.
+- Safety: unchanged -- SDB read-only SELECTs only; nothing in history/, history_v2/ or SDB is
+  written, moved, renamed or deleted.
+
 ## v3.16.5 (popup closes for the tank-empty page) - 2026-09-26
 
 Base: v3.16.4. Owner bug, tablet screenshot 2026-09-26 12:52: the Shot Saved popup stayed

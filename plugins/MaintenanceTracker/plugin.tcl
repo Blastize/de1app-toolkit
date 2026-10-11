@@ -1,6 +1,41 @@
 #
 # Maintenance Tracker -- DE1app plugin manifest
 #
+# v0.31.1 (design review F23 + review fixes): one voice in the words.
+# Titles and buttons in sentence case ("New tracker", "Undo last record",
+# "Yes, delete last record"), the Diagnostics title names the page only
+# (the plugin name moved into its subtitle), no " -- " joins in visible
+# text (a sentence break, brackets or the middle dot instead), and the
+# cut text ends in a real ellipsis character instead of three dots.
+# Steps' "Mark done" reads "Record" (the same confirm as the list's),
+# the app's cycles are "clean cycle" / "descale cycle", a threshold of 1
+# reads "1 day". Preload no longer saves settings.tdb (CLAUDE.md rule):
+# the first real change saves it. No new write; one start-up save fewer.
+#
+# v0.31.0 (design review F8 + F21): text at its design size and the shared
+# status colours, dates and counts. Fonts follow the canvas size dui settled
+# on (800 on the tablet, was winfo's 736: every font at 92%), so titles are
+# 40 px, names 22, body 19, buttons 20. ok / amber / red are the shared
+# status roles (amber #E8B34C dark; light #086750 / #7a4b00 / #962219) plus
+# a blue info role for the AUTO tags. Dates read like Lumen's taskbar
+# ("Fri Oct 02 09:29 PM", following Lumen's 12/24 h and date order) with
+# "4 days ago" after a dot; the list counts "1-5 of 11 trackers". Long names
+# are cut with "..." where one line is all there is (restore chips, the
+# Steps title, the Edit delete message). No write behaviour changes.
+#
+# v0.30.0 (design review F9): every button reacts to the finger -- a press
+# tone on touch-down, painted before the command runs, restored from the
+# current palette 120 ms later unless the command repainted the button;
+# cards and icon picker cells tint their art. No write behaviour changes.
+#
+# v0.29.3 polish (contrast, WCAG 2.1 at the tablet's rendered sizes):
+# light-theme button labels are dark ink (white read 1.7:1 on the light
+# face), muted text is the shared #9aa0ad / #595959, ok/amber/red (and
+# never-recorded / no-data grey) are per theme, and the primary/danger
+# faces are fixed #0a7a5f / #b3261e with white labels. The theme toggle
+# now also repaints button labels, the texts it used to miss and the
+# Detail wear bar. Colour only; no write behaviour changes.
+#
 # v0.29.1 polish: section cards behind Detail (status, History, Linked
 # profile), Steps, Edit steps and New Tracker. Layout only.
 #
@@ -251,7 +286,7 @@ namespace eval ::plugins::MaintenanceTracker {
     variable contact     "n/a"
     # Bare number, no "v" prefix (ShotHistoryEditor v0.6.4 lesson: the
     # startup log message prepends one).
-    variable version     "0.29.1"
+    variable version     "0.31.1"
     variable name        "Maintenance Tracker"
     variable description "Tracks machine maintenance (backflush, descale, gasket, burrs, water filter, water bottle level, plus your own custom trackers) from user-recorded events and the machine's own dispense reports. Read-only by design; writes only its own settings file."
 
@@ -327,7 +362,7 @@ proc ::plugins::MaintenanceTracker::main {} {
     # v0.27.0: a switch-back left pending by an app restart comes back
     # once the profile and the connection have settled.
     after 20000 ::plugins::MaintenanceTracker::_resume_pending_run
-    catch { msg "MaintenanceTracker: started v$::plugins::MaintenanceTracker::version (Pass 35: remove a chosen history record; GHC cup; step editor; links to a profile or the app's Descale / Clean, SDB read-only)" }
+    catch { msg "MaintenanceTracker: started v$::plugins::MaintenanceTracker::version (v0.31.1: one voice in the words, no save at start-up; SDB read-only)" }
     return
 }
 

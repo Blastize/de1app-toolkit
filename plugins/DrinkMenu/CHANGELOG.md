@@ -4,6 +4,57 @@ Entries follow the CLAUDE.md doc cap (about 15 lines; write-capability
 passes documented in full). The long pre-trim entries for v0.1.0 to
 v0.13.2 survive in the Desktop archive snapshot of each version.
 
+## v1.18.1 - 2026-10-02 - Pass 51: one copy pass (F23) - TABLET-VERIFIED 17:51 (verify.sh PASS run 1)
+
+Base: v1.18.0 (on the tablet). Copy only; patch. Owner 2026-10-02: "go with F23 to F26 next".
+- Audit of every visible string (three page setups run over a recording dui, every runtime
+  builder, presets, manifest): three breaks, all fixed; no em dash, " -- ", "(s)" or Title Case.
+- Ellipsis: the palette chip "+ Custom..." -> "+ Custom" + U+2026 (`_u 0x2026`).
+- Separator: the To-machine note joins its two outcomes with a middle dot (`_u 0xB7`):
+  "Profile set, Water 120 ml" -> "Profile set . Water 120 ml" (shown text unchanged: both cut).
+- One label per action: the confirm card's "Save copy" -> "Save as copy" (the bar's label).
+- New `_u` glyph helper (MaintenanceTracker's); truncation already measured the real U+2026.
+- Found, not changed: 5 of 7 To-machine notes are cut on the 159 px button ("Machine b...",
+  "Water 120...") since before F8; needs a layout decision.
+- Offline: pass_51_offline.tcl 15 passed (v1.18.0 fails 8); pass_50 35, geometry_check 525.
+- Safety status: unchanged -- no new write; settings writes are the same as v1.18.0.
+
+## v1.18.0 - 2026-10-02 - Pass 50: one scale source, status colours, counts (F8 + F21) - TABLET-VERIFIED 08:39 (verify.sh PASS run 1; menu, detail, editor screenshots checked)
+
+Base: v1.17.1 (on the tablet). Protocol lane (layout init); minor. Owner 2026-10-02: F8 "grow text
+to design", F21 shared colours and counts.
+- F8: `font_scale` = dui's `screen_size_height` / 800 (string-is-double guard, fallback 800, never
+  winfo); the tablet's 736 had drawn every face at 0.92. Background folder stays on winfo.
+- Tight spots: Hide 160 -> 140 ref ("To machine" 4 -> ~14 px a side, label fitted); `ed_amt_w`
+  140 -> 150; palette chips body -> caption -> ellipsis (7 -> 3 shortened).
+- F21: `c_ok/c_warn/c_danger/c_info` in `_apply_palette`; `L(warn)` = c_warn (ed_status and the
+  over-capacity subtitle, `_set_text_fill`), danger on "Presets failed to load"; the name hint is
+  `ink_3_text` (3.81 -> 5.62:1). Delete face and Pass 45 tones unchanged.
+- Counts: subtitle = `_plural` count, bar = `_page_count` "Page 1 of 4", centred between Hidden
+  and Prev. Units: vessel picker and "Exceeds vessel by" follow ml/oz. 13 `expr ?:` text picks -> if.
+- Review: one ml over capacity in oz reads "0.1 oz", never "0.0 oz"; "Profile linked" / "Profile
+  link removed" confirmations read in ink_2, only warnings and validation in warn.
+- Offline: pass_50_offline.tcl 35 passed (v1.17.1 fails 24); geometry_check 525 passed.
+- Safety status: unchanged -- no new write; settings writes are the same as v1.17.1.
+
+## v1.17.1 - 2026-10-01 - Pass 49: pages never show the last visit (design review F22)
+
+Base: v1.17.0 (published). Protocol lane (page hooks); patch. Owner 2026-10-01: "go with batch
+d next".
+- dui page load runs a page's `load` synchronously BEFORE the page appears and `show` after idle,
+  once the last visit is on screen. Main, detail and the editor get a `load` through
+  `_page_load` (skips until setup, msg -ERROR on failure, ALWAYS returns 1): palette, retheme,
+  refresh. `_set_vis` writes only st:hidden tags while the page is not current, so it is safe
+  there. Every show is guarded by `_page_is_current` (main captures its return page first).
+- Returns by close_dialog skip load (dui.tcl ~6724): detail Back and leaving the editor repaint
+  their target first (`_prepaint`), so a favourite toggle or a saved / deleted drink shows at once.
+- Review (real dui; no major): one repaint per arrival -- `_paint` (shared by load and
+  `_prepaint`) stamps the page and its show skips while the stamp is under 2 s old (taken even on
+  an early return), since `_apply_palette` clears every cache. Accepted trade-off: the first open
+  of a vessel per session builds its cup sprites in load, ~0.3 s on the tablet before the switch.
+- Offline: geometry_check.tcl 523 passed (11 F22 checks; v1.17.0 fails them).
+- Safety status: unchanged -- no new write; settings writes are the same as v1.17.0.
+
 ## v1.17.0 - 2026-09-15 - Pass 48: UX review
 
 Base: tablet-verified v1.16.1. The design critique plus the owner's two

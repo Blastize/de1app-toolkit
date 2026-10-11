@@ -19,7 +19,7 @@ set plugin_name "GrindAdvisor"
 namespace eval ::plugins::GrindAdvisor {
     variable author      "Blastize"
     variable contact     "n/a"
-    variable version     "3.16.5"
+    variable version     "3.24.0"
     variable name        "Grind Advisor"
     variable description  "Reads your latest shot from SDB and recommends your next grind. Read-only, no manual entry."
 
@@ -48,6 +48,7 @@ namespace eval ::plugins::GrindAdvisor {
         history_show_shot_time   1
         history_show_reason      1
         history_show_bag_shot    1
+        history_show_bag_name    1
         dose_yield_mode          auto
         dose_min                 12.0
         dose_max                 22.0
