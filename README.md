@@ -2,17 +2,17 @@
 
 **Five plugins and a skin for the classic Decent DE1 app, in one download. Drop two folders into the app, tick a few boxes, done.**
 
-| Lumen skin 0.62.1 | Grind Advisor 3.24.0 |
+| [Lumen skin 0.62.1](https://github.com/Blastize/de1app-skin-Lumen) | [Grind Advisor 3.24.0](https://github.com/Blastize/de1app-plugin-GrindAdvisor) |
 |---|---|
 | ![Lumen home screen](docs/lumen.png) | ![Grind Advisor popup](docs/grindadvisor.png) |
 | A glass dashboard home screen: next grind, last shot, live graph, next-shot beans, favorite profile slots, your own colours. | After every espresso: your next grind setting and why. Nothing to type. |
 
-| Drink Menu 1.18.1 | Maintenance Tracker 0.31.1 |
+| [Drink Menu 1.18.1](https://github.com/Blastize/de1app-plugin-DrinkMenu) | [Maintenance Tracker 0.31.1](https://github.com/Blastize/de1app-plugin-MaintenanceTracker) |
 |---|---|
 | ![Drink Menu](docs/drinkmenu.png) | ![Maintenance Tracker](docs/maintenancetracker.png) |
 | 45 drinks drawn as cups with their layers; favorites, custom drinks, one tap to load a linked profile. | Backflush, descale, gaskets, burrs, filter, bottle level, counted from your shots. Alerts can load the cleaning profile. |
 
-| Shot History Editor 0.19.0 | Bean Scanner 0.11.0 |
+| [Shot History Editor 0.19.0](https://github.com/Blastize/de1app-plugin-ShotHistoryEditor) | [Bean Scanner 0.11.0](https://github.com/Blastize/de1app-plugin-BeanScanner) |
 |---|---|
 | ![Shot History Editor](docs/shothistoryeditor.png) | ![Bean Scanner](docs/beanscanner.png) |
 | Your shots as cards. Fix a wrong grind or bean, delete mistakes to a restorable trash. The database is never written. | Photograph the bag; Claude or GPT reads the label into DYE's next shot. Needs your own API key. |
