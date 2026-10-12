@@ -17,13 +17,7 @@
 | ![Shot History Editor](docs/shothistoryeditor.png) | ![Bean Scanner](docs/beanscanner.png) |
 | Your shots as cards. Fix a wrong grind or bean, delete mistakes to a restorable trash. The database is never written. | Photograph the bag; Claude or GPT reads the label into DYE's next shot. Needs your own API key. |
 
-Each one has its own page with more screenshots, a changelog and the full reference:
-[Lumen](https://github.com/Blastize/de1app-skin-Lumen) ·
-[Grind Advisor](https://github.com/Blastize/de1app-plugin-GrindAdvisor) ·
-[Drink Menu](https://github.com/Blastize/de1app-plugin-DrinkMenu) ·
-[Maintenance Tracker](https://github.com/Blastize/de1app-plugin-MaintenanceTracker) ·
-[Shot History Editor](https://github.com/Blastize/de1app-plugin-ShotHistoryEditor) ·
-[Bean Scanner](https://github.com/Blastize/de1app-plugin-BeanScanner)
+Each one has its own page with more screenshots, a changelog and the full reference.
 
 ## Better together: plugins on Lumen
 
