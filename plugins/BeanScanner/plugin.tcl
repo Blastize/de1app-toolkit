@@ -43,7 +43,7 @@ set plugin_name "BeanScanner"
 namespace eval ::plugins::BeanScanner {
     variable author      "Blastize"
     variable contact     "https://github.com/Blastize/de1app-plugin-BeanScanner"
-    variable version     "0.11.0"
+    variable version     "0.12.1"
     variable name        "Bean Scanner"
     variable description "Photograph a bean bag, an AI vision model reads it, and the details go into DYE's next shot after you confirm. Requires DYE and an API key."
 
@@ -53,7 +53,7 @@ namespace eval ::plugins::BeanScanner {
     variable settings
     foreach {__k __v} {
         provider            anthropic
-        model_anthropic     claude-opus-5
+        model_anthropic     claude-opus-5-5
         model_openai        gpt-4o
         api_key_anthropic   {}
         api_key_openai      {}

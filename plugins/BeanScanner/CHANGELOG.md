@@ -5,6 +5,24 @@ added or changed a write capability keep their full write-path text). The
 long pre-trim entries survive in the "Version archive/BeanScanner Archive"
 snapshot of each version.
 
+## v0.12.1 - 2026-10-12 - model names fit one line - TABLET-VERIFIED (verify.sh PASS run 1)
+
+Base: v0.12.0 (verify PASS run 1; its screenshot showed "Claude Opus 5.5" wrapping to two
+lines in the Model row). The row now reads "Opus 5.5" / "Sonnet 5.5" / "Haiku 4.5"; the
+Provider row above already says Anthropic. Polish only. Safety status: unchanged, no new write.
+
+## v0.12.0 - 2026-10-12 - Claude Opus 5.5, and the model is chosen on the tablet
+
+Base: v0.11.0. Feature (minor). Owner 2026-10-12: "is beanscanner using opus 5.5?" -- it was not.
+* Default Anthropic model `claude-opus-5` -> `claude-opus-5-5` (Claude Opus 5.5). A saved
+  `claude-opus-5` is lifted once in apply_defaults: it could not be chosen before, so it is the
+  old default, not a choice; any other saved value is kept.
+* Settings: the Model row gets a Change button that cycles Opus 5.5, Sonnet 5.5 and Haiku 4.5
+  (GPT keeps gpt-4o), saved per provider; the row shows the name ("Claude Opus 5.5").
+* Offline: passes/BeanScanner/model_0.12.0_offline.tcl 12 PASS (v0.11.0 fails 5).
+* Safety status: unchanged -- the same plugin settings file is written, now also on a model
+  change; no new write.
+
 ## v0.11.0 - 2026-10-02 - the look batch (F8, F9, F10, F21)
 
 Base: v0.10.1.

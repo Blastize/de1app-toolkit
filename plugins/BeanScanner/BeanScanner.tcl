@@ -54,7 +54,7 @@ namespace eval ::plugins::BeanScanner {
         variable settings
         foreach {k v} {
             provider            anthropic
-            model_anthropic     claude-opus-5
+            model_anthropic     claude-opus-5-5
             model_openai        gpt-4o
             api_key_anthropic   {}
             api_key_openai      {}
@@ -113,6 +113,33 @@ namespace eval ::plugins::BeanScanner {
         if {$settings(capture_size) eq "1280x960"} {
             set settings(capture_size) 1600x1200
         }
+        # v0.12.0: the shipped Anthropic model moved to Claude Opus 5.5.
+        # Before this version the model could not be chosen on the
+        # tablet, so a saved claude-opus-5 is the old default, not a
+        # choice: lift it once. Any other value is kept.
+        if {$settings(model_anthropic) eq "claude-opus-5"} {
+            set settings(model_anthropic) claude-opus-5-5
+        }
+    }
+
+    # v0.12.0: the models the settings page's Change button cycles through,
+    # per provider. A saved model that is not in the list is shown as is
+    # and the next tap starts the list.
+    proc model_choices {provider} {
+        if {$provider eq "openai"} { return {gpt-4o} }
+        return {claude-opus-5-5 claude-sonnet-5-5 claude-haiku-4-5-20251001}
+    }
+
+    # A readable name for the Model row (short, so it fits one line beside
+    # Change; the Provider row already says Anthropic); unknown ids as is.
+    proc model_label {id} {
+        switch -- $id {
+            claude-opus-5-5           { return "Opus 5.5" }
+            claude-sonnet-5-5         { return "Sonnet 5.5" }
+            claude-haiku-4-5-20251001 { return "Haiku 4.5" }
+            gpt-4o                    { return "GPT-4o" }
+        }
+        return $id
     }
 
     proc _setting {key default} {
@@ -168,7 +195,7 @@ namespace eval ::plugins::BeanScanner {
     proc model_id {} {
         set provider [_setting provider anthropic]
         if {$provider eq "openai"} { return [_setting model_openai gpt-4o] }
-        return [_setting model_anthropic claude-opus-5]
+        return [_setting model_anthropic claude-opus-5-5]
     }
 
     # ==================================================================
@@ -2262,7 +2289,7 @@ namespace eval ::dui::pages::BeanScanner_settings {
         # ---- RIGHT: provider, then camera ----
         _rows_card $page sec_ai $c2x $L(sec_top) $col_w $three_h "AI Provider" {
             provider "Provider"  provider_value "Switch" toggle_provider
-            model    "Model"     model_value    ""       {}
+            model    "Model"     model_value    "Change" cycle_model
             apikey   "API key"   apikey_value   "Set"    open_apikey
         }
         set y0 [expr {$L(sec_top) + $three_h + $L(sec_gap)}]
@@ -2347,7 +2374,8 @@ namespace eval ::dui::pages::BeanScanner_settings {
         set p [::plugins::BeanScanner::_setting provider anthropic]
         set pname [::plugins::BeanScanner::_pick [expr {$p eq "openai"}] "OpenAI" "Anthropic"]
         catch { dui item config $page provider_value -text $pname }
-        catch { dui item config $page model_value -text [::plugins::BeanScanner::model_id] }
+        catch { dui item config $page model_value -text \
+            [::plugins::BeanScanner::model_label [::plugins::BeanScanner::model_id]] }
         switch -- [::plugins::BeanScanner::api_key_source] {
             settings { set ks [translate "Set"] }
             file     { set ks [translate "From file"] }
@@ -2410,6 +2438,20 @@ namespace eval ::dui::pages::BeanScanner_settings {
         set idx [lsearch -exact $values $cur]
         if {$idx < 0} { set idx 2 }
         set ::plugins::BeanScanner::settings(capture_size) \
+            [lindex $values [expr {($idx + 1) % [llength $values]}]]
+        ::plugins::BeanScanner::save_settings
+        refresh BeanScanner_settings
+    }
+
+    # v0.12.0: cycle the current provider's model list; the choice is
+    # saved per provider (model_anthropic / model_openai).
+    proc cycle_model {} {
+        set p [::plugins::BeanScanner::_setting provider anthropic]
+        if {$p ne "openai"} { set p anthropic }
+        set values [::plugins::BeanScanner::model_choices $p]
+        set cur [::plugins::BeanScanner::model_id]
+        set idx [lsearch -exact $values $cur]
+        set ::plugins::BeanScanner::settings(model_$p) \
             [lindex $values [expr {($idx + 1) % [llength $values]}]]
         ::plugins::BeanScanner::save_settings
         refresh BeanScanner_settings

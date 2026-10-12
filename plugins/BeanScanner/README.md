@@ -1,7 +1,7 @@
 # Bean Scanner
 
 **Photograph the coffee bag. Claude or GPT reads the label and fills DYE's next shot after you confirm.**
-Version 0.11.0 · a plugin for the Decent DE1app · by Blastize
+Version 0.12.1 · a plugin for the Decent DE1app · by Blastize
 
 ![The camera page: shutter circle, flash, flip camera, trash and Send](docs/camera.jpg)
 
@@ -9,7 +9,7 @@ Version 0.11.0 · a plugin for the Decent DE1app · by Blastize
 
 ![The settings page: scan buttons, AI provider and model, camera and capture size](docs/settings-page.png)
 
-**Settings.** Scan, reuse the latest photo or reopen the last result. Choose Claude or GPT and the model, set your API key, pick the camera and capture size. Light and dark palette; every caption, label and value in both meets WCAG AA contrast. New in 0.11.0: text at its full design size, every button darkens the moment your finger lands, and the main action on a page (Scan Bean Bag, Accept) is green.
+**Settings.** Scan, reuse the latest photo or reopen the last result. Choose Claude or GPT and the model (Change cycles Claude Opus 5.5, Sonnet 5.5 and Haiku 4.5), set your API key, pick the camera and capture size. Light and dark palette; every caption, label and value in both meets WCAG AA contrast. New in 0.11.0: text at its full design size, every button darkens the moment your finger lands, and the main action on a page (Scan Bean Bag, Accept) is green.
 
 ## Recommended: the Lumen skin
 
@@ -147,7 +147,7 @@ Settings → App → Extensions.
 | Setting | What it does |
 |---|---|
 | Provider | Anthropic or OpenAI. Each keeps its own model name and key. |
-| Model | The model id sent to the provider. Change the default in `plugin.tcl`. |
+| Model | The model sent to the provider; Change cycles Claude Opus 5.5 (default), Sonnet 5.5 and Haiku 4.5. GPT uses gpt-4o. |
 | API key | Opens the key entry page for the selected provider. |
 | Camera | Front / Back / Auto. Front is the default (the tablet faces you). |
 | Capture size | 640x480 up to 2048x1536. Bigger reads small print better but uploads slower. |
