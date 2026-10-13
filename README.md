@@ -7,12 +7,12 @@
 | ![Lumen home screen](docs/lumen.png) | ![Grind Advisor popup](docs/grindadvisor.png) |
 | A glass dashboard home screen: next grind, last shot, live graph, next-shot beans, favorite profile slots, your own colours. | After every espresso: your next grind setting and why. Nothing to type. |
 
-| [Drink Menu 1.18.1](https://github.com/Blastize/de1app-plugin-DrinkMenu) | [Maintenance Tracker 0.31.1](https://github.com/Blastize/de1app-plugin-MaintenanceTracker) |
+| [Drink Menu 1.18.2](https://github.com/Blastize/de1app-plugin-DrinkMenu) | [Maintenance Tracker 0.31.1](https://github.com/Blastize/de1app-plugin-MaintenanceTracker) |
 |---|---|
 | ![Drink Menu](docs/drinkmenu.png) | ![Maintenance Tracker](docs/maintenancetracker.png) |
 | 45 drinks drawn as cups with their layers; favorites, custom drinks, one tap to load a linked profile. | Backflush, descale, gaskets, burrs, filter, bottle level, counted from your shots. Alerts can load the cleaning profile. |
 
-| [Shot History Editor 0.19.0](https://github.com/Blastize/de1app-plugin-ShotHistoryEditor) | [Bean Scanner 0.12.1](https://github.com/Blastize/de1app-plugin-BeanScanner) |
+| [Shot History Editor 0.19.1](https://github.com/Blastize/de1app-plugin-ShotHistoryEditor) | [Bean Scanner 0.12.1](https://github.com/Blastize/de1app-plugin-BeanScanner) |
 |---|---|
 | ![Shot History Editor](docs/shothistoryeditor.png) | ![Bean Scanner](docs/beanscanner.png) |
 | Your shots as cards. Fix a wrong grind or bean, delete mistakes to a restorable trash. The database is never written. | Photograph the bag; Claude or GPT reads the label into DYE's next shot. Needs your own API key. |
@@ -71,9 +71,9 @@ Download the zip again and copy the two folders over the old ones. Your settings
 |---|---|
 | `skins/Lumen` | 0.62.1 |
 | `plugins/GrindAdvisor` | 3.24.0 |
-| `plugins/DrinkMenu` | 1.18.1 |
+| `plugins/DrinkMenu` | 1.18.2 |
 | `plugins/MaintenanceTracker` | 0.31.1 |
-| `plugins/ShotHistoryEditor` | 0.19.0 |
+| `plugins/ShotHistoryEditor` | 0.19.1 |
 | `plugins/BeanScanner` | 0.12.1 |
 
 Built with Claude Code against the real app on a Galaxy Tab A9, verified on the machine before each release. GPL-3. Not affiliated with Decent Espresso. Bug reports and ideas: the issues page of the plugin concerned, or this repo.

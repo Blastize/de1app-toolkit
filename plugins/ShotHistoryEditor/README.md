@@ -1,11 +1,13 @@
 # Shot History Editor
 
 **Browse your shots as cards, fix a wrong grind or bean name, delete mistakes to a restorable trash.**
-Version v0.19.0 · a plugin for the Decent DE1app · by Blastize
+Version v0.19.1 · a plugin for the Decent DE1app · by Blastize
 
 ![The shot list: five cards per page with grind, dose, yield, time, bean and profile](docs/shot_list.png)
 
 **Your shots as cards.** Grind, dose, yield, time, bean and profile, five per page, newest first. Edit on the card, Select to pick shots for the trash. Cleaning runs are marked CLEANING on a tinted card.
+
+![The Bags tab: six bag tiles with roaster, name, roast level and date, notes, shot count, date range and an Edit bag button; the bag in use is marked](docs/bags.png)
 
 **Your bags.** The Bags tab groups your shots by roaster and bag name, six tiles a page: roast level and date, notes, how many shots and when, and which bag is in use. Edit bag changes the roaster, name, notes, roast date or roast level of every shot of a bag at once, after checked backups and a typed confirmation.
 
@@ -42,7 +44,7 @@ SDB is read-only. Edits rewrite exactly one line of one `.shot` file after a who
 
 ## Reference
 
-Version: v0.19.0
+Version: v0.19.1
 Author: Blastize
 
 ## Your next shot follows a bag edit (v0.18.0, v0.19.0)

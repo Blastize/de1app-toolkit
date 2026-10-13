@@ -2611,9 +2611,19 @@ proc ::plugins::ShotHistoryEditor::scroll_page {kind delta dui_page} {
             _set_paged_text $dui_page diagnostics_text diagnostics_page_status [diagnostics_text] diagnostics_page_index 1
         }
         help {
+            # v0.19.1: Help pages by help_pages (explicit breaks). Its
+            # paragraphs wrap to several rows, so the shared 22-line count
+            # said "1 of 1" while the text ran under the bottom bar.
             variable help_page_index
+            set pages [help_pages]
+            set n [llength $pages]
             incr help_page_index $delta
-            _set_paged_text $dui_page help_text help_page_status [help_text] help_page_index 1
+            if {$help_page_index < 0} { set help_page_index 0 }
+            if {$help_page_index >= $n} { set help_page_index [expr {$n - 1}] }
+            catch { dui item config $dui_page help_text -text [lindex $pages $help_page_index] }
+            catch { dui item config $dui_page help_page_status -text "Page [expr {$help_page_index + 1}] of $n" }
+            _set_pager_state $dui_page prev_page next_page \
+                [expr {$help_page_index > 0}] [expr {$help_page_index < $n - 1}]
         }
         delete_review {
             variable delete_review_page_index
@@ -3292,6 +3302,15 @@ proc ::plugins::ShotHistoryEditor::diagnostics_text {} {
         "Bag fields in SDB (Bags view): [_bag_field_detect]" \
         "Issues:" \
         "  [join $issues "\n  "]"] "\n"]
+}
+
+# v0.19.1: the Help text as a list of pages, split at the "Raw pressure"
+# paragraph (help_text keeps its one-string form).
+proc ::plugins::ShotHistoryEditor::help_pages {} {
+    set lines [split [help_text] "\n"]
+    set cut [lsearch -glob $lines "Raw pressure*"]
+    return [list [join [lrange $lines 0 [expr {$cut - 2}]] "\n"] \
+                 [join [lrange $lines $cut end] "\n"]]
 }
 
 proc ::plugins::ShotHistoryEditor::help_text {} {

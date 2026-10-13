@@ -1,7 +1,7 @@
 # Drink Menu
 
 **A visual espresso drink menu on the tablet: every drink drawn as a cup with its layers.**
-Version 1.18.1 · a plugin for the Decent DE1app · by Blastize
+Version 1.18.2 · a plugin for the Decent DE1app · by Blastize
 
 ![The menu: a grid of cups with coloured layers, tabs for hot, cold, milk, favorites and custom](docs/menu.png)
 
@@ -47,7 +47,12 @@ custom drinks. Presets are read-only for the user. Since v0.11.0 the
 pages carry the design mock's own warm brown look, whatever skin theme
 is active.
 
-Author: **Blastize** - Current version: **1.18.1** (Pass 51: one copy pass)
+Author: **Blastize** - Current version: **1.18.2** (shorter Extensions description)
+
+## New in v1.18.2
+
+The description shown in Settings > App > Extensions is now three lines; the
+old one ran over the Settings label and the Ok button on every skin.
 
 ## New in v1.18.1
 

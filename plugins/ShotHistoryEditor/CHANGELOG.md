@@ -4,6 +4,14 @@ Note: entries follow the CLAUDE.md doc cap (about 15 lines each; entries that ad
 changed a write capability keep their full write-path description). The long pre-trim
 entries survive in the Desktop archive snapshot of each version.
 
+## v0.19.1 - Help page split in two (2026-10-13)
+
+Base: v0.19.0. Polish lane, found in the 2026-10-13 skin-compatibility test (Insight, DSx2,
+Lumen alike): Help said "Page 1 of 1" while its wrapped paragraphs ran under Back / Prev / Next.
+The shared pager counts 22 text lines, not wrapped rows. Help now pages by explicit breaks
+(`help_pages`): page 1 ends at Empty trash, page 2 starts at the raw-data paragraph. Text unchanged.
+Safety status: no write behaviour changed; the write capabilities are exactly v0.19.0's eight.
+
 ## v0.19.0 - The next shot follows a bag Save: WRITE CAPABILITY 8 (2026-10-02)
 
 Base: v0.18.1. Protocol lane, a NEW WRITE CAPABILITY. Owner 2026-10-02: "Yes, update it",

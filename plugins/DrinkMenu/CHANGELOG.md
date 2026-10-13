@@ -4,6 +4,13 @@ Entries follow the CLAUDE.md doc cap (about 15 lines; write-capability
 passes documented in full). The long pre-trim entries for v0.1.0 to
 v0.13.2 survive in the Desktop archive snapshot of each version.
 
+## v1.18.2 - 2026-10-13 - Shorter Extensions description (polish)
+
+Base: v1.18.1. Found in the 2026-10-13 skin-compatibility test: the core Extensions page
+(same on every skin) printed DrinkMenu's long `description` over its Settings label and Ok
+button. plugin.tcl's description is now three lines. Nothing else changed.
+Safety status: no write behaviour changed; DrinkMenu still writes only its own settings file.
+
 ## v1.18.1 - 2026-10-02 - Pass 51: one copy pass (F23) - TABLET-VERIFIED 17:51 (verify.sh PASS run 1)
 
 Base: v1.18.0 (on the tablet). Copy only; patch. Owner 2026-10-02: "go with F23 to F26 next".
